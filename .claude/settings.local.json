@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xcodebuild -project Sync.xcodeproj -scheme Sync -configuration Debug build)",
+      "Bash(xcodebuild -project /Users/remember/Documents/LiveAudioApps/Sync/Sync.xcodeproj -scheme Sync -configuration Debug build)"
+    ]
+  }
+}
