@@ -144,6 +144,8 @@ enum BrowserState: Equatable {
 }
 
 final class BonjourBrowser: NSObject, ObservableObject {
+    static let shared = BonjourBrowser()
+
     @Published var services: [DiscoveredBackup] = []
     @Published var state: BrowserState = .idle
 
@@ -170,7 +172,7 @@ final class BonjourBrowser: NSObject, ObservableObject {
         return thread
     }()
 
-    override init() {
+    private override init() {
         super.init()
         browser.delegate = self
         // Start thread and move wait + perform to background to avoid blocking main thread

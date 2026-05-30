@@ -9,7 +9,7 @@ private let popoverWidth: CGFloat = 360
 
 struct SettingsView: View {
     @EnvironmentObject var store: ConfigStore
-    @StateObject private var bonjourBrowser = BonjourBrowser()
+    @ObservedObject private var bonjourBrowser = BonjourBrowser.shared
     @ObservedObject private var advertiser  = BonjourAdvertiser.shared
     // Spec §5: callback to return to main dropdown view
     var onBack: () -> Void = {}
