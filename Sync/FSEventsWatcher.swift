@@ -22,8 +22,10 @@ private func fseventsCallback(
 final class FSEventsWatcher: ObservableObject {
     static let shared = FSEventsWatcher()
 
-    // Published trigger that MainView can observe - increments each time sync should be triggered
-    @Published var syncTrigger: Int = 0
+    // Callback invoked when debounce completes — wired by AppDelegate to call SyncEngine
+    var onDebounceComplete: (() -> Void)?
+    // Callback to update countdown date (nil to clear) — wired by AppDelegate
+    var onDebounceStart: ((Date?) -> Void)?
 
     private var stream: FSEventStreamRef?
     private var debounceTimer: Timer?
@@ -93,6 +95,9 @@ final class FSEventsWatcher: ObservableObject {
     func stop() {
         debounceTimer?.invalidate()
         debounceTimer = nil
+        Task { @MainActor [weak self] in
+            self?.onDebounceStart?(nil)
+        }
 
         if let stream {
             FSEventStreamStop(stream)
@@ -110,14 +115,16 @@ final class FSEventsWatcher: ObservableObject {
     // Internal: Handle file system change events with debouncing
     func handleFileSystemChange() {
         NSLog("[FSEventsWatcher] File system change detected")
-        // Reset debounce timer — if more changes arrive within the window, this timer gets cancelled and restarted
         debounceTimer?.invalidate()
+        let fireDate = Date().addingTimeInterval(TimeInterval(debounceSeconds))
+        Task { @MainActor [weak self] in
+            self?.onDebounceStart?(fireDate)
+        }
         debounceTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(debounceSeconds), repeats: false) { [weak self] _ in
             NSLog("[FSEventsWatcher] Debounce period completed, triggering sync")
             self?.debounceTimer = nil
-            // Debounce period completed with no new changes — trigger sync by updating @Published property
             Task { @MainActor [weak self] in
-                self?.syncTrigger += 1
+                self?.onDebounceComplete?()
             }
         }
     }

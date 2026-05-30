@@ -79,9 +79,8 @@ final class SyncEngine: ObservableObject {
     @Published var nextAutoSyncDate: Date?
     private var autoSyncTimer: Timer?
 
-    // Push Sync - Independent debounce system
+    // Push Sync - date for countdown display (debounce lives in FSEventsWatcher)
     @Published var nextPushSyncDate: Date?
-    private var pushSyncDebounceTimer: Timer?
 
     // Set true when an rsync launch failure has not yet been acknowledged by a
     // dropdown open. Cleared on next successful sync or when the user opens the popover.
@@ -100,7 +99,6 @@ final class SyncEngine: ObservableObject {
         task?.terminate()
         duPollTimer?.invalidate()
         autoSyncTimer?.invalidate()
-        pushSyncDebounceTimer?.invalidate()
         Task { @MainActor in
             ConfigStore.shared.isSyncing = false
         }
@@ -559,47 +557,21 @@ final class SyncEngine: ObservableObject {
         sync(config: config, isAuto: true)
     }
 
-    // MARK: - Push Sync - Independent debounce system
-
-    func startPushSyncDebounce(debounceSeconds: Int) {
-        pushSyncDebounceTimer?.invalidate()
-        pushSyncDebounceTimer = nil
-
-        let debounceTime = TimeInterval(debounceSeconds)
-        let fireDate = Date().addingTimeInterval(debounceTime)
-        nextPushSyncDate = fireDate
-
-        // Create timer and explicitly add to main RunLoop to ensure it fires
-        pushSyncDebounceTimer = Timer(timeInterval: debounceTime, repeats: false) { [weak self] _ in
-            self?.pushSyncTimerFired()
-        }
-
-        if let timer = pushSyncDebounceTimer {
-            RunLoop.main.add(timer, forMode: .common)
-        }
-
-        NSLog("[PushSync] Debounce started, will fire in %d seconds", debounceSeconds)
-    }
+    // MARK: - Push Sync
 
     func stopPushSyncDebounce() {
-        pushSyncDebounceTimer?.invalidate()
-        pushSyncDebounceTimer = nil
         nextPushSyncDate = nil
-        NSLog("[PushSync] Debounce stopped")
     }
 
-    private func pushSyncTimerFired() {
-        NSLog("[DEBUG] pushSyncTimerFired() EXECUTING - timer did fire!")
+    func triggerPushSync() {
         let config = ConfigStore.shared.config
         nextPushSyncDate = nil
-
-        NSLog("[DEBUG] Push Sync timer fired - pushSyncEnabled: %@, isReadyToSync: %@, status.isActive: %@", config.pushSyncEnabled ? "YES" : "NO", config.isReadyToSync ? "YES" : "NO", status.isActive ? "YES" : "NO")
-        // Push Sync: Independent system with only basic guards
         guard config.pushSyncEnabled, config.isReadyToSync, !status.isActive else {
-            NSLog("[DEBUG] Push Sync timer guard failed - returning without calling sync")
+            NSLog("[PushSync] Guard failed - enabled: %@, ready: %@, active: %@",
+                  config.pushSyncEnabled ? "YES" : "NO", config.isReadyToSync ? "YES" : "NO", status.isActive ? "YES" : "NO")
             return
         }
-        NSLog("[PushSync] Timer fired, starting sync")
+        NSLog("[PushSync] Triggering sync")
         sync(config: config, isPush: true)
     }
 
@@ -1187,9 +1159,6 @@ struct MainView: View {
                 startPushSyncIfNeeded() // Restart with new source folder
             }
         }
-        .onChange(of: fsEventsWatcher.syncTrigger) { _ in
-            handlePushSyncTrigger()
-        }
         .onChange(of: store.pendingQuitConfirm) { newValue in
             if newValue {
                 Task { @MainActor in
@@ -1349,21 +1318,6 @@ struct MainView: View {
     }
 
     // MARK: - Push Sync
-
-    // Push Sync trigger — called by FSEventsWatcher when file changes detected
-    private func handlePushSyncTrigger() {
-        NSLog("[DEBUG] Push Sync trigger fired - pushSyncEnabled: %@, isSyncing: %@", store.config.pushSyncEnabled ? "YES" : "NO", store.isSyncing ? "YES" : "NO")
-        // Only start debounce if push sync is enabled and not already syncing
-        guard store.config.pushSyncEnabled,
-              !store.isSyncing else {
-            NSLog("[DEBUG] Push Sync trigger guard failed - returning without starting debounce")
-            return
-        }
-
-        NSLog("[PushSync] File changes detected, starting debounce timer")
-        // Use the engine's independent Push Sync debounce system
-        engine.startPushSyncDebounce(debounceSeconds: store.config.pushSyncDebounce)
-    }
 
     // Start Push Sync file watcher if enabled and configured
     private func startPushSyncIfNeeded() {

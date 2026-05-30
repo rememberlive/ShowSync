@@ -45,7 +45,8 @@
       "Bash(/Users/remember/Library/Developer/Xcode/DerivedData/Sync-baelifthnwytsreklatiaalxwlqm/Build/Products/Debug/Sync.app/Contents/MacOS/Sync *)",
       "Bash(sudo log show --last 1m --info --debug --predicate 'process == \"Sync\"')",
       "Bash(sudo dmesg)",
-      "Bash(pkill Sync)"
+      "Bash(pkill Sync)",
+      "Bash(pkill -x Sync)"
     ]
   }
 }

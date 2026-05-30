@@ -100,6 +100,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Starts FSEventsWatcher at app launch for Main role with Push Sync enabled.
     func startPushSyncIfNeeded() {
         let cfg = ConfigStore.shared.config
+        // Wire up callbacks once (idempotent)
+        if FSEventsWatcher.shared.onDebounceComplete == nil {
+            FSEventsWatcher.shared.onDebounceComplete = {
+                SyncEngine.shared.triggerPushSync()
+            }
+            FSEventsWatcher.shared.onDebounceStart = { date in
+                SyncEngine.shared.nextPushSyncDate = date
+            }
+        }
         if cfg.role == "main" && cfg.pushSyncEnabled && !cfg.sourceFolder.isEmpty {
             FSEventsWatcher.shared.start(path: cfg.sourceFolder, debounceSeconds: cfg.pushSyncDebounce)
         }
