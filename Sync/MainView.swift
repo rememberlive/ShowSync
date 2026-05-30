@@ -68,6 +68,8 @@ extension SyncStatus: Equatable {
 // MARK: - Sync engine
 
 final class SyncEngine: ObservableObject {
+    static let shared = SyncEngine()
+
     @Published var status: SyncStatus = .ready
     @Published var lastSyncTime: Date?
     @Published var dryRunResult: DryRunResult? = nil
@@ -91,6 +93,8 @@ final class SyncEngine: ObservableObject {
     private var syncIP:         String = ""
     private var isAutoSync:     Bool   = false
     private var isPushSync:     Bool   = false
+
+    private init() {}
 
     deinit {
         task?.terminate()
@@ -826,7 +830,7 @@ final class SSHChecker: ObservableObject {
 
 struct MainView: View {
     @EnvironmentObject var store: ConfigStore
-    @StateObject private var engine = SyncEngine()
+    @ObservedObject private var engine = SyncEngine.shared
     @StateObject private var sshChecker = SSHChecker()
     @StateObject private var networkMonitor = NetworkMonitor()
     @StateObject private var fsEventsWatcher = FSEventsWatcher()
