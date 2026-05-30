@@ -92,6 +92,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
 
         updateBonjourAdvertiser()
+        startPushSyncIfNeeded()
+    }
+
+    // Starts FSEventsWatcher at app launch for Main role with Push Sync enabled.
+    func startPushSyncIfNeeded() {
+        let cfg = ConfigStore.shared.config
+        if cfg.role == "main" && cfg.pushSyncEnabled && !cfg.sourceFolder.isEmpty {
+            FSEventsWatcher.shared.start(path: cfg.sourceFolder, debounceSeconds: cfg.pushSyncDebounce)
+        }
     }
 
     // Starts/stops the Backup-role Bonjour advertiser based on current role + discovery mode.

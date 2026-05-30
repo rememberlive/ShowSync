@@ -20,6 +20,8 @@ private func fseventsCallback(
 // Uses pure Apple CoreServices framework — zero polling, event-driven, instant response.
 
 final class FSEventsWatcher: ObservableObject {
+    static let shared = FSEventsWatcher()
+
     // Published trigger that MainView can observe - increments each time sync should be triggered
     @Published var syncTrigger: Int = 0
 
@@ -28,9 +30,7 @@ final class FSEventsWatcher: ObservableObject {
     private var watchedPath: String = ""
     private var debounceSeconds: Int = 10
 
-    init() {
-        // No callback needed - use @Published property instead
-    }
+    private init() {}
 
     deinit {
         stop()
