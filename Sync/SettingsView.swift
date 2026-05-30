@@ -23,6 +23,8 @@ struct SettingsView: View {
     @State private var localDiscoveryMode = "automatic"
     @State private var isEditingDiscoveryName = false
     @State private var editingDiscoveryName = ""
+    @State private var isEditingUsername = false
+    @State private var editingUsername = ""
 
     private var isMain: Bool { store.config.role == "main" }
     private var switchLabel: String { isMain ? "Switch to BACKUP" : "Switch to MAIN" }
@@ -468,16 +470,40 @@ struct SettingsView: View {
                     .font(.system(size: 12))
                     .foregroundColor(labelColor)
                 Spacer()
-                TextField("Username", text: Binding(
-                    get: { store.config.username },
-                    set: {
-                        store.config.username = $0
+                if isEditingUsername {
+                    TextField("Username", text: $editingUsername)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 100)
+                        .multilineTextAlignment(.trailing)
+                    Button("Save") {
+                        let trimmed = editingUsername.trimmingCharacters(in: .whitespaces)
+                        store.config.username = trimmed
                         store.config.sshKeysConfigured = false
+                        isEditingUsername = false
                     }
-                ))
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 140)
-                .multilineTextAlignment(.trailing)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundColor(editingUsername.trimmingCharacters(in: .whitespaces).isEmpty || editingUsername.trimmingCharacters(in: .whitespaces).contains(" ") ? Color(white: 0.4) : .blue)
+                    .disabled(editingUsername.trimmingCharacters(in: .whitespaces).isEmpty || editingUsername.trimmingCharacters(in: .whitespaces).contains(" "))
+                    Button("Cancel") {
+                        isEditingUsername = false
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(white: 0.5))
+                } else {
+                    Text(store.config.username.isEmpty ? "Not set" : store.config.username)
+                        .font(.system(size: 12))
+                        .foregroundColor(store.config.username.isEmpty ? labelColor : .white)
+                        .lineLimit(1)
+                    Button("Edit") {
+                        editingUsername = store.config.username
+                        isEditingUsername = true
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundColor(.blue)
+                }
             }
         }
         .padding(.horizontal, 20)

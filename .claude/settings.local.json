@@ -48,7 +48,9 @@
       "Bash(pkill Sync)",
       "Bash(pkill -x Sync)",
       "Bash(lsof -i :22 -sTCP:ESTABLISHED)",
-      "Bash(time netstat -an)"
+      "Bash(time netstat -an)",
+      "Bash(defaults read *)",
+      "Bash(plutil -p -)"
     ]
   }
 }
