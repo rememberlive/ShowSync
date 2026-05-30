@@ -40,6 +40,8 @@ struct Config {
     // Discovery (per-role on disk; one runtime field reflects the active role)
     var discoveryMode: String = "automatic"   // "automatic" | "manual"
     var backupHostname: String = ""           // Main role only — Bonjour name of the selected Backup
+    var lastBackupDiscoveryName: String = ""  // Auto-reconnect: remembered Backup Mac's name
+    var lastBackupIP: String = ""             // Auto-reconnect: remembered Backup Mac's IP
 
     // Backup-role fields
     var mainIP: String = ""
@@ -80,6 +82,8 @@ private struct MainConfig: Codable {
     var maxVersionCount: Int = 10
     var discoveryMode: String = "automatic"
     var backupHostname: String = ""
+    var lastBackupDiscoveryName: String = ""
+    var lastBackupIP: String = ""
 }
 
 private struct BackupConfig: Codable {
@@ -208,7 +212,9 @@ final class ConfigStore: ObservableObject {
                 versionHistoryEnabled:         config.versionHistoryEnabled,
                 maxVersionCount:               config.maxVersionCount,
                 discoveryMode:                 config.discoveryMode,
-                backupHostname:                config.backupHostname
+                backupHostname:                config.backupHostname,
+                lastBackupDiscoveryName:       config.lastBackupDiscoveryName,
+                lastBackupIP:                  config.lastBackupIP
             )
             do {
                 let data = try JSONEncoder().encode(m)
@@ -283,6 +289,8 @@ final class ConfigStore: ObservableObject {
         c.maxVersionCount               = m.maxVersionCount
         c.discoveryMode                 = m.discoveryMode.isEmpty ? "automatic" : m.discoveryMode
         c.backupHostname                = m.backupHostname
+        c.lastBackupDiscoveryName       = m.lastBackupDiscoveryName
+        c.lastBackupIP                  = m.lastBackupIP
         return c
     }
 

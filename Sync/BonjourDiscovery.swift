@@ -31,6 +31,7 @@ final class BonjourAdvertiser: NSObject, ObservableObject {
     private var service: NetService?
     private var bonjourRunLoop: RunLoop?
     private let runLoopReady = DispatchSemaphore(value: 0)
+    private var isRunLoopReady = false
 
     // Dedicated background thread for all NetService operations to prevent main thread blocking
     private lazy var bonjourThread: Thread = {
@@ -38,6 +39,7 @@ final class BonjourAdvertiser: NSObject, ObservableObject {
             self?.bonjourRunLoop = RunLoop.current
             // Signal that runloop is ready
             self?.runLoopReady.signal()
+            self?.isRunLoopReady = true
             // Keep the runloop alive with a port
             RunLoop.current.add(NSMachPort(), forMode: .default)
             RunLoop.current.run()
@@ -55,7 +57,7 @@ final class BonjourAdvertiser: NSObject, ObservableObject {
         _ = bonjourThread // Start thread
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
-            self.runLoopReady.wait()
+            if !self.isRunLoopReady { self.runLoopReady.wait() }
             self.perform(#selector(self.startPublishing), on: self.bonjourThread, with: nil, waitUntilDone: false)
         }
     }
@@ -149,6 +151,7 @@ final class BonjourBrowser: NSObject, ObservableObject {
     private var resolving: [NetService] = []   // strong refs while resolution is in-flight
     private var bonjourRunLoop: RunLoop?
     private let runLoopReady = DispatchSemaphore(value: 0)
+    private var isRunLoopReady = false
 
     // Dedicated background thread for all NetServiceBrowser operations to prevent main thread blocking
     private lazy var bonjourThread: Thread = {
@@ -156,6 +159,7 @@ final class BonjourBrowser: NSObject, ObservableObject {
             self?.bonjourRunLoop = RunLoop.current
             // Signal that runloop is ready
             self?.runLoopReady.signal()
+            self?.isRunLoopReady = true
             // Keep the runloop alive with a port
             RunLoop.current.add(NSMachPort(), forMode: .default)
             RunLoop.current.run()
@@ -173,7 +177,7 @@ final class BonjourBrowser: NSObject, ObservableObject {
         _ = bonjourThread // Start thread
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
-            self.runLoopReady.wait()
+            if !self.isRunLoopReady { self.runLoopReady.wait() }
             self.perform(#selector(self.setupBrowser), on: self.bonjourThread, with: nil, waitUntilDone: false)
         }
     }
@@ -220,7 +224,7 @@ final class BonjourBrowser: NSObject, ObservableObject {
     }
 
     deinit {
-        perform(#selector(cleanupBrowser), on: bonjourThread, with: nil, waitUntilDone: true)
+        perform(#selector(cleanupBrowser), on: bonjourThread, with: nil, waitUntilDone: false)
     }
 
     @objc private func cleanupBrowser() {
@@ -291,6 +295,15 @@ extension BonjourBrowser: NetServiceDelegate {
             self.services.removeAll { $0.id == name }
             self.services.append(DiscoveredBackup(id: name, hostname: host, resolvedIP: resolvedIP))
             self.services.sort { $0.hostname.localizedCaseInsensitiveCompare($1.hostname) == .orderedAscending }
+
+            // Auto-reconnect: if this service matches the last connected Backup, auto-select it
+            let config = ConfigStore.shared.config
+            if !config.lastBackupDiscoveryName.isEmpty && name == config.lastBackupDiscoveryName {
+                NSLog("[Bonjour] Found previously connected Backup: %@ — auto-reconnect disabled pending singleton refactor", name)
+                // TODO: Re-enable after BonjourBrowser is moved to singleton pattern
+                // ConfigStore.shared.config.destinationIP = resolvedIP
+                // ConfigStore.shared.config.backupHostname = host
+            }
         }
     }
 

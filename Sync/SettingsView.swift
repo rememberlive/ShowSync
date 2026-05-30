@@ -223,8 +223,8 @@ struct SettingsView: View {
         .preferredColorScheme(.dark)
         .ignoresSafeArea()
         .onAppear {
-            // Initialize local discovery mode from store
-            Task { @MainActor in
+            // Initialize local discovery mode from store — defer off layout pass
+            DispatchQueue.main.async {
                 localDiscoveryMode = store.config.discoveryMode
             }
             if !store.config.username.isEmpty && !store.config.destinationIP.isEmpty {
@@ -300,6 +300,9 @@ struct SettingsView: View {
                             store.config.destinationIP   = service.resolvedIP
                             store.config.backupHostname  = service.hostname
                             store.config.sshKeysConfigured = false
+                            // Save for auto-reconnect on subsequent discoveries
+                            store.config.lastBackupDiscoveryName = service.id
+                            store.config.lastBackupIP = service.resolvedIP
                         }
                     } label: {
                         HStack(spacing: 8) {
@@ -792,7 +795,10 @@ struct SettingsView: View {
         let username = store.config.username
         let ip = store.config.destinationIP
         guard !username.isEmpty, !ip.isEmpty else { return }
-        sshConnectionState = .checking
+        // Defer state change off layout pass to avoid recursion
+        DispatchQueue.main.async { [self] in
+            sshConnectionState = .checking
+        }
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         proc.arguments = [

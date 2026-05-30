@@ -777,12 +777,18 @@ final class SSHChecker: ObservableObject {
         timer?.invalidate()
         timer = nil
         cancelInFlight()
-        state = nil
+        // Defer state change off layout pass to avoid recursion
+        DispatchQueue.main.async { [weak self] in
+            self?.state = nil
+        }
     }
 
     private func check(username: String, ip: String) {
         cancelInFlight()
-        state = .checking
+        // Defer state change off layout pass to avoid recursion
+        DispatchQueue.main.async { [weak self] in
+            self?.state = .checking
+        }
         let currentID = checkID
 
         let proc = Process()
