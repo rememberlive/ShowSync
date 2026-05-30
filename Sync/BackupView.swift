@@ -222,6 +222,7 @@ final class ReceiveMonitor: ObservableObject {
     @Published var state: ReceiveState    = .idle
     @Published var receivePercent: Int    = -1    // -1 = unknown; 0–100 during transfer
     @Published var receiveDetails: String = ""    // "4 files · 620 MB in 0:42"
+    @Published var hasConnectedThisSession: Bool = false  // true after first .sync_complete
     // `lastReceivedTime` now lives on ConfigStore.config so it survives relaunch.
 
     private var pollTimer:   Timer?
@@ -233,6 +234,7 @@ final class ReceiveMonitor: ObservableObject {
 
     func startMonitoring() {
         state          = .idle
+        hasConnectedThisSession = false
         receivePercent = -1
         receiveDetails = ""
         pollTimer?.invalidate()
@@ -277,6 +279,7 @@ final class ReceiveMonitor: ObservableObject {
                     self.receiveDetails   = details
                     self.receivePercent   = -1
                     self.state            = .done
+                    self.hasConnectedThisSession = true
                     ConfigStore.shared.config.lastReceivedTime = Date()
                     ConfigStore.shared.isSyncing = false
                     ConfigStore.shared.iconState = .success
@@ -657,19 +660,15 @@ struct BackupView: View {
     // MARK: - Header helpers
 
     private var headerColor: Color {
-        switch receiveMonitor.state {
-        case .idle:      return .gray
-        case .receiving: return .yellow
-        case .done:      return .green
-        }
+        if receiveMonitor.state == .receiving { return .yellow }
+        if receiveMonitor.state == .done || receiveMonitor.hasConnectedThisSession { return .green }
+        return .gray
     }
 
     private var headerStatus: String {
-        switch receiveMonitor.state {
-        case .idle:      return "Listening"
-        case .receiving: return "Receiving"
-        case .done:      return "Received"
-        }
+        if receiveMonitor.state == .receiving { return "Receiving" }
+        if receiveMonitor.state == .done || receiveMonitor.hasConnectedThisSession { return "Connected" }
+        return "Ready"
     }
 
     private var isReceiving: Bool { receiveMonitor.state == .receiving }
