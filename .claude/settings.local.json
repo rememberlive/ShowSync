@@ -39,7 +39,13 @@
       "Bash(xcodebuild *)",
       "Bash(dmesg)",
       "Bash(git add *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(pkill -f \"Sync.app\")",
+      "Bash(nohup /Users/remember/Library/Developer/Xcode/DerivedData/Sync-baelifthnwytsreklatiaalxwlqm/Build/Products/Debug/Sync.app/Contents/MacOS/Sync *)",
+      "Bash(/Users/remember/Library/Developer/Xcode/DerivedData/Sync-baelifthnwytsreklatiaalxwlqm/Build/Products/Debug/Sync.app/Contents/MacOS/Sync *)",
+      "Bash(sudo log show --last 1m --info --debug --predicate 'process == \"Sync\"')",
+      "Bash(sudo dmesg)",
+      "Bash(pkill Sync)"
     ]
   }
 }

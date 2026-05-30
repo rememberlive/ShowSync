@@ -565,9 +565,15 @@ final class SyncEngine: ObservableObject {
         let fireDate = Date().addingTimeInterval(debounceTime)
         nextPushSyncDate = fireDate
 
-        pushSyncDebounceTimer = Timer.scheduledTimer(withTimeInterval: debounceTime, repeats: false) { [weak self] _ in
+        // Create timer and explicitly add to main RunLoop to ensure it fires
+        pushSyncDebounceTimer = Timer(timeInterval: debounceTime, repeats: false) { [weak self] _ in
             self?.pushSyncTimerFired()
         }
+
+        if let timer = pushSyncDebounceTimer {
+            RunLoop.main.add(timer, forMode: .common)
+        }
+
         NSLog("[PushSync] Debounce started, will fire in %d seconds", debounceSeconds)
     }
 
@@ -579,11 +585,16 @@ final class SyncEngine: ObservableObject {
     }
 
     private func pushSyncTimerFired() {
+        NSLog("[DEBUG] pushSyncTimerFired() EXECUTING - timer did fire!")
         let config = ConfigStore.shared.config
         nextPushSyncDate = nil
 
+        NSLog("[DEBUG] Push Sync timer fired - pushSyncEnabled: %@, isReadyToSync: %@, status.isActive: %@", config.pushSyncEnabled ? "YES" : "NO", config.isReadyToSync ? "YES" : "NO", status.isActive ? "YES" : "NO")
         // Push Sync: Independent system with only basic guards
-        guard config.pushSyncEnabled, config.isReadyToSync, !status.isActive else { return }
+        guard config.pushSyncEnabled, config.isReadyToSync, !status.isActive else {
+            NSLog("[DEBUG] Push Sync timer guard failed - returning without calling sync")
+            return
+        }
         NSLog("[PushSync] Timer fired, starting sync")
         sync(config: config, isPush: true)
     }
@@ -1105,14 +1116,14 @@ struct MainView: View {
                     }
                 }
             }
+            NSLog("[DEBUG] Source folder path at app launch: %@", store.config.sourceFolder)
             sshChecker.startChecking(username: store.config.username, ip: store.config.destinationIP)
             if store.config.autoSyncEnabled { engine.startAutoSync() }
             startPushSyncIfNeeded()
         }
         .onDisappear {
             sshChecker.stopChecking()
-            engine.stopPushSyncDebounce()
-            stopPushSync()
+            // Push Sync timer and watcher must survive view lifecycle — do not stop here
             clockTimer?.invalidate()
             clockTimer = nil
         }
@@ -1331,9 +1342,13 @@ struct MainView: View {
 
     // Push Sync trigger — called by FSEventsWatcher when file changes detected
     private func handlePushSyncTrigger() {
+        NSLog("[DEBUG] Push Sync trigger fired - pushSyncEnabled: %@, isSyncing: %@", store.config.pushSyncEnabled ? "YES" : "NO", store.isSyncing ? "YES" : "NO")
         // Only start debounce if push sync is enabled and not already syncing
         guard store.config.pushSyncEnabled,
-              !store.isSyncing else { return }
+              !store.isSyncing else {
+            NSLog("[DEBUG] Push Sync trigger guard failed - returning without starting debounce")
+            return
+        }
 
         NSLog("[PushSync] File changes detected, starting debounce timer")
         // Use the engine's independent Push Sync debounce system
