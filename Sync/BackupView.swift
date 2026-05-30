@@ -2,17 +2,29 @@ import SwiftUI
 import AppKit
 import Network
 
+private let darkBg = Color(red: 0.12, green: 0.12, blue: 0.12)
+private let popoverWidth: CGFloat = 360
+
+// MARK: - Network monitor
+
 final class NetworkMonitor: ObservableObject {
     @Published var currentIP: String = "—"
 
     private let monitor = NWPathMonitor()
-    private let queue = DispatchQueue(label: "com.sync.networkmonitor", qos: .utility)
+    private let queue   = DispatchQueue(label: "com.sync.networkmonitor", qos: .utility)
 
     init() {
         monitor.pathUpdateHandler = { [weak self] path in
             let ip = Self.extractIPv4(from: path)
-            DispatchQueue.main.async {
+            Task { @MainActor [weak self] in
                 self?.currentIP = ip ?? "—"
+                // Network lost → red. Network restored from error → grey.
+                // Never override success or receiving — those are time-bounded active states.
+                if ip == nil {
+                    ConfigStore.shared.iconState = .error
+                } else if ConfigStore.shared.iconState == .error {
+                    ConfigStore.shared.iconState = .idle
+                }
             }
         }
         monitor.start(queue: queue)
@@ -21,10 +33,8 @@ final class NetworkMonitor: ObservableObject {
     deinit { monitor.cancel() }
 
     private static func extractIPv4(from path: NWPath) -> String? {
-        // Walk available interfaces in path and return first non-loopback IPv4
         for iface in path.availableInterfaces {
             if iface.type == .loopback { continue }
-            // Use getifaddrs to get the IP for this named interface
             if let ip = ipv4Address(for: iface.name) { return ip }
         }
         return nil
@@ -34,7 +44,6 @@ final class NetworkMonitor: ObservableObject {
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
         defer { freeifaddrs(first) }
-
         var ptr = Optional(first)
         while let current = ptr {
             let ifa = current.pointee
@@ -50,96 +59,669 @@ final class NetworkMonitor: ObservableObject {
         }
         return nil
     }
+
+    static func getCurrentIP() -> String? {
+        let monitor = NWPathMonitor()
+        let currentPath = monitor.currentPath
+        return extractIPv4(from: currentPath)
+    }
 }
+
+// MARK: - Storage monitor
+
+final class StorageMonitor: ObservableObject {
+    @Published var storageString: String = ""
+    @Published var syncFolderString: String = ""
+    @Published var syncFolderWritable: Bool = true
+    private var timer: Timer?
+
+    func startStorageUpdates() {
+        stopStorageUpdates()
+        updateStorage()
+        updateSyncFolder()
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.updateStorage()
+            self?.updateSyncFolder()
+        }
+    }
+
+    func stopStorageUpdates() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    private func updateStorage() {
+        let attrs = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
+        let free = attrs?[.systemFreeSize] as? Int64 ?? 0
+        let gb = Double(free) / 1_073_741_824
+        if gb >= 1.0 {
+            storageString = String(format: "%.1f GB free", gb)
+        } else {
+            let mb = Double(free) / 1_048_576
+            storageString = String(format: "%.1f MB free", mb)
+        }
+    }
+
+    private func updateSyncFolder() {
+        let syncFolder = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Sync")
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            // TCC writability test — isWritableFile only checks Unix permissions,
+            // not TCC. A real create-and-delete confirms macOS allows actual writes.
+            let testFile = syncFolder.appendingPathComponent(".syncwritetest")
+            let writable = FileManager.default.createFile(atPath: testFile.path, contents: Data())
+            if writable { try? FileManager.default.removeItem(at: testFile) }
+            guard writable else {
+                Task { @MainActor in self.syncFolderWritable = false }
+                return
+            }
+            guard let enumerator = FileManager.default.enumerator(
+                at: syncFolder,
+                includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+                options: .skipsHiddenFiles
+            ) else {
+                Task { @MainActor in
+                    self.syncFolderWritable = true
+                    self.syncFolderString = "0 files · empty"
+                }
+                return
+            }
+            var count: Int = 0
+            var totalBytes: Int64 = 0
+            for case let url as URL in enumerator {
+                guard let res = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                      res.isRegularFile == true else { continue }
+                count += 1
+                totalBytes += Int64(res.fileSize ?? 0)
+            }
+            let sizeStr: String
+            if totalBytes < 1_048_576 {
+                sizeStr = String(format: "%.1f KB", Double(totalBytes) / 1_024)
+            } else if totalBytes < 1_073_741_824 {
+                sizeStr = String(format: "%.1f MB", Double(totalBytes) / 1_048_576)
+            } else {
+                sizeStr = String(format: "%.1f GB", Double(totalBytes) / 1_073_741_824)
+            }
+            let fileWord = count == 1 ? "file" : "files"
+            let result = count == 0 ? "0 files · empty" : "\(count) \(fileWord) · \(sizeStr)"
+            Task { @MainActor in
+                self.syncFolderWritable = true
+                self.syncFolderString = result
+            }
+        }
+    }
+
+    deinit { stopStorageUpdates() }
+}
+
+// MARK: - Ping checker
+
+final class PingChecker: ObservableObject {
+    @Published var state: ReachabilityState? = nil
+
+    private var process: Process?
+    private var checkID = 0
+    private var timer:   Timer?
+
+    func startChecking(ip: String) {
+        guard !ip.isEmpty else { stopChecking(); return }
+        stopChecking()
+        check(ip: ip)
+        timer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+            self?.check(ip: ip)
+        }
+    }
+
+    func stopChecking() {
+        timer?.invalidate()
+        timer = nil
+        cancelInFlight()
+        state = nil
+    }
+
+    private func check(ip: String) {
+        cancelInFlight()
+        state = .checking
+        let currentID = checkID
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/sbin/ping")
+        proc.arguments = ["-c", "1", "-W", "1", ip]
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError  = FileHandle.nullDevice
+        proc.terminationHandler = { [weak self] p in
+            Task { @MainActor [weak self] in
+                guard let self, self.checkID == currentID else { return }
+                self.state   = p.terminationStatus == 0 ? .reachable : .unreachable
+                self.process = nil
+            }
+        }
+        process = proc
+        DispatchQueue.global(qos: .utility).async { try? proc.run() }
+    }
+
+    private func cancelInFlight() {
+        checkID += 1
+        if let proc = process, proc.isRunning { proc.terminate() }
+        process = nil
+    }
+
+    deinit { stopChecking() }
+}
+
+// MARK: - Receive monitor
+
+enum ReceiveState { case idle, receiving, done }
+
+final class ReceiveMonitor: ObservableObject {
+    @Published var state: ReceiveState    = .idle
+    @Published var receivePercent: Int    = -1    // -1 = unknown; 0–100 during transfer
+    @Published var receiveDetails: String = ""    // "4 files · 620 MB in 0:42"
+    // `lastReceivedTime` now lives on ConfigStore.config so it survives relaunch.
+
+    private var pollTimer:   Timer?
+    private var isChecking:  Bool = false
+    var stopAfterTransfer:   Bool = false
+    var isMonitoring: Bool { pollTimer != nil }
+
+    func startMonitoring() {
+        state          = .idle
+        receivePercent = -1
+        receiveDetails = ""
+        pollTimer?.invalidate()
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.checkSignalFiles()
+        }
+        checkSignalFiles()
+    }
+
+    func stopMonitoring() {
+        pollTimer?.invalidate()
+        pollTimer      = nil
+        isChecking     = false
+        state          = .idle
+        receivePercent = -1
+        ConfigStore.shared.isSyncing = false
+        // lastReceivedTime preserved across close/open
+    }
+
+    deinit { pollTimer?.invalidate() }
+
+    private func checkSignalFiles() {
+        guard !isChecking else { return }
+        isChecking = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let base         = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Sync")
+            let completePath = base.appendingPathComponent(".sync_complete")
+            let progressPath = base.appendingPathComponent(".sync_progress")
+            let startPath    = base.appendingPathComponent(".sync_start")
+            let fm           = FileManager.default
+
+            if fm.fileExists(atPath: completePath.path) {
+                let content = (try? String(contentsOf: completePath, encoding: .utf8))?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                try? fm.removeItem(at: completePath)
+                try? fm.removeItem(at: progressPath)
+                try? fm.removeItem(at: startPath)
+                let details = Self.parseCompleteFile(content)
+                Task { @MainActor [weak self] in
+                    self?.isChecking      = false
+                    guard let self else { return }
+                    self.receiveDetails   = details
+                    self.receivePercent   = -1
+                    self.state            = .done
+                    ConfigStore.shared.config.lastReceivedTime = Date()
+                    ConfigStore.shared.isSyncing = false
+                    ConfigStore.shared.iconState = .success
+                    Task { @MainActor [weak self] in
+                        try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
+                        guard let self, self.state == .done else { return }
+                        self.state          = .idle
+                        self.receiveDetails = ""
+                        if self.stopAfterTransfer {
+                            self.stopMonitoring()
+                            self.stopAfterTransfer = false
+                        }
+                    }
+                }
+                return
+            }
+
+            if fm.fileExists(atPath: progressPath.path) {
+                let content = (try? String(contentsOf: progressPath, encoding: .utf8))?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let pct = Self.parseProgressFile(content)
+                Task { @MainActor [weak self] in
+                    self?.isChecking = false
+                    guard let self else { return }
+                    self.receivePercent = pct
+                    if self.state != .receiving {
+                        self.state = .receiving
+                        ConfigStore.shared.isSyncing = true
+                        ConfigStore.shared.iconState = .receiving
+                    }
+                }
+                return
+            }
+
+            if fm.fileExists(atPath: startPath.path) {
+                Task { @MainActor [weak self] in
+                    self?.isChecking = false
+                    guard let self else { return }
+                    self.receivePercent = -1
+                    if self.state != .receiving {
+                        self.state = .receiving
+                        ConfigStore.shared.isSyncing = true
+                        ConfigStore.shared.iconState = .receiving
+                    }
+                }
+                return
+            }
+
+            // No signal files — if we were receiving, Main finished or was cancelled
+            Task { @MainActor [weak self] in
+                self?.isChecking = false
+                guard let self else { return }
+                if self.state == .receiving {
+                    self.state          = .idle
+                    self.receivePercent = -1
+                    ConfigStore.shared.isSyncing = false
+                    ConfigStore.shared.iconState = .idle
+                }
+            }
+        }
+    }
+
+    private static func parseCompleteFile(_ content: String) -> String {
+        guard let data = content.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return "Received"
+        }
+        let files    = (json["totalFiles"] as? NSNumber)?.intValue   ?? 0
+        let bytes    = (json["totalBytes"] as? NSNumber)?.int64Value ?? 0
+        let duration = (json["duration"]   as? NSNumber)?.intValue   ?? 0
+        var parts: [String] = []
+        if files > 0 { parts.append("\(files) \(files == 1 ? "file" : "files")") }
+        if bytes > 0 { parts.append(formatBytes(bytes)) }
+        let base = parts.isEmpty ? "Received" : parts.joined(separator: " · ")
+        guard duration > 0 else { return base }
+        return "\(base) in \(duration / 60):\(String(format: "%02d", duration % 60))"
+    }
+
+    private static func parseProgressFile(_ content: String) -> Int {
+        guard let data = content.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let pct  = (json["percent"] as? NSNumber)?.intValue else { return -1 }
+        return max(0, min(100, pct))
+    }
+
+    static func formatBytes(_ bytes: Int64) -> String {
+        if bytes < 1_024         { return "\(bytes) bytes" }
+        if bytes < 1_048_576     { return String(format: "%.1f KB", Double(bytes) / 1_024) }
+        if bytes < 1_073_741_824 { return String(format: "%.1f MB", Double(bytes) / 1_048_576) }
+        return String(format: "%.1f GB", Double(bytes) / 1_073_741_824)
+    }
+}
+
+// MARK: - Backup view
 
 struct BackupView: View {
     @EnvironmentObject var store: ConfigStore
     @StateObject private var networkMonitor = NetworkMonitor()
-    @State private var lastReceivedTime: Date? = nil
-    @State private var showSettings = false
+    @StateObject private var storageMonitor = StorageMonitor()
+    @StateObject private var pingChecker    = PingChecker()
+    @StateObject private var receiveMonitor = ReceiveMonitor()
+    @ObservedObject private var advertiser  = BonjourAdvertiser.shared
+    @State private var showQuitConfirm = false
+    var onSettingsTapped: () -> Void = {}
 
-    private var computerName: String { Host.current().localizedName ?? "Unknown" }
-    private var hostname: String { Host.current().name ?? "Unknown" }
-    private var storageInfo: String { availableStorageString() }
+    private var isAutomatic: Bool { store.config.discoveryMode == "automatic" }
 
     var body: some View {
+        if showQuitConfirm {
+            InlineConfirm(
+                title: "Quit Sync?",
+                message: "Any sync in progress will stop.",
+                confirmLabel: "Quit",
+                confirmColor: .red,
+                onCancel: {
+                    store.pendingQuitConfirm = false
+                    showQuitConfirm = false
+                },
+                onConfirm: {
+                    store.pendingQuitConfirm = false
+                    (NSApp.delegate as? AppDelegate)?.quitConfirmed = true
+                    NSApp.terminate(nil)
+                }
+            )
+            .frame(width: popoverWidth)
+            .background(darkBg)
+            .preferredColorScheme(.dark)
+            .ignoresSafeArea()
+        } else {
         VStack(alignment: .leading, spacing: 0) {
+
             // Header
             HStack {
                 Circle()
-                    .fill(lastReceivedTime != nil ? Color.green : Color.gray)
-                    .frame(width: 9, height: 9)
-                Text(lastReceivedTime != nil ? "Just received" : "Listening")
-                    .font(.system(size: 12))
+                    .fill(headerColor)
+                    .frame(width: 8, height: 8)
+                Text("Sync")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.white)
                 Spacer()
-                Image(systemName: "arrow.down.circle")
-                    .foregroundColor(lastReceivedTime != nil ? .green : .gray)
-                    .font(.system(size: 16))
+                Text(headerStatus)
+                    .font(.system(size: 12))
+                    .foregroundColor(headerColor)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(Color(NSColor.windowBackgroundColor))
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
 
             Divider()
 
-            // IP — large, monospace, readable across the room
-            VStack(alignment: .center, spacing: 4) {
-                Text("This Mac's IP")
+            if isAutomatic {
+                // Network Discovery — large name, small IP below
+                VStack(spacing: 4) {
+                    Text("Network Discovery")
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(white: 0.45))
+                    if case .advertising(let name) = advertiser.state {
+                        Text(name)
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundColor(.white)
+                            .minimumScaleFactor(0.6)
+                            .lineLimit(1)
+                        Text(networkMonitor.currentIP == "—" ? "Not set" : networkMonitor.currentIP)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundColor(Color(white: 0.55))
+                    } else {
+                        Text("Setting up...")
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundColor(.white)
+                            .minimumScaleFactor(0.6)
+                            .lineLimit(1)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
+            } else {
+                // Manual mode — IP large, as before
+                VStack(spacing: 4) {
+                    Text("This Mac's IP")
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(white: 0.45))
+                    Text(networkMonitor.currentIP == "—" ? "Not set" : networkMonitor.currentIP)
+                        .font(.system(size: 22, weight: .bold, design: .monospaced))
+                        .foregroundColor(networkMonitor.currentIP == "—" ? Color(white: 0.55) : .white)
+                        .minimumScaleFactor(0.6)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
+            }
+
+            Divider()
+
+            // BACKUP User
+            VStack(spacing: 4) {
+                Text("BACKUP User")
                     .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-                Text(networkMonitor.currentIP)
-                    .font(.system(size: 28, weight: .bold, design: .monospaced))
-                    .foregroundColor(.primary)
-                    .minimumScaleFactor(0.6)
+                    .foregroundColor(Color(white: 0.45))
+                Text(NSUserName())
+                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                    .foregroundColor(.white)
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 16)
+            .padding(.horizontal, 20)
+            .padding(.top, 22)
+            .padding(.bottom, 14)
 
             Divider()
 
             // Info rows
-            VStack(alignment: .leading, spacing: 8) {
-                infoRow(label: "Computer name", value: computerName)
-                infoRow(label: "Hostname", value: hostname)
-                infoRow(label: "Last received",
-                        value: lastReceivedTime.map { formatTime($0) } ?? "Never")
-                infoRow(label: "Storage available", value: storageInfo)
+            VStack(alignment: .leading, spacing: 6) {
+                if !isAutomatic {
+                    HStack {
+                        Text("MAIN")
+                            .font(.system(size: 12))
+                            .foregroundColor(Color(white: 0.5))
+                        Spacer()
+                        if store.config.mainIP.isEmpty {
+                            HStack(spacing: 3) {
+                                Circle()
+                                    .fill(Color.red)
+                                    .frame(width: 6, height: 6)
+                                Text("Not set")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.red)
+                            }
+                        } else {
+                            HStack(spacing: 6) {
+                                Text(store.config.mainIP)
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.white)
+                                if let state = pingChecker.state {
+                                    HStack(spacing: 3) {
+                                        Circle()
+                                            .fill(mainDotColor(state))
+                                            .frame(width: 6, height: 6)
+                                        Text(mainLabel(state))
+                                            .font(.system(size: 11))
+                                            .foregroundColor(mainDotColor(state))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                infoRow(
+                    label: "Last received",
+                    value: store.config.lastReceivedTime.map { formatTime($0) } ?? "Never"
+                )
+                HStack {
+                    Text("Sync folder")
+                        .font(.system(size: 12))
+                        .foregroundColor(Color(white: 0.5))
+                    Spacer()
+                    if !storageMonitor.syncFolderWritable {
+                        HStack(spacing: 3) {
+                            Circle()
+                                .fill(Color.red)
+                                .frame(width: 6, height: 6)
+                            Text("Cannot write — see Settings")
+                                .font(.system(size: 11))
+                                .foregroundColor(.red)
+                        }
+                    } else if receiveMonitor.state == .receiving {
+                        Text(receivingText)
+                            .font(.system(size: 12))
+                            .foregroundColor(.yellow)
+                            .lineLimit(1)
+                    } else if receiveMonitor.state == .done {
+                        Text(receiveMonitor.receiveDetails.isEmpty ? "✓ Received" : "✓ \(receiveMonitor.receiveDetails)")
+                            .font(.system(size: 12))
+                            .foregroundColor(.green)
+                            .lineLimit(1)
+                    } else {
+                        Text(storageMonitor.syncFolderString)
+                            .font(.system(size: 12))
+                            .foregroundColor(.white)
+                            .lineLimit(1)
+                    }
+                }
+                infoRow(label: "Storage", value: storageMonitor.storageString)
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+
+            Divider()
+
+            // About
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Version")
+                        .font(.system(size: 12))
+                        .foregroundColor(Color(white: 0.45))
+                    Spacer()
+                    Text(appVersion())
+                        .font(.system(size: 12))
+                        .foregroundColor(.white)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("© RememberLive 2026")
+                        .font(.system(size: 12))
+                        .foregroundColor(Color(white: 0.45))
+                    Text("Designed and Programmed by Remember Chaitezvi")
+                        .font(.system(size: 12))
+                        .foregroundColor(Color(white: 0.45))
+                    Text("rememberlive.africa")
+                        .font(.system(size: 12))
+                        .foregroundColor(Color(white: 0.45))
+                }
+            }
+            .padding(.horizontal, 20)
             .padding(.vertical, 12)
 
             Divider()
 
             // Footer
             HStack {
-                Button("Settings…") { showSettings = true }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12))
+                Button { onSettingsTapped() } label: {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 14))
+                        .foregroundColor(Color(white: 0.6))
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Settings")
+
                 Spacer()
-                Button("Quit") { NSApp.terminate(nil) }
+
+                Button("Quit") { showQuitConfirm = true }
                     .buttonStyle(.plain)
                     .font(.system(size: 12))
-                    .foregroundColor(.secondary)
+                    .foregroundColor(isReceiving ? Color(white: 0.25) : Color(white: 0.5))
+                    .disabled(isReceiving)
+                    .help(isReceiving ? "Transfer in progress" : "")
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 6)
         }
-        .frame(width: 300)
-        .sheet(isPresented: $showSettings) {
-            SettingsView().environmentObject(store)
+        .frame(width: popoverWidth)
+        .background(darkBg)
+        .preferredColorScheme(.dark)
+        .ignoresSafeArea()
+        .onAppear {
+            storageMonitor.startStorageUpdates()
+            receiveMonitor.startMonitoring()
+            if store.config.username.isEmpty {
+                store.config.username = NSUserName()
+            }
+            if !isAutomatic { pingChecker.startChecking(ip: store.config.mainIP) }
+        }
+        .onDisappear {
+            storageMonitor.stopStorageUpdates()
+            receiveMonitor.stopMonitoring()
+            pingChecker.stopChecking()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSPopover.willShowNotification)) { _ in
+            storageMonitor.startStorageUpdates()
+            if !isAutomatic { pingChecker.startChecking(ip: store.config.mainIP) }
+            receiveMonitor.stopAfterTransfer = false
+            if !receiveMonitor.isMonitoring { receiveMonitor.startMonitoring() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSPopover.didCloseNotification)) { _ in
+            storageMonitor.stopStorageUpdates()
+            pingChecker.stopChecking()
+            if receiveMonitor.state == .receiving {
+                receiveMonitor.stopAfterTransfer = true
+            } else {
+                receiveMonitor.stopMonitoring()
+            }
+        }
+        .onChange(of: store.config.discoveryMode) { _ in
+            if isAutomatic { pingChecker.stopChecking() }
+        }
+        .onChange(of: store.pendingQuitConfirm) { newValue in
+            if newValue { showQuitConfirm = true }
+        }
+        } // end else
+    }
+
+    // MARK: - Header helpers
+
+    private var headerColor: Color {
+        switch receiveMonitor.state {
+        case .idle:      return .gray
+        case .receiving: return .yellow
+        case .done:      return .green
         }
     }
 
-    private func infoRow(label: String, value: String) -> some View {
+    private var headerStatus: String {
+        switch receiveMonitor.state {
+        case .idle:      return "Listening"
+        case .receiving: return "Receiving"
+        case .done:      return "Received"
+        }
+    }
+
+    private var isReceiving: Bool { receiveMonitor.state == .receiving }
+
+    private var receivingText: String {
+        let pct = receiveMonitor.receivePercent
+        return pct >= 0 ? "Receiving... \(pct)%" : "Receiving..."
+    }
+
+    // MARK: - Row helpers
+
+    private var bonjourDotColor: Color {
+        switch advertiser.state {
+        case .idle:        return Color(white: 0.55)
+        case .advertising: return .green
+        case .failed:      return .red
+        }
+    }
+
+    private var bonjourLabel: String {
+        switch advertiser.state {
+        case .idle:                       return "Starting..."
+        case .advertising(let name):      return "Advertising as \"\(name)\""
+        case .failed(let reason):         return "Network Discovery error: \(reason)"
+        }
+    }
+
+    private func mainDotColor(_ state: ReachabilityState) -> Color {
+        switch state {
+        case .checking:    return Color(white: 0.55)
+        case .reachable:   return .green
+        case .unreachable: return .red
+        }
+    }
+
+    private func mainLabel(_ state: ReachabilityState) -> String {
+        switch state {
+        case .checking:    return "Checking..."
+        case .reachable:   return "Connected"
+        case .unreachable: return "Not set"
+        }
+    }
+
+    private func infoRow(label: String, value: String, dim: Bool = false) -> some View {
         HStack {
             Text(label)
                 .font(.system(size: 12))
-                .foregroundColor(.secondary)
+                .foregroundColor(Color(white: 0.5))
             Spacer()
             Text(value)
                 .font(.system(size: 12))
-                .foregroundColor(.primary)
+                .foregroundColor(dim ? Color(white: 0.38) : .white)
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
@@ -152,13 +734,9 @@ struct BackupView: View {
         return f.string(from: date)
     }
 
-    private func availableStorageString() -> String {
-        let url = URL(fileURLWithPath: NSHomeDirectory())
-        guard let values = try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
-              let bytes = values.volumeAvailableCapacityForImportantUsage else {
-            return "Unknown"
-        }
-        let gb = Double(bytes) / 1_073_741_824
-        return String(format: "%.1f GB free", gb)
+    private func appVersion() -> String {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+        return "\(v) (\(b))"
     }
 }
