@@ -325,7 +325,7 @@ struct SettingsView: View {
                                                  ? .blue
                                                  : Color(white: 0.45))
                             VStack(alignment: .leading, spacing: 1) {
-                                Text(service.hostname)
+                                Text(service.id)
                                     .font(.system(size: 12, weight: .medium))
                                     .foregroundColor(.white)
                                 Text(service.resolvedIP)

@@ -916,9 +916,9 @@ struct MainView: View {
                             Text("BACKUP Network Discovery")
                                 .font(.system(size: 11))
                                 .foregroundColor(Color(white: 0.45))
-                            Text(store.config.backupHostname.isEmpty ? "Not set" : store.config.backupHostname)
+                            Text(store.config.lastBackupDiscoveryName.isEmpty ? "Not set" : store.config.lastBackupDiscoveryName)
                                 .font(.system(size: 15, weight: .medium, design: .monospaced))
-                                .foregroundColor(store.config.backupHostname.isEmpty ? Color(white: 0.38) : .white)
+                                .foregroundColor(store.config.lastBackupDiscoveryName.isEmpty ? Color(white: 0.38) : .white)
                                 .multilineTextAlignment(.center)
                         }
                     }
