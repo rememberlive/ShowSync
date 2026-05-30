@@ -46,7 +46,9 @@
       "Bash(sudo log show --last 1m --info --debug --predicate 'process == \"Sync\"')",
       "Bash(sudo dmesg)",
       "Bash(pkill Sync)",
-      "Bash(pkill -x Sync)"
+      "Bash(pkill -x Sync)",
+      "Bash(lsof -i :22 -sTCP:ESTABLISHED)",
+      "Bash(time netstat -an)"
     ]
   }
 }
