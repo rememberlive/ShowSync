@@ -254,6 +254,19 @@ struct SettingsView: View {
                 AppDelegate.shared?.updateBonjourBrowser()
             }
         }
+        .onChange(of: store.config.autoSyncEnabled) { enabled in
+            if enabled {
+                SyncEngine.shared.startAutoSync()
+            } else {
+                SyncEngine.shared.stopAutoSync()
+            }
+        }
+        .onChange(of: store.config.autoSyncInterval) { _ in
+            if store.config.autoSyncEnabled {
+                let interval: TimeInterval = store.config.autoSyncInterval == 0 ? 30 : TimeInterval(store.config.autoSyncInterval * 60)
+                SyncEngine.shared.startAutoSync(delay: interval)
+            }
+        }
     }
 
     // MARK: - Discovered Backup Macs list (Main + Automatic)

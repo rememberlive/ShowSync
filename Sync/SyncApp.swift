@@ -93,8 +93,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         updateBonjourAdvertiser()
         updateBonjourBrowser()
+        startAutoSyncIfNeeded()
         startPushSyncIfNeeded()
         startReceiveMonitorIfNeeded()
+    }
+
+    // Starts Auto Sync timer at app launch for Main role with Auto Sync enabled.
+    func startAutoSyncIfNeeded() {
+        let cfg = ConfigStore.shared.config
+        if cfg.role == "main" && cfg.autoSyncEnabled {
+            SyncEngine.shared.startAutoSync()
+        }
     }
 
     // Starts FSEventsWatcher at app launch for Main role with Push Sync enabled.
