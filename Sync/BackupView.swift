@@ -633,7 +633,6 @@ struct BackupView: View {
         }
         .onDisappear {
             storageMonitor.stopStorageUpdates()
-            receiveMonitor.stopMonitoring()
             pingChecker.stopChecking()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSPopover.willShowNotification)) { _ in
@@ -645,11 +644,6 @@ struct BackupView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSPopover.didCloseNotification)) { _ in
             storageMonitor.stopStorageUpdates()
             pingChecker.stopChecking()
-            if receiveMonitor.state == .receiving {
-                receiveMonitor.stopAfterTransfer = true
-            } else {
-                receiveMonitor.stopMonitoring()
-            }
         }
         .onChange(of: store.config.discoveryMode) { _ in
             if isAutomatic { pingChecker.stopChecking() }
