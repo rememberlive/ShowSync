@@ -106,7 +106,7 @@ final class BonjourAdvertiser: NSObject, ObservableObject {
             svc.delegate = nil
         }
         service = nil
-        Task { @MainActor [weak self] in
+        DispatchQueue.main.async { [weak self] in
             self?.state = .idle
         }
     }
@@ -115,7 +115,7 @@ final class BonjourAdvertiser: NSObject, ObservableObject {
 extension BonjourAdvertiser: NetServiceDelegate {
     func netServiceDidPublish(_ sender: NetService) {
         let name = sender.name
-        Task { @MainActor [weak self] in
+        DispatchQueue.main.async { [weak self] in
             self?.state = .advertising(name: name)
         }
     }
@@ -123,7 +123,7 @@ extension BonjourAdvertiser: NetServiceDelegate {
     func netService(_ sender: NetService, didNotPublish errorDict: [String: NSNumber]) {
         let code = errorDict[NetService.errorCode]?.intValue ?? -1
         NSLog("[Bonjour] publish failed: code=%d", code)
-        Task { @MainActor [weak self] in
+        DispatchQueue.main.async { [weak self] in
             self?.state = .failed(reason: "Error \(code)")
         }
     }
