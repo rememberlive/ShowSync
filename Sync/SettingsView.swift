@@ -740,26 +740,6 @@ struct SettingsView: View {
         .padding(.horizontal, 20)
         .padding(.bottom, 12)
 
-        if !isAutomatic {
-            Divider()
-
-            sectionHeader("Connection")
-            VStack(spacing: 8) {
-                HStack {
-                    Text("MAIN IP")
-                        .font(.system(size: 12))
-                        .foregroundColor(labelColor)
-                    Spacer()
-                    TextField("192.168.x.x", text: $store.config.mainIP)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 140)
-                        .multilineTextAlignment(.trailing)
-                }
-            }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 12)
-        }
-
         Divider()
 
         sectionHeader("Options")

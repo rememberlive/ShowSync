@@ -157,61 +157,6 @@ final class StorageMonitor: ObservableObject {
     deinit { stopStorageUpdates() }
 }
 
-// MARK: - Ping checker
-
-final class PingChecker: ObservableObject {
-    @Published var state: ReachabilityState? = nil
-
-    private var process: Process?
-    private var checkID = 0
-    private var timer:   Timer?
-
-    func startChecking(ip: String) {
-        guard !ip.isEmpty else { stopChecking(); return }
-        stopChecking()
-        check(ip: ip)
-        timer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
-            self?.check(ip: ip)
-        }
-    }
-
-    func stopChecking() {
-        timer?.invalidate()
-        timer = nil
-        cancelInFlight()
-        state = nil
-    }
-
-    private func check(ip: String) {
-        cancelInFlight()
-        state = .checking
-        let currentID = checkID
-
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/sbin/ping")
-        proc.arguments = ["-c", "1", "-W", "1", ip]
-        proc.standardOutput = FileHandle.nullDevice
-        proc.standardError  = FileHandle.nullDevice
-        proc.terminationHandler = { [weak self] p in
-            Task { @MainActor [weak self] in
-                guard let self, self.checkID == currentID else { return }
-                self.state   = p.terminationStatus == 0 ? .reachable : .unreachable
-                self.process = nil
-            }
-        }
-        process = proc
-        DispatchQueue.global(qos: .utility).async { try? proc.run() }
-    }
-
-    private func cancelInFlight() {
-        checkID += 1
-        if let proc = process, proc.isRunning { proc.terminate() }
-        process = nil
-    }
-
-    deinit { stopChecking() }
-}
-
 // MARK: - Receive monitor
 
 enum ReceiveState { case idle, receiving, done }
@@ -376,7 +321,6 @@ struct BackupView: View {
     @EnvironmentObject var store: ConfigStore
     @ObservedObject private var networkMonitor = NetworkMonitor.shared
     @StateObject private var storageMonitor = StorageMonitor()
-    @StateObject private var pingChecker    = PingChecker()
     @ObservedObject private var receiveMonitor = ReceiveMonitor.shared
     @ObservedObject private var advertiser  = BonjourAdvertiser.shared
     @State private var showQuitConfirm = false
@@ -490,40 +434,6 @@ struct BackupView: View {
 
             // Info rows
             VStack(alignment: .leading, spacing: 6) {
-                if !isAutomatic {
-                    HStack {
-                        Text("MAIN")
-                            .font(.system(size: 12))
-                            .foregroundColor(Color(white: 0.5))
-                        Spacer()
-                        if store.config.mainIP.isEmpty {
-                            HStack(spacing: 3) {
-                                Circle()
-                                    .fill(Color.red)
-                                    .frame(width: 6, height: 6)
-                                Text("Not set")
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.red)
-                            }
-                        } else {
-                            HStack(spacing: 6) {
-                                Text(store.config.mainIP)
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.white)
-                                if let state = pingChecker.state {
-                                    HStack(spacing: 3) {
-                                        Circle()
-                                            .fill(mainDotColor(state))
-                                            .frame(width: 6, height: 6)
-                                        Text(mainLabel(state))
-                                            .font(.system(size: 11))
-                                            .foregroundColor(mainDotColor(state))
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
                 infoRow(
                     label: "Last received",
                     value: store.config.lastReceivedTime.map { formatTime($0) } ?? "Never"
@@ -629,24 +539,17 @@ struct BackupView: View {
             if store.config.username.isEmpty {
                 store.config.username = NSUserName()
             }
-            if !isAutomatic { pingChecker.startChecking(ip: store.config.mainIP) }
         }
         .onDisappear {
             storageMonitor.stopStorageUpdates()
-            pingChecker.stopChecking()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSPopover.willShowNotification)) { _ in
             storageMonitor.startStorageUpdates()
-            if !isAutomatic { pingChecker.startChecking(ip: store.config.mainIP) }
             receiveMonitor.stopAfterTransfer = false
             if !receiveMonitor.isMonitoring { receiveMonitor.startMonitoring() }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSPopover.didCloseNotification)) { _ in
             storageMonitor.stopStorageUpdates()
-            pingChecker.stopChecking()
-        }
-        .onChange(of: store.config.discoveryMode) { _ in
-            if isAutomatic { pingChecker.stopChecking() }
         }
         .onChange(of: store.pendingQuitConfirm) { newValue in
             if newValue { showQuitConfirm = true }
@@ -686,22 +589,6 @@ struct BackupView: View {
         case .idle:                       return "Starting..."
         case .advertising(let name):      return "Advertising as \"\(name)\""
         case .failed(let reason):         return "Network Discovery error: \(reason)"
-        }
-    }
-
-    private func mainDotColor(_ state: ReachabilityState) -> Color {
-        switch state {
-        case .checking:    return Color(white: 0.55)
-        case .reachable:   return .green
-        case .unreachable: return .red
-        }
-    }
-
-    private func mainLabel(_ state: ReachabilityState) -> String {
-        switch state {
-        case .checking:    return "Checking..."
-        case .reachable:   return "Connected"
-        case .unreachable: return "Not set"
         }
     }
 
