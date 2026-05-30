@@ -1,0 +1,12 @@
+{
+  "/Users/remember/Documents/LiveAudioApps/Sync/Sync/SyncApp.swift" : {
+    "abi-baseline-json" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Release/Sync.build/Objects-normal/arm64/Sync.abi.json",
+    "const-values" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Release/Sync.build/Objects-normal/arm64/Sync-primary.swiftconstvalues",
+    "dependencies" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Release/Sync.build/Objects-normal/arm64/Sync-primary.d",
+    "diagnostics" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Release/Sync.build/Objects-normal/arm64/Sync-primary.dia",
+    "objc-header" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Release/Sync.build/Objects-normal/arm64/Sync-Swift.h",
+    "swiftdoc" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Release/Sync.build/Objects-normal/arm64/Sync.swiftdoc",
+    "swiftmodule" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Release/Sync.build/Objects-normal/arm64/Sync.swiftmodule",
+    "swiftsourceinfo" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Release/Sync.build/Objects-normal/arm64/Sync.swiftsourceinfo"
+  }
+}

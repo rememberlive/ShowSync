@@ -300,13 +300,23 @@ extension BonjourBrowser: NetServiceDelegate {
             self.services.append(DiscoveredBackup(id: name, hostname: host, resolvedIP: resolvedIP))
             self.services.sort { $0.hostname.localizedCaseInsensitiveCompare($1.hostname) == .orderedAscending }
 
-            // Auto-reconnect: if this service matches the last connected Backup, auto-select it
+            // Auto-reconnect: match by name (primary) or IP (fallback for renamed Backup)
             let config = ConfigStore.shared.config
-            if !config.lastBackupDiscoveryName.isEmpty && name == config.lastBackupDiscoveryName {
+            let nameMatch = !config.lastBackupDiscoveryName.isEmpty && name == config.lastBackupDiscoveryName
+            let ipMatch = !config.lastBackupIP.isEmpty && resolvedIP == config.lastBackupIP
+            let isCurrentConnection = !config.destinationIP.isEmpty && resolvedIP == config.destinationIP
+
+            if nameMatch || ipMatch || isCurrentConnection {
+                // Update connection details if needed
                 if config.destinationIP != resolvedIP || config.backupHostname != host {
                     NSLog("[Bonjour] Auto-reconnecting to Backup: %@", name)
                     ConfigStore.shared.config.destinationIP = resolvedIP
                     ConfigStore.shared.config.backupHostname = host
+                }
+                // Update stored name if Backup was renamed (matched by IP, not name)
+                if !nameMatch && config.lastBackupDiscoveryName != name {
+                    NSLog("[Bonjour] Connected Backup renamed to: %@", name)
+                    ConfigStore.shared.config.lastBackupDiscoveryName = name
                 }
             }
         }
