@@ -81,6 +81,10 @@ final class BonjourAdvertiser: NSObject, ObservableObject {
         }
         let svc = NetService(domain: "", type: serviceType, name: advertisedName, port: 22)
         svc.delegate = self
+        // Publish destination folder in TXT record for Main to read
+        let dest = ConfigStore.shared.config.destinationFolder
+        let txtData = NetService.data(fromTXTRecord: ["dest": dest.data(using: .utf8) ?? Data()])
+        svc.setTXTRecord(txtData)
         // Schedule on the background thread's runloop, not main
         if let runLoop = bonjourRunLoop {
             svc.schedule(in: runLoop, forMode: .common)
@@ -137,6 +141,7 @@ struct DiscoveredBackup: Identifiable, Equatable {
     let id: String          // NetService.name — unique per host on the LAN
     let hostname: String    // display label
     let resolvedIP: String  // IPv4 used for SSH
+    let destinationPath: String  // Backup's receive folder (from TXT record, default ~/Sync)
 }
 
 enum BrowserState: Equatable {
@@ -278,6 +283,14 @@ extension BonjourBrowser: NetServiceDelegate {
         let host = (sender.hostName ?? name)
             .replacingOccurrences(of: ".local.", with: "")
             .replacingOccurrences(of: ".local", with: "")
+        // Parse destination folder from TXT record (default ~/Sync)
+        var destPath = "~/Sync"
+        if let txtData = sender.txtRecordData() {
+            let dict = NetService.dictionary(fromTXTRecord: txtData)
+            if let destData = dict["dest"], let str = String(data: destData, encoding: .utf8), !str.isEmpty {
+                destPath = str
+            }
+        }
 
         // Remove from background runloop, not main
         if let runLoop = bonjourRunLoop {
@@ -297,7 +310,7 @@ extension BonjourBrowser: NetServiceDelegate {
         Task { @MainActor [weak self] in
             guard let self else { return }
             self.services.removeAll { $0.id == name }
-            self.services.append(DiscoveredBackup(id: name, hostname: host, resolvedIP: resolvedIP))
+            self.services.append(DiscoveredBackup(id: name, hostname: host, resolvedIP: resolvedIP, destinationPath: destPath))
             self.services.sort { $0.hostname.localizedCaseInsensitiveCompare($1.hostname) == .orderedAscending }
 
             // Auto-reconnect: match by name (primary) or IP (fallback for renamed Backup)
@@ -313,6 +326,8 @@ extension BonjourBrowser: NetServiceDelegate {
                     ConfigStore.shared.config.destinationIP = resolvedIP
                     ConfigStore.shared.config.backupHostname = host
                 }
+                // Always update destination (Backup may have changed it)
+                ConfigStore.shared.config.backupDestination = destPath
                 // Update stored name if Backup was renamed (matched by IP, not name)
                 if !nameMatch && config.lastBackupDiscoveryName != name {
                     NSLog("[Bonjour] Connected Backup renamed to: %@", name)

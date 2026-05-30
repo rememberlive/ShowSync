@@ -90,6 +90,7 @@ final class SyncEngine: ObservableObject {
     private var syncStartTime:  Date   = Date()
     private var syncUsername:   String = ""
     private var syncIP:         String = ""
+    private var syncRemotePath: String = "~/Sync"
     private var isAutoSync:     Bool   = false
     private var isPushSync:     Bool   = false
 
@@ -119,12 +120,13 @@ final class SyncEngine: ObservableObject {
         syncTotalFiles = 0
         syncUsername   = config.username
         syncIP         = config.destinationIP
+        syncRemotePath = config.backupDestination.isEmpty ? "~/Sync" : config.backupDestination
 
         let rawSource = config.sourceFolder.hasPrefix("~")
             ? (NSHomeDirectory() as NSString).appendingPathComponent(String(config.sourceFolder.dropFirst()))
             : config.sourceFolder
         let source = rawSource.hasSuffix("/") ? rawSource : rawSource + "/"
-        let dest   = "\(config.username)@\(config.destinationIP):~/Sync/"
+        let dest   = "\(syncUsername)@\(syncIP):\(syncRemotePath)/"
 
         let rsyncCandidates = ["/opt/homebrew/bin/rsync", "/usr/local/bin/rsync", "/usr/bin/rsync"]
         let rsyncPath = rsyncCandidates.first { FileManager.default.fileExists(atPath: $0) } ?? "/usr/bin/rsync"
@@ -425,7 +427,7 @@ final class SyncEngine: ObservableObject {
             "-o", "ConnectTimeout=3",
             "-o", "StrictHostKeyChecking=no",
             "\(username)@\(ip)",
-            "du -sk ~/Sync 2>/dev/null | cut -f1"
+            "du -sk \(syncRemotePath) 2>/dev/null | cut -f1"
         ]
         let pipe = Pipe()
         proc.standardOutput = pipe
@@ -474,19 +476,19 @@ final class SyncEngine: ObservableObject {
     }
 
     private func writeSyncStart(totalBytes: Int64, totalFiles: Int) {
-        sshWrite("echo '{\"totalBytes\":\(totalBytes),\"totalFiles\":\(totalFiles)}' > ~/Sync/.sync_start")
+        sshWrite("echo '{\"totalBytes\":\(totalBytes),\"totalFiles\":\(totalFiles)}' > \(syncRemotePath)/.sync_start")
     }
 
     private func writeSyncProgress(percent: Int) {
-        sshWrite("echo '{\"percent\":\(percent)}' > ~/Sync/.sync_progress")
+        sshWrite("echo '{\"percent\":\(percent)}' > \(syncRemotePath)/.sync_progress")
     }
 
     private func writeSyncComplete(totalFiles: Int, totalBytes: Int64, duration: Int) {
-        sshWrite("echo '{\"totalFiles\":\(totalFiles),\"totalBytes\":\(totalBytes),\"duration\":\(duration)}' > ~/Sync/.sync_complete; rm -f ~/Sync/.sync_start ~/Sync/.sync_progress")
+        sshWrite("echo '{\"totalFiles\":\(totalFiles),\"totalBytes\":\(totalBytes),\"duration\":\(duration)}' > \(syncRemotePath)/.sync_complete; rm -f \(syncRemotePath)/.sync_start \(syncRemotePath)/.sync_progress")
     }
 
     private func cleanupSignalFiles() {
-        sshWrite("rm -f ~/Sync/.sync_start ~/Sync/.sync_progress ~/Sync/.sync_complete")
+        sshWrite("rm -f \(syncRemotePath)/.sync_start \(syncRemotePath)/.sync_progress \(syncRemotePath)/.sync_complete")
     }
 
     private func sshWrite(_ command: String) {
@@ -613,7 +615,8 @@ final class SyncEngine: ObservableObject {
             let cmd = Self.versioningCommand(
                 relativePath: relativePath,
                 timestamp: timestamp,
-                maxVersionCount: maxVersionCount
+                maxVersionCount: maxVersionCount,
+                remotePath: syncRemotePath
             )
             group.enter()
             let proc = Process()
@@ -651,7 +654,8 @@ final class SyncEngine: ObservableObject {
     private static func versioningCommand(
         relativePath: String,
         timestamp: String,
-        maxVersionCount: Int
+        maxVersionCount: Int,
+        remotePath: String
     ) -> String {
         let filename: String
         let dirPart: String
@@ -665,10 +669,10 @@ final class SyncEngine: ObservableObject {
         let ext  = URL(fileURLWithPath: filename).pathExtension
         let base = ext.isEmpty ? filename : String(filename.dropLast(ext.count + 1))
 
-        // ~/Sync/ prefix is kept unquoted so tilde expands; only the variable parts are quoted.
+        // Remote path prefix is kept unquoted so tilde expands; only the variable parts are quoted.
         // Adjacent quoted/unquoted segments concatenate in shell, so glob wildcards still expand.
-        let fullPath = "~/Sync/\(shellEscape(relativePath))"
-        let syncDir  = dirPart.isEmpty ? "~/Sync" : "~/Sync/\(shellEscape(dirPart))"
+        let fullPath = "\(remotePath)/\(shellEscape(relativePath))"
+        let syncDir  = dirPart.isEmpty ? remotePath : "\(remotePath)/\(shellEscape(dirPart))"
 
         let versionedName: String
         let glob: String

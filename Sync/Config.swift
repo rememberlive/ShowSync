@@ -42,6 +42,7 @@ struct Config {
     var backupHostname: String = ""           // Main role only — Bonjour name of the selected Backup
     var lastBackupDiscoveryName: String = ""  // Auto-reconnect: remembered Backup Mac's name
     var lastBackupIP: String = ""             // Auto-reconnect: remembered Backup Mac's IP
+    var backupDestination: String = "~/Sync"  // Main role — Backup's receive folder (from TXT)
 
     // Backup-role fields
     var mainIP: String = ""

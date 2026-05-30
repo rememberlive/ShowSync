@@ -330,6 +330,7 @@ struct SettingsView: View {
                             || store.config.backupHostname != service.hostname {
                             store.config.destinationIP   = service.resolvedIP
                             store.config.backupHostname  = service.hostname
+                            store.config.backupDestination = service.destinationPath
                             store.config.sshKeysConfigured = false
                             // Save for auto-reconnect on subsequent discoveries
                             store.config.lastBackupDiscoveryName = service.id
@@ -417,6 +418,20 @@ struct SettingsView: View {
         }
     }
 
+    private func pickDestinationFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.prompt = "Select Destination"
+        NSApp.activate(ignoringOtherApps: true)
+        panel.level = .floating
+        let response = panel.runModal()
+        guard response == .OK, let url = panel.url else { return }
+        store.config.destinationFolder = url.path
+        BonjourAdvertiser.shared.restart()
+    }
+
     private func setLaunchAtLogin(_ enabled: Bool) {
         launchAtLoginError = nil
         do {
@@ -463,12 +478,13 @@ struct SettingsView: View {
 
         let username = store.config.username
         let ip = store.config.destinationIP
+        let remotePath = store.config.backupDestination.isEmpty ? "~/Sync" : store.config.backupDestination
         let escaped = newName.replacingOccurrences(of: "'", with: "'\\''")
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         proc.arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3",
-                          "\(username)@\(ip)", "echo -n '\(escaped)' > ~/Sync/.sync_rename_request"]
+                          "\(username)@\(ip)", "echo -n '\(escaped)' > \(remotePath)/.sync_rename_request"]
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError = FileHandle.nullDevice
         proc.terminationHandler = { p in
@@ -923,6 +939,24 @@ struct SettingsView: View {
                         .truncationMode(.middle)
                 }
             }
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 12)
+
+        Divider()
+
+        sectionHeader("Destination")
+        HStack {
+            Text(shortenPath(store.config.destinationFolder))
+                .font(.system(size: 12))
+                .foregroundColor(.white)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer()
+            Button("Change") { pickDestinationFolder() }
+                .buttonStyle(.plain)
+                .font(.system(size: 11))
+                .foregroundColor(.blue)
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 12)

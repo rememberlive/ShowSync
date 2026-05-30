@@ -161,36 +161,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Called from SettingsView after a role switch — SwiftUI view updates reactively;
     // this closes the popover, resets icon state for the new role, and re-renders the icon.
     func ensureSyncFolder() {
-        let syncFolder = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Sync")
         let fm = FileManager.default
+        let defaultPath = fm.homeDirectoryForCurrentUser.appendingPathComponent("Sync")
+        let configPath = ConfigStore.shared.config.destinationFolder
         let attrs: [FileAttributeKey: Any] = [.posixPermissions: 0o755]
-        if !fm.fileExists(atPath: syncFolder.path) {
+
+        // If custom folder is set and valid, use it (don't create ~/Sync)
+        if !configPath.isEmpty && configPath != defaultPath.path &&
+           fm.fileExists(atPath: configPath) && fm.isWritableFile(atPath: configPath) {
+            return
+        }
+        // Otherwise ensure ~/Sync exists
+        if !fm.fileExists(atPath: defaultPath.path) {
             do {
-                try fm.createDirectory(at: syncFolder, withIntermediateDirectories: true, attributes: attrs)
+                try fm.createDirectory(at: defaultPath, withIntermediateDirectories: true, attributes: attrs)
                 NSLog("[Sync] Created ~/Sync")
             } catch {
                 NSLog("[Sync] Failed to create ~/Sync: %@", error.localizedDescription)
             }
         }
         do {
-            try fm.setAttributes(attrs, ofItemAtPath: syncFolder.path)
+            try fm.setAttributes(attrs, ofItemAtPath: defaultPath.path)
         } catch {
             NSLog("[Sync] Failed to set permissions on ~/Sync: %@", error.localizedDescription)
         }
-        if !fm.isWritableFile(atPath: syncFolder.path) {
-            NSLog("[Sync] WARNING: ~/Sync is not writable after permission fix")
-        }
-        if ConfigStore.shared.config.destinationFolder.isEmpty {
-            ConfigStore.shared.config.destinationFolder = syncFolder.path
+        if configPath.isEmpty {
+            ConfigStore.shared.config.destinationFolder = defaultPath.path
         }
         checkSyncFolderWritability()
     }
 
     func checkSyncFolderWritability() {
         guard ConfigStore.shared.config.role == "backup" else { return }
-        let syncFolder = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Sync")
+        let syncFolder = URL(fileURLWithPath: ConfigStore.shared.config.destinationFolder)
         DispatchQueue.global(qos: .utility).async {
             let testFile = syncFolder.appendingPathComponent(".syncwritetest")
             let writable = FileManager.default.createFile(atPath: testFile.path, contents: Data())

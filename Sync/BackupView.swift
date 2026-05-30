@@ -105,8 +105,7 @@ final class StorageMonitor: ObservableObject {
     }
 
     private func updateSyncFolder() {
-        let syncFolder = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Sync")
+        let syncFolder = URL(fileURLWithPath: ConfigStore.shared.config.destinationFolder)
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
             // TCC writability test — isWritableFile only checks Unix permissions,
@@ -167,6 +166,7 @@ final class ReceiveMonitor: ObservableObject {
     @Published var state: ReceiveState    = .idle
     @Published var receivePercent: Int    = -1    // -1 = unknown; 0–100 during transfer
     @Published var receiveDetails: String = ""    // "4 files · 620 MB in 0:42"
+    @Published var usingFallback: Bool    = false // True when custom folder missing, using ~/Sync
     // `lastReceivedTime` now lives on ConfigStore.config so it survives relaunch.
 
     private var pollTimer:   Timer?
@@ -177,6 +177,7 @@ final class ReceiveMonitor: ObservableObject {
     private init() {}
 
     func startMonitoring() {
+        validateDestination()
         state          = .idle
         receivePercent = -1
         receiveDetails = ""
@@ -185,6 +186,30 @@ final class ReceiveMonitor: ObservableObject {
             self?.checkSignalFiles()
         }
         checkSignalFiles()
+    }
+
+    func validateDestination() {
+        let fm = FileManager.default
+        let configPath = ConfigStore.shared.config.destinationFolder
+        let defaultPath = fm.homeDirectoryForCurrentUser.appendingPathComponent("Sync").path
+        let isDefault = configPath == defaultPath || configPath.isEmpty
+
+        if !isDefault && fm.fileExists(atPath: configPath) && fm.isWritableFile(atPath: configPath) {
+            usingFallback = false
+            return
+        }
+        // Fall back to ~/Sync
+        let fallback = fm.homeDirectoryForCurrentUser.appendingPathComponent("Sync")
+        if !fm.fileExists(atPath: fallback.path) {
+            try? fm.createDirectory(at: fallback, withIntermediateDirectories: true)
+        }
+        if !isDefault {
+            usingFallback = true
+            ConfigStore.shared.config.destinationFolder = fallback.path
+            BonjourAdvertiser.shared.restart() // Update TXT record
+        } else {
+            usingFallback = false
+        }
     }
 
     func stopMonitoring() {
@@ -203,7 +228,7 @@ final class ReceiveMonitor: ObservableObject {
         guard !isChecking else { return }
         isChecking = true
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let base         = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Sync")
+            let base         = URL(fileURLWithPath: ConfigStore.shared.config.destinationFolder)
             let completePath = base.appendingPathComponent(".sync_complete")
             let progressPath = base.appendingPathComponent(".sync_progress")
             let startPath    = base.appendingPathComponent(".sync_start")
@@ -461,35 +486,44 @@ struct BackupView: View {
                     label: "Last received",
                     value: store.config.lastReceivedTime.map { formatTime($0) } ?? "Never"
                 )
-                HStack {
-                    Text("Sync folder")
-                        .font(.system(size: 12))
-                        .foregroundColor(Color(white: 0.5))
-                    Spacer()
-                    if !storageMonitor.syncFolderWritable {
-                        HStack(spacing: 3) {
-                            Circle()
-                                .fill(Color.red)
-                                .frame(width: 6, height: 6)
-                            Text("Cannot write — see Settings")
-                                .font(.system(size: 11))
-                                .foregroundColor(.red)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(shortenPath(store.config.destinationFolder))
+                            .font(.system(size: 12))
+                            .foregroundColor(Color(white: 0.5))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        if !storageMonitor.syncFolderWritable {
+                            HStack(spacing: 3) {
+                                Circle()
+                                    .fill(Color.red)
+                                    .frame(width: 6, height: 6)
+                                Text("Cannot write — see Settings")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.red)
+                            }
+                        } else if receiveMonitor.state == .receiving {
+                            Text(receivingText)
+                                .font(.system(size: 12))
+                                .foregroundColor(.yellow)
+                                .lineLimit(1)
+                        } else if receiveMonitor.state == .done {
+                            Text(receiveMonitor.receiveDetails.isEmpty ? "✓ Received" : "✓ \(receiveMonitor.receiveDetails)")
+                                .font(.system(size: 12))
+                                .foregroundColor(.green)
+                                .lineLimit(1)
+                        } else {
+                            Text(storageMonitor.syncFolderString)
+                                .font(.system(size: 12))
+                                .foregroundColor(.white)
+                                .lineLimit(1)
                         }
-                    } else if receiveMonitor.state == .receiving {
-                        Text(receivingText)
-                            .font(.system(size: 12))
-                            .foregroundColor(.yellow)
-                            .lineLimit(1)
-                    } else if receiveMonitor.state == .done {
-                        Text(receiveMonitor.receiveDetails.isEmpty ? "✓ Received" : "✓ \(receiveMonitor.receiveDetails)")
-                            .font(.system(size: 12))
-                            .foregroundColor(.green)
-                            .lineLimit(1)
-                    } else {
-                        Text(storageMonitor.syncFolderString)
-                            .font(.system(size: 12))
-                            .foregroundColor(.white)
-                            .lineLimit(1)
+                    }
+                    if receiveMonitor.usingFallback {
+                        Text("Using default folder — set a destination if needed")
+                            .font(.system(size: 10))
+                            .foregroundColor(.orange)
                     }
                 }
                 infoRow(label: "Storage", value: storageMonitor.storageString)
@@ -598,6 +632,10 @@ struct BackupView: View {
     }
 
     // MARK: - Row helpers
+
+    private func shortenPath(_ path: String) -> String {
+        path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+    }
 
     private var bonjourDotColor: Color {
         switch advertiser.state {
