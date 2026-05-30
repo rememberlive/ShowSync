@@ -99,8 +99,10 @@ struct SettingsView: View {
                                 while BonjourAdvertiser.shared.state != .idle {
                                     try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
                                 }
+                            } else if currentRole == "main" && targetRole == "backup" {
+                                // Main → Backup: Start advertising immediately
+                                BonjourAdvertiser.shared.start()
                             }
-                            // Browser start/stop handled by rebuildPopover() → updateBonjourBrowser()
 
                             store.setRole(targetRole)
 
