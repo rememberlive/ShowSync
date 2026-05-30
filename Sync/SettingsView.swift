@@ -25,6 +25,16 @@ struct SettingsView: View {
     @State private var editingDiscoveryName = ""
     @State private var isEditingUsername = false
     @State private var editingUsername = ""
+    @State private var isEditingBackupName = false
+    @State private var editingBackupName = ""
+    @State private var renameState: RenameState = .idle
+    @State private var renameGeneration: Int = 0
+
+    private enum RenameState: Equatable {
+        case idle
+        case pending(oldName: String)
+        case failed
+    }
 
     private var isMain: Bool { store.config.role == "main" }
     private var switchLabel: String { isMain ? "Switch to BACKUP" : "Switch to MAIN" }
@@ -287,6 +297,14 @@ struct SettingsView: View {
                 FSEventsWatcher.shared.start(path: store.config.sourceFolder, debounceSeconds: store.config.pushSyncDebounce)
             }
         }
+        .onChange(of: bonjourBrowser.services) { services in
+            // Detect remote rename confirmation: same IP, new name
+            guard case .pending = renameState else { return }
+            let targetIP = store.config.destinationIP
+            if let match = services.first(where: { $0.resolvedIP == targetIP }) {
+                handleRenameConfirmed(newName: match.id)
+            }
+        }
     }
 
     // MARK: - Discovered Backup Macs list (Main + Automatic)
@@ -425,6 +443,62 @@ struct SettingsView: View {
         return "\(v) (\(b))"
     }
 
+    // MARK: - Remote rename helpers
+
+    private var isValidRenameInput: Bool {
+        let t = editingBackupName.trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty, t.utf8.count <= 63 else { return false }
+        for char in t.unicodeScalars { if char.value < 32 || char == "/" { return false } }
+        return true
+    }
+
+    private func sendRemoteRename() {
+        let newName = editingBackupName.trimmingCharacters(in: .whitespaces)
+        guard isValidRenameInput else { return }
+        let oldName = store.config.lastBackupDiscoveryName
+        isEditingBackupName = false
+        renameGeneration += 1
+        let thisGen = renameGeneration
+        renameState = .pending(oldName: oldName)
+
+        let username = store.config.username
+        let ip = store.config.destinationIP
+        let escaped = newName.replacingOccurrences(of: "'", with: "'\\''")
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        proc.arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3",
+                          "\(username)@\(ip)", "echo -n '\(escaped)' > ~/Sync/.sync_rename_request"]
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        proc.terminationHandler = { p in
+            if p.terminationStatus != 0 {
+                Task { @MainActor in
+                    guard renameGeneration == thisGen else { return }
+                    renameState = .failed
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    if renameState == .failed && renameGeneration == thisGen { renameState = .idle }
+                }
+            }
+        }
+        DispatchQueue.global(qos: .utility).async { try? proc.run() }
+
+        // 3s timeout
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard renameGeneration == thisGen, case .pending = renameState else { return }
+            renameState = .failed
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            if renameState == .failed && renameGeneration == thisGen { renameState = .idle }
+        }
+    }
+
+    private func handleRenameConfirmed(newName: String) {
+        renameGeneration += 1  // Cancel any pending timeouts
+        store.config.lastBackupDiscoveryName = newName
+        renameState = .idle
+    }
+
     // MARK: - Main Settings Section Content
 
     @ViewBuilder private var connectionSectionContent: some View {
@@ -555,6 +629,64 @@ struct SettingsView: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 100)
                     .multilineTextAlignment(.trailing)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 12)
+        }
+
+        // Remote rename section (automatic mode + Backup selected)
+        if isAutomatic && !store.config.destinationIP.isEmpty {
+            Divider()
+            sectionHeader("BACKUP Name")
+            VStack(spacing: 8) {
+                HStack {
+                    if isEditingBackupName {
+                        TextField("Name", text: $editingBackupName)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 120)
+                            .multilineTextAlignment(.trailing)
+                        Button("Save") { sendRemoteRename() }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 11))
+                            .foregroundColor(isValidRenameInput ? .blue : Color(white: 0.4))
+                            .disabled(!isValidRenameInput)
+                        Button("Cancel") { isEditingBackupName = false }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 11))
+                            .foregroundColor(Color(white: 0.5))
+                    } else {
+                        switch renameState {
+                        case .idle:
+                            Text(store.config.lastBackupDiscoveryName.isEmpty ? "Not set" : store.config.lastBackupDiscoveryName)
+                                .font(.system(size: 12))
+                                .foregroundColor(store.config.lastBackupDiscoveryName.isEmpty ? labelColor : .white)
+                                .lineLimit(1)
+                            Spacer()
+                            Button("Edit") {
+                                editingBackupName = store.config.lastBackupDiscoveryName
+                                isEditingBackupName = true
+                            }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 11))
+                            .foregroundColor(.blue)
+                        case .pending:
+                            Text("\(editingBackupName)...")
+                                .font(.system(size: 12))
+                                .foregroundColor(.yellow)
+                                .lineLimit(1)
+                            Spacer()
+                        case .failed:
+                            Text(store.config.lastBackupDiscoveryName.isEmpty ? "Not set" : store.config.lastBackupDiscoveryName)
+                                .font(.system(size: 12))
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+                            Spacer()
+                            Text("Rename failed, try again")
+                                .font(.system(size: 10))
+                                .foregroundColor(.red)
+                        }
+                    }
                 }
             }
             .padding(.horizontal, 20)

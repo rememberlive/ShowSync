@@ -207,7 +207,21 @@ final class ReceiveMonitor: ObservableObject {
             let completePath = base.appendingPathComponent(".sync_complete")
             let progressPath = base.appendingPathComponent(".sync_progress")
             let startPath    = base.appendingPathComponent(".sync_start")
+            let renamePath   = base.appendingPathComponent(".sync_rename_request")
             let fm           = FileManager.default
+
+            // Handle remote rename request from Main
+            if fm.fileExists(atPath: renamePath.path) {
+                let content = (try? String(contentsOf: renamePath, encoding: .utf8))?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                try? fm.removeItem(at: renamePath) // Cleanup immediately
+                if Self.isValidBonjourName(content) {
+                    DispatchQueue.main.async {
+                        ConfigStore.shared.config.networkDiscoveryName = content
+                        BonjourAdvertiser.shared.restart()
+                    }
+                }
+            }
 
             if fm.fileExists(atPath: completePath.path) {
                 let content = (try? String(contentsOf: completePath, encoding: .utf8))?
@@ -312,6 +326,15 @@ final class ReceiveMonitor: ObservableObject {
         if bytes < 1_048_576     { return String(format: "%.1f KB", Double(bytes) / 1_024) }
         if bytes < 1_073_741_824 { return String(format: "%.1f MB", Double(bytes) / 1_048_576) }
         return String(format: "%.1f GB", Double(bytes) / 1_073_741_824)
+    }
+
+    private static func isValidBonjourName(_ name: String) -> Bool {
+        guard !name.isEmpty, name.utf8.count <= 63 else { return false }
+        // Disallow control characters and forward slash (invalid in Bonjour names)
+        for char in name.unicodeScalars {
+            if char.value < 32 || char == "/" { return false }
+        }
+        return true
     }
 }
 
