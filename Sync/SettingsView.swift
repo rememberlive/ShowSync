@@ -267,6 +267,20 @@ struct SettingsView: View {
                 SyncEngine.shared.startAutoSync(delay: interval)
             }
         }
+        .onChange(of: store.config.pushSyncEnabled) { enabled in
+            if enabled {
+                if !store.config.sourceFolder.isEmpty {
+                    FSEventsWatcher.shared.start(path: store.config.sourceFolder, debounceSeconds: store.config.pushSyncDebounce)
+                }
+            } else {
+                FSEventsWatcher.shared.stop()
+            }
+        }
+        .onChange(of: store.config.pushSyncDebounce) { _ in
+            if store.config.pushSyncEnabled && !store.config.sourceFolder.isEmpty {
+                FSEventsWatcher.shared.start(path: store.config.sourceFolder, debounceSeconds: store.config.pushSyncDebounce)
+            }
+        }
     }
 
     // MARK: - Discovered Backup Macs list (Main + Automatic)
