@@ -657,7 +657,7 @@ struct BackupView: View {
     // MARK: - Header helpers
 
     private var headerColor: Color {
-        receiveMonitor.state == .receiving ? .yellow : .gray
+        receiveMonitor.state == .receiving ? .yellow : .green
     }
 
     private var headerStatus: String {
