@@ -832,7 +832,7 @@ struct MainView: View {
     @EnvironmentObject var store: ConfigStore
     @ObservedObject private var engine = SyncEngine.shared
     @StateObject private var sshChecker = SSHChecker()
-    @StateObject private var networkMonitor = NetworkMonitor()
+    @ObservedObject private var networkMonitor = NetworkMonitor.shared
     @ObservedObject private var fsEventsWatcher = FSEventsWatcher.shared
     @State private var viewState: MainViewState = .normal
     @State private var clockTick  = Date()

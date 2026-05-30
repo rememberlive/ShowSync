@@ -8,12 +8,14 @@ private let popoverWidth: CGFloat = 360
 // MARK: - Network monitor
 
 final class NetworkMonitor: ObservableObject {
+    static let shared = NetworkMonitor()
+
     @Published var currentIP: String = "—"
 
     private let monitor = NWPathMonitor()
     private let queue   = DispatchQueue(label: "com.sync.networkmonitor", qos: .utility)
 
-    init() {
+    private init() {
         monitor.pathUpdateHandler = { [weak self] path in
             let ip = Self.extractIPv4(from: path)
             Task { @MainActor [weak self] in
@@ -368,7 +370,7 @@ final class ReceiveMonitor: ObservableObject {
 
 struct BackupView: View {
     @EnvironmentObject var store: ConfigStore
-    @StateObject private var networkMonitor = NetworkMonitor()
+    @ObservedObject private var networkMonitor = NetworkMonitor.shared
     @StateObject private var storageMonitor = StorageMonitor()
     @StateObject private var pingChecker    = PingChecker()
     @StateObject private var receiveMonitor = ReceiveMonitor()
