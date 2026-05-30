@@ -92,6 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
 
         updateBonjourAdvertiser()
+        updateBonjourBrowser()
         startPushSyncIfNeeded()
         startReceiveMonitorIfNeeded()
     }
@@ -119,6 +120,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             BonjourAdvertiser.shared.start()
         } else {
             BonjourAdvertiser.shared.stop()
+        }
+    }
+
+    // Starts/stops the Main-role Bonjour browser based on current role + discovery mode.
+    func updateBonjourBrowser() {
+        let cfg = ConfigStore.shared.config
+        if cfg.role == "main" && cfg.discoveryMode == "automatic" {
+            BonjourBrowser.shared.start()
+        } else {
+            BonjourBrowser.shared.stop()
         }
     }
 
@@ -179,6 +190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ? .idle
             : (store.config.isReadyToSync ? .idle : .notConfigured)
         updateBonjourAdvertiser()
+        updateBonjourBrowser()
     }
 
     func checkRemoteLoginIfNeeded() {

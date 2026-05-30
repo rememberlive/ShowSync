@@ -99,10 +99,8 @@ struct SettingsView: View {
                                 while BonjourAdvertiser.shared.state != .idle {
                                     try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
                                 }
-                            } else if currentRole == "main" && targetRole == "backup" {
-                                // Main → Backup: Stop browser first
-                                bonjourBrowser.stop()
                             }
+                            // Browser start/stop handled by rebuildPopover() → updateBonjourBrowser()
 
                             store.setRole(targetRole)
 
@@ -230,7 +228,6 @@ struct SettingsView: View {
             if !store.config.username.isEmpty && !store.config.destinationIP.isEmpty {
                 runLiveSSHTest()
             }
-            startBrowserIfNeeded()
         }
         // onAppear only fires when SettingsView enters the hierarchy (gear tap while popover open).
         // willShowNotification fires every time the popover opens, catching the return-from-wizard case
@@ -239,13 +236,6 @@ struct SettingsView: View {
             if !store.config.username.isEmpty && !store.config.destinationIP.isEmpty {
                 runLiveSSHTest()
             }
-            startBrowserIfNeeded()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSPopover.didCloseNotification)) { _ in
-            bonjourBrowser.stop()
-        }
-        .onDisappear {
-            bonjourBrowser.stop()
         }
         .onChange(of: store.config.destinationIP) { _ in
             Task { @MainActor in
@@ -261,18 +251,8 @@ struct SettingsView: View {
             Task { @MainActor in
                 store.config.discoveryMode = localDiscoveryMode
                 AppDelegate.shared?.updateBonjourAdvertiser()
-                if isMain && isAutomatic {
-                    bonjourBrowser.start()
-                } else {
-                    bonjourBrowser.stop()
-                }
+                AppDelegate.shared?.updateBonjourBrowser()
             }
-        }
-    }
-
-    private func startBrowserIfNeeded() {
-        if isMain && isAutomatic {
-            bonjourBrowser.start()
         }
     }
 

@@ -301,10 +301,11 @@ extension BonjourBrowser: NetServiceDelegate {
             // Auto-reconnect: if this service matches the last connected Backup, auto-select it
             let config = ConfigStore.shared.config
             if !config.lastBackupDiscoveryName.isEmpty && name == config.lastBackupDiscoveryName {
-                NSLog("[Bonjour] Found previously connected Backup: %@ — auto-reconnect disabled pending singleton refactor", name)
-                // TODO: Re-enable after BonjourBrowser is moved to singleton pattern
-                // ConfigStore.shared.config.destinationIP = resolvedIP
-                // ConfigStore.shared.config.backupHostname = host
+                if config.destinationIP != resolvedIP || config.backupHostname != host {
+                    NSLog("[Bonjour] Auto-reconnecting to Backup: %@", name)
+                    ConfigStore.shared.config.destinationIP = resolvedIP
+                    ConfigStore.shared.config.backupHostname = host
+                }
             }
         }
     }
