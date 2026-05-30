@@ -21,6 +21,8 @@ struct SettingsView: View {
     @State private var sshConnectionState: SSHConnectionState = .checking
     @State private var launchAtLoginError: String?
     @State private var localDiscoveryMode = "automatic"
+    @State private var isEditingDiscoveryName = false
+    @State private var editingDiscoveryName = ""
 
     private var isMain: Bool { store.config.role == "main" }
     private var switchLabel: String { isMain ? "Switch to BACKUP" : "Switch to MAIN" }
@@ -357,6 +359,11 @@ struct SettingsView: View {
         case .advertising(let name): return "Advertising as \"\(name)\""
         case .failed(let reason):    return "Bonjour error: \(reason)"
         }
+    }
+
+    private var displayedDiscoveryName: String {
+        if !advertiser.confirmedName.isEmpty { return advertiser.confirmedName }
+        return ProcessInfo.processInfo.hostName.replacingOccurrences(of: ".local", with: "")
     }
 
     @ViewBuilder
@@ -708,20 +715,42 @@ struct SettingsView: View {
                     .font(.system(size: 12))
                     .foregroundColor(labelColor)
                 Spacer()
-                TextField("Auto", text: Binding(
-                    get: {
-                        store.config.networkDiscoveryName.isEmpty ?
-                        ProcessInfo.processInfo.hostName.replacingOccurrences(of: ".local", with: "") :
-                        store.config.networkDiscoveryName
-                    },
-                    set: { newValue in
-                        store.config.networkDiscoveryName = newValue
+                if isEditingDiscoveryName {
+                    TextField("Name", text: $editingDiscoveryName)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 100)
+                        .multilineTextAlignment(.trailing)
+                    Button("Save") {
+                        let trimmed = editingDiscoveryName.trimmingCharacters(in: .whitespaces)
+                        store.config.networkDiscoveryName = trimmed
                         BonjourAdvertiser.shared.restart()
+                        isEditingDiscoveryName = false
                     }
-                ))
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 140)
-                .multilineTextAlignment(.trailing)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundColor(editingDiscoveryName.trimmingCharacters(in: .whitespaces).isEmpty || editingDiscoveryName.utf8.count > 63 ? Color(white: 0.4) : .blue)
+                    .disabled(editingDiscoveryName.trimmingCharacters(in: .whitespaces).isEmpty || editingDiscoveryName.utf8.count > 63)
+                    Button("Cancel") {
+                        isEditingDiscoveryName = false
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(white: 0.5))
+                } else {
+                    Text(displayedDiscoveryName)
+                        .font(.system(size: 12))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                    Button("Edit") {
+                        editingDiscoveryName = advertiser.confirmedName.isEmpty
+                            ? ProcessInfo.processInfo.hostName.replacingOccurrences(of: ".local", with: "")
+                            : advertiser.confirmedName
+                        isEditingDiscoveryName = true
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundColor(.blue)
+                }
             }
 
             if isAutomatic {

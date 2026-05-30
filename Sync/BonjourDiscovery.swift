@@ -27,6 +27,7 @@ final class BonjourAdvertiser: NSObject, ObservableObject {
     static let shared = BonjourAdvertiser()
 
     @Published var state: AdvertiserState = .idle
+    @Published var confirmedName: String = ""
 
     private var service: NetService?
     private var bonjourRunLoop: RunLoop?
@@ -116,6 +117,7 @@ extension BonjourAdvertiser: NetServiceDelegate {
     func netServiceDidPublish(_ sender: NetService) {
         let name = sender.name
         DispatchQueue.main.async { [weak self] in
+            self?.confirmedName = name
             self?.state = .advertising(name: name)
         }
     }
