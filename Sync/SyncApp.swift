@@ -93,6 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         updateBonjourAdvertiser()
         startPushSyncIfNeeded()
+        startReceiveMonitorIfNeeded()
     }
 
     // Starts FSEventsWatcher at app launch for Main role with Push Sync enabled.
@@ -100,6 +101,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let cfg = ConfigStore.shared.config
         if cfg.role == "main" && cfg.pushSyncEnabled && !cfg.sourceFolder.isEmpty {
             FSEventsWatcher.shared.start(path: cfg.sourceFolder, debounceSeconds: cfg.pushSyncDebounce)
+        }
+    }
+
+    // Starts ReceiveMonitor at app launch for Backup role.
+    func startReceiveMonitorIfNeeded() {
+        if ConfigStore.shared.config.role == "backup" {
+            ReceiveMonitor.shared.startMonitoring()
         }
     }
 

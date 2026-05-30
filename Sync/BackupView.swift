@@ -217,6 +217,8 @@ final class PingChecker: ObservableObject {
 enum ReceiveState { case idle, receiving, done }
 
 final class ReceiveMonitor: ObservableObject {
+    static let shared = ReceiveMonitor()
+
     @Published var state: ReceiveState    = .idle
     @Published var receivePercent: Int    = -1    // -1 = unknown; 0–100 during transfer
     @Published var receiveDetails: String = ""    // "4 files · 620 MB in 0:42"
@@ -226,6 +228,8 @@ final class ReceiveMonitor: ObservableObject {
     private var isChecking:  Bool = false
     var stopAfterTransfer:   Bool = false
     var isMonitoring: Bool { pollTimer != nil }
+
+    private init() {}
 
     func startMonitoring() {
         state          = .idle
@@ -373,7 +377,7 @@ struct BackupView: View {
     @ObservedObject private var networkMonitor = NetworkMonitor.shared
     @StateObject private var storageMonitor = StorageMonitor()
     @StateObject private var pingChecker    = PingChecker()
-    @StateObject private var receiveMonitor = ReceiveMonitor()
+    @ObservedObject private var receiveMonitor = ReceiveMonitor.shared
     @ObservedObject private var advertiser  = BonjourAdvertiser.shared
     @State private var showQuitConfirm = false
     var onSettingsTapped: () -> Void = {}
