@@ -1,0 +1,184 @@
+{
+  "source": "/Users/remember/Documents/LiveAudioApps/Sync/Sync/MainView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Sync",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 869
+        }
+      },
+      {
+        "comment": "",
+        "key": "· Auto",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 878
+        }
+      },
+      {
+        "comment": "",
+        "key": "Connection info",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 898
+        }
+      },
+      {
+        "comment": "",
+        "key": "BACKUP Network Discovery",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 920
+        }
+      },
+      {
+        "comment": "",
+        "key": "BACKUP User",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 931
+        }
+      },
+      {
+        "comment": "",
+        "key": "BACKUP IP",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 941
+        }
+      },
+      {
+        "comment": "",
+        "key": "This Mac's IP",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 962
+        }
+      },
+      {
+        "comment": "",
+        "key": "",
+        "location": {
+          "startingColumn": 56,
+          "startingLine": 1030
+        }
+      },
+      {
+        "comment": "",
+        "key": "Set source folder and BACKUP IP in Settings first",
+        "location": {
+          "startingColumn": 61,
+          "startingLine": 1030
+        }
+      },
+      {
+        "comment": "",
+        "key": "Cancel Sync",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 1013
+        }
+      },
+      {
+        "comment": "",
+        "key": "Check Files",
+        "location": {
+          "startingColumn": 59,
+          "startingLine": 1024
+        }
+      },
+      {
+        "comment": "",
+        "key": "Sync Now",
+        "location": {
+          "startingColumn": 75,
+          "startingLine": 1024
+        }
+      },
+      {
+        "comment": "",
+        "key": "Version",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 1041
+        }
+      },
+      {
+        "comment": "",
+        "key": "© RememberLive 2026",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 1051
+        }
+      },
+      {
+        "comment": "",
+        "key": "Designed and Programmed by Remember Chaitezvi",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 1054
+        }
+      },
+      {
+        "comment": "",
+        "key": "rememberlive.africa",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 1057
+        }
+      },
+      {
+        "comment": "",
+        "key": "Settings",
+        "location": {
+          "startingColumn": 23,
+          "startingLine": 1077
+        }
+      },
+      {
+        "comment": "",
+        "key": "Quit",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 1081
+        }
+      },
+      {
+        "comment": "",
+        "key": "Cancel sync first",
+        "location": {
+          "startingColumn": 39,
+          "startingLine": 1086
+        }
+      },
+      {
+        "comment": "",
+        "key": "",
+        "location": {
+          "startingColumn": 61,
+          "startingLine": 1086
+        }
+      },
+      {
+        "comment": "",
+        "key": "OK",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 1224
+        }
+      },
+      {
+        "comment": "",
+        "key": "Cancel",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 1371
+        }
+      }
+    ]
+  },
+  "version": 1
+}

@@ -1,0 +1,552 @@
+{
+  "source": "/Users/remember/Documents/LiveAudioApps/Sync/Sync/SettingsView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Settings",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 81
+        }
+      },
+      {
+        "comment": "",
+        "key": "Back",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 72
+        }
+      },
+      {
+        "comment": "",
+        "key": "Connection",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 158
+        }
+      },
+      {
+        "comment": "",
+        "key": "Behaviour",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 184
+        }
+      },
+      {
+        "comment": "",
+        "key": "Version",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 209
+        }
+      },
+      {
+        "comment": "",
+        "key": "© RememberLive 2026",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 219
+        }
+      },
+      {
+        "comment": "",
+        "key": "Designed and Programmed by Remember Chaitezvi",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 222
+        }
+      },
+      {
+        "comment": "",
+        "key": "rememberlive.africa",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 225
+        }
+      },
+      {
+        "comment": "",
+        "key": "Bonjour error: %@",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 315
+        }
+      },
+      {
+        "comment": "",
+        "key": "Searching for Backup Macs...",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 321
+        }
+      },
+      {
+        "comment": "",
+        "key": "MAIN",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 526
+        }
+      },
+      {
+        "comment": "",
+        "key": "",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 543
+        }
+      },
+      {
+        "comment": "",
+        "key": "Automatic",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 544
+        }
+      },
+      {
+        "comment": "",
+        "key": "Manual",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 545
+        }
+      },
+      {
+        "comment": "",
+        "key": "BACKUP Username",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 559
+        }
+      },
+      {
+        "comment": "",
+        "key": "Username",
+        "location": {
+          "startingColumn": 31,
+          "startingLine": 564
+        }
+      },
+      {
+        "comment": "",
+        "key": "Save",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 568
+        }
+      },
+      {
+        "comment": "",
+        "key": "Cancel",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 578
+        }
+      },
+      {
+        "comment": "",
+        "key": "Edit",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 589
+        }
+      },
+      {
+        "comment": "",
+        "key": "Choose…",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 615
+        }
+      },
+      {
+        "comment": "",
+        "key": "BACKUP IP",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 634
+        }
+      },
+      {
+        "comment": "",
+        "key": "e.g. 192.168.1.x",
+        "location": {
+          "startingColumn": 31,
+          "startingLine": 638
+        }
+      },
+      {
+        "comment": "",
+        "key": "%@...",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 690
+        }
+      },
+      {
+        "comment": "",
+        "key": "Rename failed, try again",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 701
+        }
+      },
+      {
+        "comment": "",
+        "key": "Name",
+        "location": {
+          "startingColumn": 35,
+          "startingLine": 661
+        }
+      },
+      {
+        "comment": "",
+        "key": "Save",
+        "location": {
+          "startingColumn": 32,
+          "startingLine": 665
+        }
+      },
+      {
+        "comment": "",
+        "key": "Cancel",
+        "location": {
+          "startingColumn": 32,
+          "startingLine": 670
+        }
+      },
+      {
+        "comment": "",
+        "key": "Edit",
+        "location": {
+          "startingColumn": 36,
+          "startingLine": 682
+        }
+      },
+      {
+        "comment": "",
+        "key": "Checking...",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 728
+        }
+      },
+      {
+        "comment": "",
+        "key": "Reset Connection",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 734
+        }
+      },
+      {
+        "comment": "",
+        "key": "Set Up Secure Connection",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 742
+        }
+      },
+      {
+        "comment": "",
+        "key": "Auto Sync",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 763
+        }
+      },
+      {
+        "comment": "",
+        "key": "Push Sync",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 784
+        }
+      },
+      {
+        "comment": "",
+        "key": "Check every",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 768
+        }
+      },
+      {
+        "comment": "",
+        "key": "",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 772
+        }
+      },
+      {
+        "comment": "",
+        "key": "30s",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 773
+        }
+      },
+      {
+        "comment": "",
+        "key": "5 min",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 774
+        }
+      },
+      {
+        "comment": "",
+        "key": "10 min",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 775
+        }
+      },
+      {
+        "comment": "",
+        "key": "15 min",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 776
+        }
+      },
+      {
+        "comment": "",
+        "key": "30 min",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 777
+        }
+      },
+      {
+        "comment": "",
+        "key": "1 hour",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 778
+        }
+      },
+      {
+        "comment": "",
+        "key": "Debounce",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 789
+        }
+      },
+      {
+        "comment": "",
+        "key": "",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 793
+        }
+      },
+      {
+        "comment": "",
+        "key": "5s",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 794
+        }
+      },
+      {
+        "comment": "",
+        "key": "10s",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 795
+        }
+      },
+      {
+        "comment": "",
+        "key": "30s",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 796
+        }
+      },
+      {
+        "comment": "",
+        "key": "1 min",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 797
+        }
+      },
+      {
+        "comment": "",
+        "key": "Version History",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 811
+        }
+      },
+      {
+        "comment": "",
+        "key": "Keep versions",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 816
+        }
+      },
+      {
+        "comment": "",
+        "key": "",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 820
+        }
+      },
+      {
+        "comment": "",
+        "key": "3",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 821
+        }
+      },
+      {
+        "comment": "",
+        "key": "5",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 822
+        }
+      },
+      {
+        "comment": "",
+        "key": "10",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 823
+        }
+      },
+      {
+        "comment": "",
+        "key": "20",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 824
+        }
+      },
+      {
+        "comment": "",
+        "key": "Unlimited",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 825
+        }
+      },
+      {
+        "comment": "",
+        "key": "Check files before sync",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 839
+        }
+      },
+      {
+        "comment": "",
+        "key": "Launch at Login",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 842
+        }
+      },
+      {
+        "comment": "",
+        "key": "BACKUP",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 862
+        }
+      },
+      {
+        "comment": "",
+        "key": "",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 879
+        }
+      },
+      {
+        "comment": "",
+        "key": "Automatic",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 880
+        }
+      },
+      {
+        "comment": "",
+        "key": "Manual",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 881
+        }
+      },
+      {
+        "comment": "",
+        "key": "Network Discovery Name",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 888
+        }
+      },
+      {
+        "comment": "",
+        "key": "Name",
+        "location": {
+          "startingColumn": 31,
+          "startingLine": 893
+        }
+      },
+      {
+        "comment": "",
+        "key": "Save",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 897
+        }
+      },
+      {
+        "comment": "",
+        "key": "Cancel",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 907
+        }
+      },
+      {
+        "comment": "",
+        "key": "Edit",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 918
+        }
+      },
+      {
+        "comment": "",
+        "key": "Change",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 956
+        }
+      },
+      {
+        "comment": "",
+        "key": "Launch at Login",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 968
+        }
+      }
+    ]
+  },
+  "version": 1
+}

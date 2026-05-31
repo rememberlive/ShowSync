@@ -1,0 +1,144 @@
+{
+  "source": "/Users/remember/Documents/LiveAudioApps/Sync/Sync/BackupView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Sync",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 408
+        }
+      },
+      {
+        "comment": "",
+        "key": "Network Discovery",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 424
+        }
+      },
+      {
+        "comment": "",
+        "key": "Setting up...",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 437
+        }
+      },
+      {
+        "comment": "",
+        "key": "This Mac's IP",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 450
+        }
+      },
+      {
+        "comment": "",
+        "key": "BACKUP User",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 468
+        }
+      },
+      {
+        "comment": "",
+        "key": "Using default folder — set a destination if needed",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 524
+        }
+      },
+      {
+        "comment": "",
+        "key": "✓ Received",
+        "location": {
+          "startingColumn": 74,
+          "startingLine": 512
+        }
+      },
+      {
+        "comment": "",
+        "key": "✓ %@",
+        "location": {
+          "startingColumn": 91,
+          "startingLine": 512
+        }
+      },
+      {
+        "comment": "",
+        "key": "Cannot write — see Settings",
+        "location": {
+          "startingColumn": 38,
+          "startingLine": 502
+        }
+      },
+      {
+        "comment": "",
+        "key": "Version",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 539
+        }
+      },
+      {
+        "comment": "",
+        "key": "© RememberLive 2026",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 549
+        }
+      },
+      {
+        "comment": "",
+        "key": "Designed and Programmed by Remember Chaitezvi",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 552
+        }
+      },
+      {
+        "comment": "",
+        "key": "rememberlive.africa",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 555
+        }
+      },
+      {
+        "comment": "",
+        "key": "Settings",
+        "location": {
+          "startingColumn": 23,
+          "startingLine": 575
+        }
+      },
+      {
+        "comment": "",
+        "key": "Quit",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 579
+        }
+      },
+      {
+        "comment": "",
+        "key": "Transfer in progress",
+        "location": {
+          "startingColumn": 41,
+          "startingLine": 584
+        }
+      },
+      {
+        "comment": "",
+        "key": "",
+        "location": {
+          "startingColumn": 66,
+          "startingLine": 584
+        }
+      }
+    ]
+  },
+  "version": 1
+}

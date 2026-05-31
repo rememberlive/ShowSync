@@ -1,0 +1,109 @@
+{
+  "" : {
+    "diagnostics" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/Sync-primary.dia",
+    "emit-module-dependencies" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/Sync-primary-emit-module.d",
+    "emit-module-diagnostics" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/Sync-primary-emit-module.dia",
+    "pch" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/Sync-primary-Bridging-header.pch",
+    "swift-dependencies" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/Sync-primary.swiftdeps"
+  },
+  "/Users/remember/Documents/LiveAudioApps/Sync/Sync/BackupView.swift" : {
+    "const-values" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/BackupView.swiftconstvalues",
+    "dependencies" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/BackupView.d",
+    "diagnostics" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/BackupView.dia",
+    "index-unit-output-path" : "/Sync.build/Debug/Sync.build/Objects-normal/arm64/BackupView.o",
+    "llvm-bc" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/BackupView.bc",
+    "object" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/BackupView.o",
+    "swift-dependencies" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/BackupView.swiftdeps",
+    "swiftmodule" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/BackupView~partial.swiftmodule"
+  },
+  "/Users/remember/Documents/LiveAudioApps/Sync/Sync/BonjourDiscovery.swift" : {
+    "const-values" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/BonjourDiscovery.swiftconstvalues",
+    "dependencies" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/BonjourDiscovery.d",
+    "diagnostics" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/BonjourDiscovery.dia",
+    "index-unit-output-path" : "/Sync.build/Debug/Sync.build/Objects-normal/arm64/BonjourDiscovery.o",
+    "llvm-bc" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/BonjourDiscovery.bc",
+    "object" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/BonjourDiscovery.o",
+    "swift-dependencies" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/BonjourDiscovery.swiftdeps",
+    "swiftmodule" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/BonjourDiscovery~partial.swiftmodule"
+  },
+  "/Users/remember/Documents/LiveAudioApps/Sync/Sync/Config.swift" : {
+    "const-values" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/Config.swiftconstvalues",
+    "dependencies" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/Config.d",
+    "diagnostics" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/Config.dia",
+    "index-unit-output-path" : "/Sync.build/Debug/Sync.build/Objects-normal/arm64/Config.o",
+    "llvm-bc" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/Config.bc",
+    "object" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/Config.o",
+    "swift-dependencies" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/Config.swiftdeps",
+    "swiftmodule" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/Config~partial.swiftmodule"
+  },
+  "/Users/remember/Documents/LiveAudioApps/Sync/Sync/FSEventsWatcher.swift" : {
+    "const-values" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/FSEventsWatcher.swiftconstvalues",
+    "dependencies" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/FSEventsWatcher.d",
+    "diagnostics" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/FSEventsWatcher.dia",
+    "index-unit-output-path" : "/Sync.build/Debug/Sync.build/Objects-normal/arm64/FSEventsWatcher.o",
+    "llvm-bc" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/FSEventsWatcher.bc",
+    "object" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/FSEventsWatcher.o",
+    "swift-dependencies" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/FSEventsWatcher.swiftdeps",
+    "swiftmodule" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/FSEventsWatcher~partial.swiftmodule"
+  },
+  "/Users/remember/Documents/LiveAudioApps/Sync/Sync/MainView.swift" : {
+    "const-values" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/MainView.swiftconstvalues",
+    "dependencies" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/MainView.d",
+    "diagnostics" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/MainView.dia",
+    "index-unit-output-path" : "/Sync.build/Debug/Sync.build/Objects-normal/arm64/MainView.o",
+    "llvm-bc" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/MainView.bc",
+    "object" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/MainView.o",
+    "swift-dependencies" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/MainView.swiftdeps",
+    "swiftmodule" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/MainView~partial.swiftmodule"
+  },
+  "/Users/remember/Documents/LiveAudioApps/Sync/Sync/QuitProtection.swift" : {
+    "const-values" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/QuitProtection.swiftconstvalues",
+    "dependencies" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/QuitProtection.d",
+    "diagnostics" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/QuitProtection.dia",
+    "index-unit-output-path" : "/Sync.build/Debug/Sync.build/Objects-normal/arm64/QuitProtection.o",
+    "llvm-bc" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/QuitProtection.bc",
+    "object" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/QuitProtection.o",
+    "swift-dependencies" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/QuitProtection.swiftdeps",
+    "swiftmodule" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/QuitProtection~partial.swiftmodule"
+  },
+  "/Users/remember/Documents/LiveAudioApps/Sync/Sync/SSHKeyWizard.swift" : {
+    "const-values" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/SSHKeyWizard.swiftconstvalues",
+    "dependencies" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/SSHKeyWizard.d",
+    "diagnostics" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/SSHKeyWizard.dia",
+    "index-unit-output-path" : "/Sync.build/Debug/Sync.build/Objects-normal/arm64/SSHKeyWizard.o",
+    "llvm-bc" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/SSHKeyWizard.bc",
+    "object" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/SSHKeyWizard.o",
+    "swift-dependencies" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/SSHKeyWizard.swiftdeps",
+    "swiftmodule" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/SSHKeyWizard~partial.swiftmodule"
+  },
+  "/Users/remember/Documents/LiveAudioApps/Sync/Sync/SettingsView.swift" : {
+    "const-values" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/SettingsView.swiftconstvalues",
+    "dependencies" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/SettingsView.d",
+    "diagnostics" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/SettingsView.dia",
+    "index-unit-output-path" : "/Sync.build/Debug/Sync.build/Objects-normal/arm64/SettingsView.o",
+    "llvm-bc" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/SettingsView.bc",
+    "object" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/SettingsView.o",
+    "swift-dependencies" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/SettingsView.swiftdeps",
+    "swiftmodule" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/SettingsView~partial.swiftmodule"
+  },
+  "/Users/remember/Documents/LiveAudioApps/Sync/Sync/SyncApp.swift" : {
+    "const-values" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/SyncApp.swiftconstvalues",
+    "dependencies" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/SyncApp.d",
+    "diagnostics" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/SyncApp.dia",
+    "index-unit-output-path" : "/Sync.build/Debug/Sync.build/Objects-normal/arm64/SyncApp.o",
+    "llvm-bc" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/SyncApp.bc",
+    "object" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/SyncApp.o",
+    "swift-dependencies" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/SyncApp.swiftdeps",
+    "swiftmodule" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/SyncApp~partial.swiftmodule"
+  },
+  "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/DerivedSources/GeneratedAssetSymbols.swift" : {
+    "const-values" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/GeneratedAssetSymbols.swiftconstvalues",
+    "dependencies" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/GeneratedAssetSymbols.d",
+    "diagnostics" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/GeneratedAssetSymbols.dia",
+    "index-unit-output-path" : "/Sync.build/Debug/Sync.build/Objects-normal/arm64/GeneratedAssetSymbols.o",
+    "llvm-bc" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/GeneratedAssetSymbols.bc",
+    "object" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/GeneratedAssetSymbols.o",
+    "swift-dependencies" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/GeneratedAssetSymbols.swiftdeps",
+    "swiftmodule" : "/Users/remember/Documents/LiveAudioApps/Sync/build/Build/Intermediates.noindex/Sync.build/Debug/Sync.build/Objects-normal/arm64/GeneratedAssetSymbols~partial.swiftmodule"
+  }
+}
