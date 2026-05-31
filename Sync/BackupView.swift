@@ -175,18 +175,40 @@ final class ReceiveMonitor: ObservableObject {
     var stopAfterTransfer:   Bool = false
     var isMonitoring: Bool { pollTimer != nil }
 
+    // FIX 3: Self-heal timeout - track when receiving started without progress
+    private var receivingStartTime: Date?
+    private var lastProgressTime: Date?
+    private let staleTimeoutSeconds: TimeInterval = 45  // Clear stale signals after 45s of no progress
+
     private init() {}
 
     func startMonitoring() {
         validateDestination()
+        clearStaleSignalFiles()  // FIX 4: Clean slate on restart/launch
         state          = .idle
         receivePercent = -1
         receiveDetails = ""
+        receivingStartTime = nil
+        lastProgressTime = nil
         pollTimer?.invalidate()
         pollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             self?.checkSignalFiles()
         }
         checkSignalFiles()
+    }
+
+    // FIX 4: Clear stale signal files from previous session (crash, force-quit, power loss)
+    func clearStaleSignalFiles() {
+        let base = URL(fileURLWithPath: ConfigStore.shared.config.destinationFolder)
+        let fm = FileManager.default
+        let signalFiles = [".sync_start", ".sync_progress", ".sync_complete", ".sync_refused"]
+        for filename in signalFiles {
+            let path = base.appendingPathComponent(filename)
+            if fm.fileExists(atPath: path.path) {
+                try? fm.removeItem(at: path)
+                NSLog("[Backup] Cleared stale signal file: %@", filename)
+            }
+        }
     }
 
     func validateDestination() {
@@ -287,8 +309,10 @@ final class ReceiveMonitor: ObservableObject {
                     self?.isChecking = false
                     guard let self else { return }
                     self.receivePercent = pct
+                    self.lastProgressTime = Date()  // FIX 3: track progress
                     if self.state != .receiving {
                         self.state = .receiving
+                        self.receivingStartTime = Date()
                         ConfigStore.shared.isSyncing = true
                         ConfigStore.shared.iconState = .receiving
                     }
@@ -309,15 +333,36 @@ final class ReceiveMonitor: ObservableObject {
                     }
                     return
                 }
+
+                // FIX 3: Self-heal timeout - if .sync_start present but no progress for 45s, clear it
                 Task { @MainActor [weak self] in
                     self?.isChecking = false
                     guard let self else { return }
-                    self.receivePercent = -1
+
+                    let now = Date()
                     if self.state != .receiving {
+                        // First time seeing .sync_start
                         self.state = .receiving
+                        self.receivingStartTime = now
+                        self.lastProgressTime = nil
                         ConfigStore.shared.isSyncing = true
                         ConfigStore.shared.iconState = .receiving
+                    } else if let startTime = self.receivingStartTime {
+                        // Already receiving - check for stale timeout
+                        let refTime = self.lastProgressTime ?? startTime
+                        if now.timeIntervalSince(refTime) > self.staleTimeoutSeconds {
+                            NSLog("[Backup] Self-heal: clearing stale signal files after %.0fs timeout", now.timeIntervalSince(startTime))
+                            self.clearStaleSignalFiles()
+                            self.state = .idle
+                            self.receivePercent = -1
+                            self.receivingStartTime = nil
+                            self.lastProgressTime = nil
+                            ConfigStore.shared.isSyncing = false
+                            ConfigStore.shared.iconState = .idle
+                            return
+                        }
                     }
+                    self.receivePercent = -1
                 }
                 return
             }
@@ -329,6 +374,8 @@ final class ReceiveMonitor: ObservableObject {
                 if self.state == .receiving {
                     self.state          = .idle
                     self.receivePercent = -1
+                    self.receivingStartTime = nil
+                    self.lastProgressTime = nil
                     ConfigStore.shared.isSyncing = false
                     ConfigStore.shared.iconState = .idle
                 }
