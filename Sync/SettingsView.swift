@@ -727,20 +727,34 @@ struct SettingsView: View {
                                 .font(.system(size: 11))
                                 .foregroundColor(labelColor)
                         case .confirmed:
-                            Text(store.config.backupDestination.isEmpty ? "~/Sync" : store.config.backupDestination)
-                                .font(.system(size: 11))
-                                .foregroundColor(.white)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        case .failed:
-                            VStack(alignment: .trailing, spacing: 2) {
+                            HStack(spacing: 6) {
                                 Text(store.config.backupDestination.isEmpty ? "~/Sync" : store.config.backupDestination)
                                     .font(.system(size: 11))
                                     .foregroundColor(.white)
                                     .lineLimit(1)
-                                Text("Couldn't confirm — using last known")
+                                    .truncationMode(.middle)
+                                Button { confirmBackupDestination() } label: {
+                                    Image(systemName: "arrow.clockwise")
+                                        .font(.system(size: 10))
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundColor(.blue)
+                            }
+                        case .failed:
+                            HStack(spacing: 6) {
+                                VStack(alignment: .trailing, spacing: 2) {
+                                    Text(store.config.backupDestination.isEmpty ? "~/Sync" : store.config.backupDestination)
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.white)
+                                        .lineLimit(1)
+                                    Text("Couldn't confirm — using last known")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(labelColor)
+                                }
+                                Button("Retry") { confirmBackupDestination() }
+                                    .buttonStyle(.bordered)
                                     .font(.system(size: 10))
-                                    .foregroundColor(labelColor)
+                                    .tint(.blue)
                             }
                         }
                     }
@@ -1150,7 +1164,7 @@ struct SettingsView: View {
             "-o", "ConnectTimeout=3",
             "-o", "StrictHostKeyChecking=no",
             "\(username)@\(ip)",
-            "cat '$HOME/Library/Application Support/Sync/config_backup.json' 2>/dev/null || echo '{}'"
+            "cat \"$HOME/Library/Application Support/Sync/config_backup.json\" 2>/dev/null || echo '{}'"
         ]
         let pipe = Pipe()
         proc.standardOutput = pipe
