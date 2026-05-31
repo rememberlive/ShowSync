@@ -610,9 +610,9 @@ struct SettingsView: View {
                         editingUsername = store.config.username
                         isEditingUsername = true
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.bordered)
                     .font(.system(size: 11))
-                    .foregroundColor(.blue)
+                    .tint(.blue)
                 }
             }
         }
