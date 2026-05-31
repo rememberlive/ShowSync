@@ -1123,6 +1123,30 @@ struct MainView: View {
                     }
 
                     VStack(spacing: 3) {
+                        Text("BACKUP Folder")
+                            .font(.system(size: 11))
+                            .foregroundColor(Color(white: 0.45))
+                        if engine.usingFallback {
+                            VStack(spacing: 1) {
+                                Text(store.config.backupDestination.isEmpty ? "~/Sync" : store.config.backupDestination)
+                                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                                    .foregroundColor(.orange)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Text("(drive unavailable)")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.orange)
+                            }
+                        } else {
+                            Text(store.config.backupDestination.isEmpty ? "~/Sync" : store.config.backupDestination)
+                                .font(.system(size: 13, weight: .medium, design: .monospaced))
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+
+                    VStack(spacing: 3) {
                         Text("This Mac's IP")
                             .font(.system(size: 11))
                             .foregroundColor(Color(white: 0.45))
