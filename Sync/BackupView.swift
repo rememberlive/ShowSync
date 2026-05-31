@@ -188,6 +188,10 @@ final class ReceiveMonitor: ObservableObject {
     private var lastProgressTime: Date?
     private let staleTimeoutSeconds: TimeInterval = 45  // Clear stale signals after 45s of no progress
 
+    // Volume mount/unmount observers for instant drive detection
+    private var mountObserver: NSObjectProtocol?
+    private var unmountObserver: NSObjectProtocol?
+
     private init() {}
 
     func startMonitoring() {
@@ -203,6 +207,45 @@ final class ReceiveMonitor: ObservableObject {
             self?.checkSignalFiles()
         }
         checkSignalFiles()
+        setupVolumeObservers()
+    }
+
+    private func setupVolumeObservers() {
+        // Remove any existing observers first (avoid duplicates on role switch)
+        removeVolumeObservers()
+
+        let nc = NSWorkspace.shared.notificationCenter
+
+        // Drive unmounted - check if it affects our destination
+        unmountObserver = nc.addObserver(forName: NSWorkspace.didUnmountNotification, object: nil, queue: .main) { [weak self] notification in
+            guard let self else { return }
+            guard let volumeURL = notification.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL else { return }
+            let configPath = ConfigStore.shared.config.destinationFolder
+            // If the unmounted volume is a prefix of our destination, we lost access
+            if configPath.hasPrefix(volumeURL.path) {
+                NSLog("[Backup] Volume unmounted: %@ - destination unavailable", volumeURL.path)
+                self.validateDestination()
+            }
+        }
+
+        // Drive mounted - check if our destination came back
+        mountObserver = nc.addObserver(forName: NSWorkspace.didMountNotification, object: nil, queue: .main) { [weak self] notification in
+            guard let self else { return }
+            NSLog("[Backup] Volume mounted - rechecking destination")
+            self.validateDestination()
+        }
+    }
+
+    private func removeVolumeObservers() {
+        let nc = NSWorkspace.shared.notificationCenter
+        if let obs = unmountObserver {
+            nc.removeObserver(obs)
+            unmountObserver = nil
+        }
+        if let obs = mountObserver {
+            nc.removeObserver(obs)
+            mountObserver = nil
+        }
     }
 
     // FIX 4: Clear stale signal files from previous session (crash, force-quit, power loss)
@@ -258,10 +301,14 @@ final class ReceiveMonitor: ObservableObject {
         state          = .idle
         receivePercent = -1
         ConfigStore.shared.isSyncing = false
+        removeVolumeObservers()
         // lastReceivedTime preserved across close/open
     }
 
-    deinit { pollTimer?.invalidate() }
+    deinit {
+        pollTimer?.invalidate()
+        removeVolumeObservers()
+    }
 
     private func checkSignalFiles() {
         guard !isChecking else { return }
