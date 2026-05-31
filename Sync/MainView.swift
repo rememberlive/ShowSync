@@ -76,6 +76,7 @@ final class SyncEngine: ObservableObject {
     @Published var syncProgress: SyncProgress? = nil
     @Published var fallbackNotice: String? = nil  // Calm notice when fallback to ~/Sync
     @Published var lowSpaceNotice: String? = nil  // Notice when Backup refuses due to low space
+    @Published var usingFallback: Bool = false    // True when sync redirected to ~/Sync due to unavailable drive
 
     // Auto Sync - Independent timer system
     @Published var nextAutoSyncDate: Date?
@@ -203,6 +204,7 @@ final class SyncEngine: ObservableObject {
                     case .unwritable:
                         // Fall back to ~/Sync
                         self.syncRemotePath = "~/Sync"
+                        self.usingFallback = true
                         self.fallbackNotice = "Couldn't write to the chosen folder — backing up to the default Sync folder instead."
                         NSLog("[Sync] Destination unwritable, falling back to ~/Sync")
                     case .testFailed:
@@ -283,6 +285,10 @@ final class SyncEngine: ObservableObject {
                                         duration:   duration)
                                     // Clear any stale .sync_refused on success
                                     self.clearSyncRefused()
+                                    // Clear fallback flag if we synced to the chosen path (drive is back)
+                                    if self.syncRemotePath != "~/Sync" {
+                                        self.usingFallback = false
+                                    }
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
                                         guard self?.status == .done else { return }
                                         self?.status = .ready

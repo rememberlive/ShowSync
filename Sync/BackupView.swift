@@ -93,7 +93,7 @@ final class StorageMonitor: ObservableObject {
     }
 
     private func updateStorage() {
-        let destPath = ConfigStore.shared.config.destinationFolder
+        let destPath = ReceiveMonitor.shared.effectiveDestination
         let attrs = try? FileManager.default.attributesOfFileSystem(forPath: destPath)
         let free = attrs?[.systemFreeSize] as? Int64 ?? 0
         let gb = Double(free) / 1_073_741_824
@@ -106,7 +106,7 @@ final class StorageMonitor: ObservableObject {
     }
 
     private func updateSyncFolder() {
-        let syncFolder = URL(fileURLWithPath: ConfigStore.shared.config.destinationFolder)
+        let syncFolder = URL(fileURLWithPath: ReceiveMonitor.shared.effectiveDestination)
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
             // TCC writability test — isWritableFile only checks Unix permissions,
@@ -170,6 +170,14 @@ final class ReceiveMonitor: ObservableObject {
     @Published var usingFallback: Bool    = false // True when custom folder missing, using ~/Sync
     // `lastReceivedTime` now lives on ConfigStore.config so it survives relaunch.
 
+    /// The ACTUAL destination path being used right now (fallback ~/Sync or user's chosen folder)
+    var effectiveDestination: String {
+        if usingFallback {
+            return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Sync").path
+        }
+        return ConfigStore.shared.config.destinationFolder
+    }
+
     private var pollTimer:   Timer?
     private var isChecking:  Bool = false
     var stopAfterTransfer:   Bool = false
@@ -199,7 +207,7 @@ final class ReceiveMonitor: ObservableObject {
 
     // FIX 4: Clear stale signal files from previous session (crash, force-quit, power loss)
     func clearStaleSignalFiles() {
-        let base = URL(fileURLWithPath: ConfigStore.shared.config.destinationFolder)
+        let base = URL(fileURLWithPath: effectiveDestination)
         let fm = FileManager.default
         let signalFiles = [".sync_start", ".sync_progress", ".sync_complete", ".sync_refused"]
         for filename in signalFiles {
@@ -216,9 +224,15 @@ final class ReceiveMonitor: ObservableObject {
         let configPath = ConfigStore.shared.config.destinationFolder
         let defaultPath = fm.homeDirectoryForCurrentUser.appendingPathComponent("Sync").path
         let isDefault = configPath == defaultPath || configPath.isEmpty
+        let wasFallback = usingFallback
 
         if !isDefault && fm.fileExists(atPath: configPath) && fm.isWritableFile(atPath: configPath) {
+            // Custom folder is available (or came back)
             usingFallback = false
+            if wasFallback {
+                // Drive returned! Update Bonjour to advertise the real path again
+                BonjourAdvertiser.shared.restart()
+            }
             return
         }
         // Fall back to ~/Sync
@@ -228,8 +242,10 @@ final class ReceiveMonitor: ObservableObject {
         }
         if !isDefault {
             usingFallback = true
-            ConfigStore.shared.config.destinationFolder = fallback.path
-            BonjourAdvertiser.shared.restart() // Update TXT record
+            if !wasFallback {
+                // Just started fallback - update Bonjour
+                BonjourAdvertiser.shared.restart()
+            }
         } else {
             usingFallback = false
         }
@@ -250,8 +266,9 @@ final class ReceiveMonitor: ObservableObject {
     private func checkSignalFiles() {
         guard !isChecking else { return }
         isChecking = true
+        let destPath = effectiveDestination  // Capture before background dispatch
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let base         = URL(fileURLWithPath: ConfigStore.shared.config.destinationFolder)
+            let base         = URL(fileURLWithPath: destPath)
             let completePath = base.appendingPathComponent(".sync_complete")
             let progressPath = base.appendingPathComponent(".sync_progress")
             let startPath    = base.appendingPathComponent(".sync_start")
@@ -551,11 +568,20 @@ struct BackupView: View {
                 )
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        Text(shortenPath(store.config.destinationFolder))
-                            .font(.system(size: 12))
-                            .foregroundColor(Color(white: 0.5))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+                        if receiveMonitor.usingFallback {
+                            // Show intended destination with unavailable indicator
+                            Text("\(shortenPath(store.config.destinationFolder)) (drive unavailable)")
+                                .font(.system(size: 12))
+                                .foregroundColor(.orange)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        } else {
+                            Text(shortenPath(receiveMonitor.effectiveDestination))
+                                .font(.system(size: 12))
+                                .foregroundColor(Color(white: 0.5))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
                         Spacer()
                         if !storageMonitor.syncFolderWritable {
                             HStack(spacing: 3) {
@@ -584,7 +610,7 @@ struct BackupView: View {
                         }
                     }
                     if receiveMonitor.usingFallback {
-                        Text("Using default folder — set a destination if needed")
+                        Text("Syncing to ~/Sync until drive returns")
                             .font(.system(size: 10))
                             .foregroundColor(.orange)
                     }
@@ -664,6 +690,7 @@ struct BackupView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSPopover.willShowNotification)) { _ in
             storageMonitor.startStorageUpdates()
             receiveMonitor.stopAfterTransfer = false
+            receiveMonitor.validateDestination()  // Recheck if drive returned
             if !receiveMonitor.isMonitoring { receiveMonitor.startMonitoring() }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSPopover.didCloseNotification)) { _ in

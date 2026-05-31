@@ -703,11 +703,18 @@ struct SettingsView: View {
                         .font(.system(size: 11))
                         .foregroundColor(labelColor)
                     Spacer()
-                    Text(store.config.backupDestination.isEmpty ? "~/Sync" : store.config.backupDestination)
-                        .font(.system(size: 11))
-                        .foregroundColor(.white)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    if SyncEngine.shared.usingFallback {
+                        Text("~/Sync (drive unavailable)")
+                            .font(.system(size: 11))
+                            .foregroundColor(.orange)
+                            .lineLimit(1)
+                    } else {
+                        Text(store.config.backupDestination.isEmpty ? "~/Sync" : store.config.backupDestination)
+                            .font(.system(size: 11))
+                            .foregroundColor(.white)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 12)
@@ -752,12 +759,19 @@ struct SettingsView: View {
                         case .confirmed:
                             HStack(spacing: 6) {
                                 VStack(alignment: .trailing, spacing: 2) {
-                                    Text(store.config.backupDestination.isEmpty ? "~/Sync" : store.config.backupDestination)
-                                        .font(.system(size: 11))
-                                        .foregroundColor(.white)
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                    if manualModeFreeSpace > 0 {
+                                    if SyncEngine.shared.usingFallback {
+                                        Text("~/Sync (drive unavailable)")
+                                            .font(.system(size: 11))
+                                            .foregroundColor(.orange)
+                                            .lineLimit(1)
+                                    } else {
+                                        Text(store.config.backupDestination.isEmpty ? "~/Sync" : store.config.backupDestination)
+                                            .font(.system(size: 11))
+                                            .foregroundColor(.white)
+                                            .lineLimit(1)
+                                            .truncationMode(.middle)
+                                    }
+                                    if manualModeFreeSpace > 0 && !SyncEngine.shared.usingFallback {
                                         Text("\(formatBytes(manualModeFreeSpace)) free")
                                             .font(.system(size: 10))
                                             .foregroundColor(labelColor)
@@ -773,13 +787,22 @@ struct SettingsView: View {
                         case .failed:
                             HStack(spacing: 6) {
                                 VStack(alignment: .trailing, spacing: 2) {
-                                    Text(store.config.backupDestination.isEmpty ? "~/Sync" : store.config.backupDestination)
-                                        .font(.system(size: 11))
-                                        .foregroundColor(.white)
-                                        .lineLimit(1)
-                                    Text("Couldn't confirm — using last known")
-                                        .font(.system(size: 10))
-                                        .foregroundColor(labelColor)
+                                    if SyncEngine.shared.usingFallback {
+                                        Text("~/Sync (drive unavailable)")
+                                            .font(.system(size: 11))
+                                            .foregroundColor(.orange)
+                                            .lineLimit(1)
+                                    } else {
+                                        Text(store.config.backupDestination.isEmpty ? "~/Sync" : store.config.backupDestination)
+                                            .font(.system(size: 11))
+                                            .foregroundColor(.white)
+                                            .lineLimit(1)
+                                    }
+                                    if !SyncEngine.shared.usingFallback {
+                                        Text("Couldn't confirm — using last known")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(labelColor)
+                                    }
                                 }
                                 Button("Retry") { confirmBackupDestination() }
                                     .buttonStyle(.bordered)
@@ -1089,17 +1112,32 @@ struct SettingsView: View {
         Divider()
 
         sectionHeader("Destination")
-        HStack {
-            Text(shortenPath(store.config.destinationFolder))
-                .font(.system(size: 12))
-                .foregroundColor(.white)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer()
-            Button("Change") { pickDestinationFolder() }
-                .buttonStyle(.bordered)
-                .font(.system(size: 11))
-                .tint(.blue)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                if ReceiveMonitor.shared.usingFallback {
+                    Text("\(shortenPath(store.config.destinationFolder)) (drive unavailable)")
+                        .font(.system(size: 12))
+                        .foregroundColor(.orange)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                } else {
+                    Text(shortenPath(store.config.destinationFolder))
+                        .font(.system(size: 12))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer()
+                Button("Change") { pickDestinationFolder() }
+                    .buttonStyle(.bordered)
+                    .font(.system(size: 11))
+                    .tint(.blue)
+            }
+            if ReceiveMonitor.shared.usingFallback {
+                Text("Syncing to ~/Sync until drive returns")
+                    .font(.system(size: 10))
+                    .foregroundColor(.orange)
+            }
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 12)

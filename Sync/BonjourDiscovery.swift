@@ -81,8 +81,8 @@ final class BonjourAdvertiser: NSObject, ObservableObject {
         }
         let svc = NetService(domain: "", type: serviceType, name: advertisedName, port: 22)
         svc.delegate = self
-        // Publish destination folder and free space in TXT record for Main to read
-        let dest = ConfigStore.shared.config.destinationFolder
+        // Publish EFFECTIVE destination (actual writable path) in TXT record for Main to read
+        let dest = ReceiveMonitor.shared.effectiveDestination
         let freeBytes = Self.getFreeSpace(path: dest) ?? 0  // 0 in TXT = unknown
         let txtData = NetService.data(fromTXTRecord: [
             "dest": dest.data(using: .utf8) ?? Data(),
