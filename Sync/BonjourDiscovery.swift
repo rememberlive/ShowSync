@@ -199,6 +199,7 @@ final class BonjourBrowser: NSObject, ObservableObject {
 
     private let browser = NetServiceBrowser()
     private var resolving: [NetService] = []   // strong refs while resolution is in-flight
+    private var monitoring: [NetService] = []  // strong refs for TXT record monitoring
     private var bonjourRunLoop: RunLoop?
     private let runLoopReady = DispatchSemaphore(value: 0)
     private var isRunLoopReady = false
@@ -259,6 +260,7 @@ final class BonjourBrowser: NSObject, ObservableObject {
 
     @objc private func stopSearching() {
         browser.stop()
+        // Clean up resolving services
         for svc in resolving {
             svc.stop()
             if let runLoop = bonjourRunLoop {
@@ -267,6 +269,15 @@ final class BonjourBrowser: NSObject, ObservableObject {
             svc.delegate = nil
         }
         resolving.removeAll()
+        // Clean up monitoring services
+        for svc in monitoring {
+            svc.stopMonitoring()
+            if let runLoop = bonjourRunLoop {
+                svc.remove(from: runLoop, forMode: .common)
+            }
+            svc.delegate = nil
+        }
+        monitoring.removeAll()
         Task { @MainActor [weak self] in
             self?.state = .idle
             self?.services = []
@@ -298,10 +309,14 @@ extension BonjourBrowser: NetServiceBrowserDelegate {
 
     func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
         let name = service.name
+        // Stop monitoring and clean up
+        service.stopMonitoring()
         if let runLoop = bonjourRunLoop {
             service.remove(from: runLoop, forMode: .common)
         }
+        service.delegate = nil
         resolving.removeAll { $0 === service }
+        monitoring.removeAll { $0 === service }
         Task { @MainActor [weak self] in
             self?.services.removeAll { $0.id == name }
         }
@@ -343,14 +358,21 @@ extension BonjourBrowser: NetServiceDelegate {
             }
         }
 
-        // Remove from background runloop, not main
-        if let runLoop = bonjourRunLoop {
-            sender.remove(from: runLoop, forMode: .common)
-        }
-        sender.delegate = nil
+        // Move from resolving to monitoring for TXT updates
         resolving.removeAll { $0 === sender }
 
-        guard let resolvedIP = ip else { return }
+        guard let resolvedIP = ip else {
+            // Resolution failed - clean up
+            if let runLoop = bonjourRunLoop {
+                sender.remove(from: runLoop, forMode: .common)
+            }
+            sender.delegate = nil
+            return
+        }
+
+        // Start monitoring for TXT record changes (keep delegate and runloop scheduled)
+        sender.startMonitoring()
+        monitoring.append(sender)
 
         // Safety net: Filter out This Mac's own IP to prevent self-discovery
         if let currentIP = Self.getCurrentIP(), resolvedIP == currentIP {
@@ -377,8 +399,10 @@ extension BonjourBrowser: NetServiceDelegate {
                     ConfigStore.shared.config.destinationIP = resolvedIP
                     ConfigStore.shared.config.backupHostname = host
                 }
-                // Always update destination (Backup may have changed it)
+                // Always update destination and fallback state (Backup may have changed it)
                 ConfigStore.shared.config.backupDestination = destPath
+                let isFallback = !effectivePath.isEmpty && effectivePath != destPath
+                SyncEngine.shared.usingFallback = isFallback
                 // Update stored name if Backup was renamed (matched by IP, not name)
                 if !nameMatch && config.lastBackupDiscoveryName != name {
                     NSLog("[Bonjour] Connected Backup renamed to: %@", name)
@@ -397,6 +421,52 @@ extension BonjourBrowser: NetServiceDelegate {
         }
         sender.delegate = nil
         resolving.removeAll { $0 === sender }
+    }
+
+    func netService(_ sender: NetService, didUpdateTXTRecord data: Data) {
+        let name = sender.name
+        // Parse updated TXT record
+        var destPath = "~/Sync"
+        var effectivePath = "~/Sync"
+        var freeBytes: Int64 = 0
+        let dict = NetService.dictionary(fromTXTRecord: data)
+        if let destData = dict["dest"], let str = String(data: destData, encoding: .utf8), !str.isEmpty {
+            destPath = str
+        }
+        if let effectiveData = dict["effectiveDest"], let str = String(data: effectiveData, encoding: .utf8), !str.isEmpty {
+            effectivePath = str
+        } else {
+            effectivePath = destPath
+        }
+        if let freeData = dict["free"], let str = String(data: freeData, encoding: .utf8), let val = Int64(str) {
+            freeBytes = val
+        }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            // Update the service entry in our array
+            if let idx = self.services.firstIndex(where: { $0.id == name }) {
+                let old = self.services[idx]
+                self.services[idx] = DiscoveredBackup(
+                    id: old.id,
+                    hostname: old.hostname,
+                    resolvedIP: old.resolvedIP,
+                    destinationPath: destPath,
+                    effectiveDestinationPath: effectivePath,
+                    freeSpaceBytes: freeBytes
+                )
+                NSLog("[Bonjour] TXT update for %@: dest=%@, effective=%@", name, destPath, effectivePath)
+
+                // If this is the currently connected Backup, update config live
+                let config = ConfigStore.shared.config
+                if config.destinationIP == old.resolvedIP {
+                    ConfigStore.shared.config.backupDestination = destPath
+                    let isFallback = !effectivePath.isEmpty && effectivePath != destPath
+                    SyncEngine.shared.usingFallback = isFallback
+                    NSLog("[Bonjour] Updated connected Backup destination: %@ (fallback=%d)", destPath, isFallback ? 1 : 0)
+                }
+            }
+        }
     }
 
     private static func firstIPv4(in addresses: [Data]) -> String? {
