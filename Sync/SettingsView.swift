@@ -117,8 +117,9 @@ struct SettingsView: View {
                         Task { @MainActor in
                             // Handle Bonjour services during role switch
                             if currentRole == "backup" && targetRole == "main" {
-                                // Backup → Main: Stop advertising first
-                                BonjourAdvertiser.shared.stop()
+                                // Backup → Main: Stop advertising and monitoring, clear stale name
+                                BonjourAdvertiser.shared.stopAndClearState()
+                                ReceiveMonitor.shared.stopMonitoring()  // Also removes volume observers
                                 // Wait for advertiser to stop completely
                                 while BonjourAdvertiser.shared.state != .idle {
                                     try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
@@ -127,6 +128,9 @@ struct SettingsView: View {
                                 // Main → Backup: Start advertising immediately
                                 BonjourAdvertiser.shared.start()
                             }
+
+                            // Reset transient fallback state on any role switch
+                            SyncEngine.shared.usingFallback = false
 
                             store.setRole(targetRole)
 
@@ -292,6 +296,10 @@ struct SettingsView: View {
         .onChange(of: localDiscoveryMode) { _ in
             Task { @MainActor in
                 store.config.discoveryMode = localDiscoveryMode
+                // Reset transient display state for fresh start in new mode
+                SyncEngine.shared.usingFallback = false
+                manualModeFreeSpace = 0
+                destinationCheckState = .idle
                 AppDelegate.shared?.updateBonjourAdvertiser()
                 AppDelegate.shared?.updateBonjourBrowser()
             }

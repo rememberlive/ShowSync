@@ -145,6 +145,14 @@ final class BonjourAdvertiser: NSObject, ObservableObject {
             self?.state = .idle
         }
     }
+
+    /// Stop advertising AND clear confirmedName. Use on role/mode switch to prevent stale name display.
+    func stopAndClearState() {
+        stop()
+        DispatchQueue.main.async { [weak self] in
+            self?.confirmedName = ""
+        }
+    }
     static func getFreeSpace(path: String) -> Int64? {
         let url = URL(fileURLWithPath: path)
 
