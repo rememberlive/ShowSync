@@ -336,8 +336,8 @@ struct SettingsView: View {
 
     @ViewBuilder private var discoveredBackupsList: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if case .failed(let reason) = bonjourBrowser.state {
-                Text("Bonjour error: \(reason)")
+            if case .failed = bonjourBrowser.state {
+                Text("Network discovery unavailable")
                     .font(.system(size: 11))
                     .foregroundColor(.red)
             } else if bonjourBrowser.services.isEmpty && store.config.destinationIP.isEmpty {
@@ -394,7 +394,7 @@ struct SettingsView: View {
                                 Text(service.id)
                                     .font(.system(size: 12, weight: .medium))
                                     .foregroundColor(.white)
-                                Text(service.resolvedIP)
+                                Text("\(service.resolvedIP) · \(formatBytes(service.freeSpaceBytes)) free")
                                     .font(.system(size: 11, design: .monospaced))
                                     .foregroundColor(labelColor)
                             }
@@ -423,7 +423,7 @@ struct SettingsView: View {
         switch advertiser.state {
         case .idle:                  return "Starting..."
         case .advertising(let name): return "Advertising as \"\(name)\""
-        case .failed(let reason):    return "Bonjour error: \(reason)"
+        case .failed:                return "Network discovery unavailable"
         }
     }
 
@@ -468,13 +468,27 @@ struct SettingsView: View {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.canCreateDirectories = true
+        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
         panel.prompt = "Select Destination"
         NSApp.activate(ignoringOtherApps: true)
         panel.level = .floating
         let response = panel.runModal()
         guard response == .OK, let url = panel.url else { return }
-        store.config.destinationFolder = url.path
-        BonjourAdvertiser.shared.restart()
+        // Write-test: verify folder is writable before accepting
+        let testFile = url.appendingPathComponent(".sync_writetest")
+        do {
+            try Data().write(to: testFile)
+            try FileManager.default.removeItem(at: testFile)
+            store.config.destinationFolder = url.path
+            BonjourAdvertiser.shared.restart()
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Can't back up to this folder"
+            alert.informativeText = "It may be protected by macOS, read-only, or disconnected. Choose a folder in your home folder or a writable drive."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
     }
 
     private func setLaunchAtLogin(_ enabled: Bool) {
@@ -495,6 +509,14 @@ struct SettingsView: View {
 
     private func shortenPath(_ path: String) -> String {
         path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+    }
+
+    private func formatBytes(_ bytes: Int64) -> String {
+        if bytes <= 0 { return "?" }
+        let gb = Double(bytes) / 1_073_741_824
+        if gb >= 100 { return String(format: "%.0f GB", gb) }
+        if gb >= 10  { return String(format: "%.1f GB", gb) }
+        return String(format: "%.2f GB", gb)
     }
 
     private func appVersion() -> String {

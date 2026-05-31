@@ -150,8 +150,7 @@ final class SyncEngine: ObservableObject {
                 guard let self, self.status == .preparing else { return }
 
                 if p.terminationStatus != 0 {
-                    let lines = output.components(separatedBy: .newlines).filter { !$0.isEmpty }
-                    self.status = .error(lines.last ?? "Prepare failed")
+                    self.status = .error("Couldn't prepare the sync — check your connection")
                     ConfigStore.shared.isSyncing = false
                     ConfigStore.shared.iconState = .error
                     return
@@ -201,9 +200,7 @@ final class SyncEngine: ObservableObject {
                     proc.standardError  = errPipe
 
                     proc.terminationHandler = { [weak self] p in
-                        let errData   = errPipe.fileHandleForReading.readDataToEndOfFile()
-                        let errOutput = String(data: errData, encoding: .utf8) ?? ""
-                        // Only log on non-zero exit; suppress stderr body (may contain paths/hostnames).
+                        _ = errPipe.fileHandleForReading.readDataToEndOfFile() // drain pipe
                         if p.terminationStatus != 0 {
                             NSLog("[Sync] exit %d", p.terminationStatus)
                         }
@@ -227,8 +224,7 @@ final class SyncEngine: ObservableObject {
                                 }
                             } else {
                                 self?.cleanupSignalFiles()
-                                let errLines = errOutput.components(separatedBy: .newlines).filter { !$0.isEmpty }
-                                self?.status = .error(errLines.last ?? "Unknown error")
+                                self?.status = .error("Sync interrupted — files may be incomplete")
                                 ConfigStore.shared.iconState = .error
                             }
                         }
@@ -306,7 +302,7 @@ final class SyncEngine: ObservableObject {
         task = nil
         stopDuPolling()
         syncProgress = nil
-        status = .error("Could not launch rsync")
+        status = .error("Couldn't start the backup — check that rsync is installed")
         hasUnacknowledgedError = true
         ConfigStore.shared.isSyncing = false
         ConfigStore.shared.iconState = .error

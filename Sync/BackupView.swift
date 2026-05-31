@@ -296,6 +296,17 @@ final class ReceiveMonitor: ObservableObject {
             }
 
             if fm.fileExists(atPath: startPath.path) {
+                // 2GB minimum free space check
+                let freeBytes = BonjourAdvertiser.getFreeSpace(path: base.path)
+                let minFreeBytes: Int64 = 2 * 1024 * 1024 * 1024 // 2GB
+                if freeBytes < minFreeBytes {
+                    let refusedPath = base.appendingPathComponent(".sync_refused")
+                    try? "low_space".write(to: refusedPath, atomically: true, encoding: .utf8)
+                    Task { @MainActor [weak self] in
+                        self?.isChecking = false
+                    }
+                    return
+                }
                 Task { @MainActor [weak self] in
                     self?.isChecking = false
                     guard let self else { return }
@@ -649,7 +660,7 @@ struct BackupView: View {
         switch advertiser.state {
         case .idle:                       return "Starting..."
         case .advertising(let name):      return "Advertising as \"\(name)\""
-        case .failed(let reason):         return "Network Discovery error: \(reason)"
+        case .failed:                     return "Network discovery unavailable"
         }
     }
 

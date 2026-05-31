@@ -81,9 +81,13 @@ final class BonjourAdvertiser: NSObject, ObservableObject {
         }
         let svc = NetService(domain: "", type: serviceType, name: advertisedName, port: 22)
         svc.delegate = self
-        // Publish destination folder in TXT record for Main to read
+        // Publish destination folder and free space in TXT record for Main to read
         let dest = ConfigStore.shared.config.destinationFolder
-        let txtData = NetService.data(fromTXTRecord: ["dest": dest.data(using: .utf8) ?? Data()])
+        let freeBytes = Self.getFreeSpace(path: dest)
+        let txtData = NetService.data(fromTXTRecord: [
+            "dest": dest.data(using: .utf8) ?? Data(),
+            "free": String(freeBytes).data(using: .utf8) ?? Data()
+        ])
         svc.setTXTRecord(txtData)
         // Schedule on the background thread's runloop, not main
         if let runLoop = bonjourRunLoop {
@@ -115,6 +119,11 @@ final class BonjourAdvertiser: NSObject, ObservableObject {
             self?.state = .idle
         }
     }
+    static func getFreeSpace(path: String) -> Int64 {
+        let url = URL(fileURLWithPath: path)
+        let values = try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        return values?.volumeAvailableCapacityForImportantUsage ?? 0
+    }
 }
 
 extension BonjourAdvertiser: NetServiceDelegate {
@@ -130,7 +139,7 @@ extension BonjourAdvertiser: NetServiceDelegate {
         let code = errorDict[NetService.errorCode]?.intValue ?? -1
         NSLog("[Bonjour] publish failed: code=%d", code)
         DispatchQueue.main.async { [weak self] in
-            self?.state = .failed(reason: "Error \(code)")
+            self?.state = .failed(reason: "Couldn't advertise on the network")
         }
     }
 }
@@ -142,6 +151,7 @@ struct DiscoveredBackup: Identifiable, Equatable {
     let hostname: String    // display label
     let resolvedIP: String  // IPv4 used for SSH
     let destinationPath: String  // Backup's receive folder (from TXT record, default ~/Sync)
+    let freeSpaceBytes: Int64    // Backup's free space (from TXT record, 0 if unknown)
 }
 
 enum BrowserState: Equatable {
@@ -270,7 +280,7 @@ extension BonjourBrowser: NetServiceBrowserDelegate {
         let code = errorDict[NetService.errorCode]?.intValue ?? -1
         NSLog("[Bonjour] browse failed: code=%d", code)
         Task { @MainActor [weak self] in
-            self?.state = .failed(reason: "Error \(code)")
+            self?.state = .failed(reason: "Couldn't search the network")
         }
     }
 }
@@ -283,12 +293,16 @@ extension BonjourBrowser: NetServiceDelegate {
         let host = (sender.hostName ?? name)
             .replacingOccurrences(of: ".local.", with: "")
             .replacingOccurrences(of: ".local", with: "")
-        // Parse destination folder from TXT record (default ~/Sync)
+        // Parse destination folder and free space from TXT record
         var destPath = "~/Sync"
+        var freeBytes: Int64 = 0
         if let txtData = sender.txtRecordData() {
             let dict = NetService.dictionary(fromTXTRecord: txtData)
             if let destData = dict["dest"], let str = String(data: destData, encoding: .utf8), !str.isEmpty {
                 destPath = str
+            }
+            if let freeData = dict["free"], let str = String(data: freeData, encoding: .utf8), let val = Int64(str) {
+                freeBytes = val
             }
         }
 
@@ -310,7 +324,7 @@ extension BonjourBrowser: NetServiceDelegate {
         Task { @MainActor [weak self] in
             guard let self else { return }
             self.services.removeAll { $0.id == name }
-            self.services.append(DiscoveredBackup(id: name, hostname: host, resolvedIP: resolvedIP, destinationPath: destPath))
+            self.services.append(DiscoveredBackup(id: name, hostname: host, resolvedIP: resolvedIP, destinationPath: destPath, freeSpaceBytes: freeBytes))
             self.services.sort { $0.hostname.localizedCaseInsensitiveCompare($1.hostname) == .orderedAscending }
 
             // Auto-reconnect: match by name (primary) or IP (fallback for renamed Backup)
