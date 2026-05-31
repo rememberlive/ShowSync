@@ -941,9 +941,9 @@ struct SettingsView: View {
                             : advertiser.confirmedName
                         isEditingDiscoveryName = true
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.bordered)
                     .font(.system(size: 11))
-                    .foregroundColor(.blue)
+                    .tint(.blue)
                 }
             }
 
@@ -974,9 +974,9 @@ struct SettingsView: View {
                 .truncationMode(.middle)
             Spacer()
             Button("Change") { pickDestinationFolder() }
-                .buttonStyle(.plain)
+                .buttonStyle(.bordered)
                 .font(.system(size: 11))
-                .foregroundColor(.blue)
+                .tint(.blue)
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 12)
