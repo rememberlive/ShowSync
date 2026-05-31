@@ -273,8 +273,8 @@ final class ReceiveMonitor: ObservableObject {
             // Custom folder is available (or came back)
             usingFallback = false
             if wasFallback {
-                // Drive returned! Update Bonjour to advertise the real path again
-                BonjourAdvertiser.shared.restart()
+                // Drive returned! Update TXT in place (fast, no service restart)
+                BonjourAdvertiser.shared.updateTXTRecord()
             }
             return
         }
@@ -286,8 +286,8 @@ final class ReceiveMonitor: ObservableObject {
         if !isDefault {
             usingFallback = true
             if !wasFallback {
-                // Just started fallback - update Bonjour
-                BonjourAdvertiser.shared.restart()
+                // Just started fallback - update TXT in place (fast, no service restart)
+                BonjourAdvertiser.shared.updateTXTRecord()
             }
         } else {
             usingFallback = false

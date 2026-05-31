@@ -483,7 +483,8 @@ struct SettingsView: View {
             try Data().write(to: testFile)
             try FileManager.default.removeItem(at: testFile)
             store.config.destinationFolder = url.path
-            BonjourAdvertiser.shared.restart()
+            ReceiveMonitor.shared.validateDestination()  // Updates usingFallback state
+            BonjourAdvertiser.shared.updateTXTRecord()   // Fast TXT update (no restart)
         } catch {
             let alert = NSAlert()
             alert.messageText = "Can't back up to this folder"

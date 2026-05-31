@@ -108,6 +108,30 @@ final class BonjourAdvertiser: NSObject, ObservableObject {
         start()
     }
 
+    /// Update TXT record in place (fast) - use for destination/fallback/free-space changes
+    func updateTXTRecord() {
+        perform(#selector(updateTXTRecordOnThread), on: bonjourThread, with: nil, waitUntilDone: false)
+    }
+
+    @objc private func updateTXTRecordOnThread() {
+        guard let svc = service else {
+            // No service running - need full start instead
+            startPublishing()
+            return
+        }
+        // Rebuild TXT data with current values
+        let intendedDest = ConfigStore.shared.config.destinationFolder
+        let effectiveDest = ReceiveMonitor.shared.effectiveDestination
+        let freeBytes = Self.getFreeSpace(path: effectiveDest) ?? 0
+        let txtData = NetService.data(fromTXTRecord: [
+            "dest": intendedDest.data(using: .utf8) ?? Data(),
+            "effectiveDest": effectiveDest.data(using: .utf8) ?? Data(),
+            "free": String(freeBytes).data(using: .utf8) ?? Data()
+        ])
+        svc.setTXTRecord(txtData)
+        NSLog("[Bonjour] TXT record updated in place: dest=%@, effective=%@", intendedDest, effectiveDest)
+    }
+
     @objc private func stopPublishing() {
         if let svc = service {
             svc.stop()
