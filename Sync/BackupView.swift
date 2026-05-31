@@ -93,7 +93,8 @@ final class StorageMonitor: ObservableObject {
     }
 
     private func updateStorage() {
-        let attrs = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
+        let destPath = ConfigStore.shared.config.destinationFolder
+        let attrs = try? FileManager.default.attributesOfFileSystem(forPath: destPath)
         let free = attrs?[.systemFreeSize] as? Int64 ?? 0
         let gb = Double(free) / 1_073_741_824
         if gb >= 1.0 {
@@ -296,10 +297,11 @@ final class ReceiveMonitor: ObservableObject {
             }
 
             if fm.fileExists(atPath: startPath.path) {
-                // 2GB minimum free space check
-                let freeBytes = BonjourAdvertiser.getFreeSpace(path: base.path)
+                // 2GB minimum free space check — refuse ONLY on confirmed real value under 2GB
+                // nil = unknown = allow sync to proceed (never refuse on unknown)
                 let minFreeBytes: Int64 = 2 * 1024 * 1024 * 1024 // 2GB
-                if freeBytes < minFreeBytes {
+                if let freeBytes = BonjourAdvertiser.getFreeSpace(path: base.path),
+                   freeBytes < minFreeBytes {
                     let refusedPath = base.appendingPathComponent(".sync_refused")
                     try? "low_space".write(to: refusedPath, atomically: true, encoding: .utf8)
                     Task { @MainActor [weak self] in

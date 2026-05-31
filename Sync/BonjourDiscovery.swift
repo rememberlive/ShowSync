@@ -83,7 +83,7 @@ final class BonjourAdvertiser: NSObject, ObservableObject {
         svc.delegate = self
         // Publish destination folder and free space in TXT record for Main to read
         let dest = ConfigStore.shared.config.destinationFolder
-        let freeBytes = Self.getFreeSpace(path: dest)
+        let freeBytes = Self.getFreeSpace(path: dest) ?? 0  // 0 in TXT = unknown
         let txtData = NetService.data(fromTXTRecord: [
             "dest": dest.data(using: .utf8) ?? Data(),
             "free": String(freeBytes).data(using: .utf8) ?? Data()
@@ -119,10 +119,34 @@ final class BonjourAdvertiser: NSObject, ObservableObject {
             self?.state = .idle
         }
     }
-    static func getFreeSpace(path: String) -> Int64 {
+    static func getFreeSpace(path: String) -> Int64? {
         let url = URL(fileURLWithPath: path)
-        let values = try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
-        return values?.volumeAvailableCapacityForImportantUsage ?? 0
+
+        // Primary: volumeAvailableCapacityForImportantUsageKey
+        if let values = try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
+           let free = values.volumeAvailableCapacityForImportantUsage, free > 0 {
+            return free
+        }
+
+        // Fallback: FileManager attributesOfFileSystem on the path
+        if let attrs = try? FileManager.default.attributesOfFileSystem(forPath: path),
+           let free = attrs[.systemFreeSize] as? Int64, free > 0 {
+            return free
+        }
+
+        // Volume root fallback: if subfolder doesn't exist yet, query the volume root
+        // e.g. /Volumes/Protools/synctestdelete → /Volumes/Protools
+        var volumeRoot = url
+        while volumeRoot.path != "/" && volumeRoot.pathComponents.count > 2 {
+            volumeRoot = volumeRoot.deletingLastPathComponent()
+            if let attrs = try? FileManager.default.attributesOfFileSystem(forPath: volumeRoot.path),
+               let free = attrs[.systemFreeSize] as? Int64, free > 0 {
+                return free
+            }
+        }
+
+        // Unknown — return nil, NOT 0 (0 would falsely trigger "under 2GB" refusal)
+        return nil
     }
 }
 
