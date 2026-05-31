@@ -29,6 +29,15 @@ struct SettingsView: View {
     @State private var editingBackupName = ""
     @State private var renameState: RenameState = .idle
     @State private var renameGeneration: Int = 0
+    @State private var destinationCheckState: DestinationCheckState = .idle
+    @State private var hasConfirmedDestinationThisConnection = false
+
+    private enum DestinationCheckState: Equatable {
+        case idle
+        case checking
+        case confirmed
+        case failed
+    }
 
     private enum RenameState: Equatable {
         case idle
@@ -256,11 +265,27 @@ struct SettingsView: View {
         .onChange(of: store.config.destinationIP) { _ in
             Task { @MainActor in
                 sshConnectionState = .notConnected
+                hasConfirmedDestinationThisConnection = false
+                destinationCheckState = .idle
             }
         }
         .onChange(of: store.config.username) { _ in
             Task { @MainActor in
                 sshConnectionState = .notConnected
+                hasConfirmedDestinationThisConnection = false
+                destinationCheckState = .idle
+            }
+        }
+        .onChange(of: sshConnectionState) { newState in
+            // Manual mode: confirm destination on reconnect (transition INTO .connected)
+            if newState == .connected && !isAutomatic && !hasConfirmedDestinationThisConnection {
+                hasConfirmedDestinationThisConnection = true
+                confirmBackupDestination()
+            }
+            // Reset flag when connection drops
+            if newState == .notConnected || newState == .failed {
+                hasConfirmedDestinationThisConnection = false
+                destinationCheckState = .idle
             }
         }
         .onChange(of: localDiscoveryMode) { _ in
@@ -647,7 +672,25 @@ struct SettingsView: View {
         if isAutomatic {
             discoveredBackupsList
                 .padding(.horizontal, 20)
+                .padding(.bottom, 4)
+            // Auto mode: show live destination from TXT record (non-editable)
+            if !store.config.destinationIP.isEmpty {
+                HStack {
+                    Text("FOLDER")
+                        .font(.system(size: 11))
+                        .foregroundColor(labelColor)
+                    Spacer()
+                    Text(store.config.backupDestination.isEmpty ? "~/Sync" : store.config.backupDestination)
+                        .font(.system(size: 11))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .padding(.horizontal, 20)
                 .padding(.bottom, 12)
+            } else {
+                Spacer().frame(height: 8)
+            }
         } else {
             VStack(spacing: 8) {
                 HStack {
@@ -665,6 +708,42 @@ struct SettingsView: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 100)
                     .multilineTextAlignment(.trailing)
+                }
+                // Manual mode: Confirm Destination button + status
+                if !store.config.destinationIP.isEmpty {
+                    HStack {
+                        Text("FOLDER")
+                            .font(.system(size: 11))
+                            .foregroundColor(labelColor)
+                        Spacer()
+                        switch destinationCheckState {
+                        case .idle:
+                            Button("Confirm Destination") { confirmBackupDestination() }
+                                .buttonStyle(.bordered)
+                                .font(.system(size: 11))
+                                .tint(.blue)
+                        case .checking:
+                            Text("Checking...")
+                                .font(.system(size: 11))
+                                .foregroundColor(labelColor)
+                        case .confirmed:
+                            Text(store.config.backupDestination.isEmpty ? "~/Sync" : store.config.backupDestination)
+                                .font(.system(size: 11))
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        case .failed:
+                            VStack(alignment: .trailing, spacing: 2) {
+                                Text(store.config.backupDestination.isEmpty ? "~/Sync" : store.config.backupDestination)
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.white)
+                                    .lineLimit(1)
+                                Text("Couldn't confirm — using last known")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(labelColor)
+                            }
+                        }
+                    }
                 }
             }
             .padding(.horizontal, 20)
@@ -1054,6 +1133,49 @@ struct SettingsView: View {
                 NSLog("[Sync] live SSH test launch failed: %@", error.localizedDescription)
                 Task { @MainActor in
                     sshConnectionState = .failed
+                }
+            }
+        }
+    }
+
+    private func confirmBackupDestination() {
+        let username = store.config.username
+        let ip = store.config.destinationIP
+        guard !username.isEmpty, !ip.isEmpty else { return }
+        destinationCheckState = .checking
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        proc.arguments = [
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=3",
+            "-o", "StrictHostKeyChecking=no",
+            "\(username)@\(ip)",
+            "cat '$HOME/Library/Application Support/Sync/config_backup.json' 2>/dev/null || echo '{}'"
+        ]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        proc.terminationHandler = { [weak store] p in
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            Task { @MainActor in
+                guard let store else { return }
+                if p.terminationStatus == 0,
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let dest = json["destinationFolder"] as? String, !dest.isEmpty {
+                    store.config.backupDestination = dest
+                    destinationCheckState = .confirmed
+                } else {
+                    destinationCheckState = .failed
+                }
+            }
+        }
+        DispatchQueue.global(qos: .utility).async {
+            do {
+                try proc.run()
+            } catch {
+                NSLog("[Sync] destination confirm SSH failed: %@", error.localizedDescription)
+                Task { @MainActor in
+                    destinationCheckState = .failed
                 }
             }
         }
