@@ -991,7 +991,9 @@ struct MainView: View {
         } else if viewState == .confirmQuit {
             InlineConfirm(
                 title: "Quit Sync?",
-                message: "Any sync in progress will stop.",
+                message: isSyncing
+                    ? "A backup is in progress and will be interrupted."
+                    : "Any sync in progress will stop.",
                 confirmLabel: "Quit",
                 confirmColor: .red,
                 onCancel: {
@@ -1000,6 +1002,7 @@ struct MainView: View {
                 },
                 onConfirm: {
                     store.pendingQuitConfirm = false
+                    if isSyncing { engine.cancel() }  // Clean up signal files before quit
                     (NSApp.delegate as? AppDelegate)?.quitConfirmed = true
                     NSApp.terminate(nil)
                 }
@@ -1253,9 +1256,7 @@ struct MainView: View {
                 Button("Quit") { viewState = .confirmQuit }
                     .buttonStyle(.plain)
                     .font(.system(size: 12))
-                    .foregroundColor(isSyncing ? Color(white: 0.25) : Color(white: 0.5))
-                    .disabled(isSyncing)
-                    .help(isSyncing ? "Cancel sync first" : "")
+                    .foregroundColor(Color(white: 0.5))
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 6)

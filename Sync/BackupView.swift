@@ -440,7 +440,9 @@ struct BackupView: View {
         if showQuitConfirm {
             InlineConfirm(
                 title: "Quit Sync?",
-                message: "Any sync in progress will stop.",
+                message: isReceiving
+                    ? "A backup is in progress and will be interrupted."
+                    : "Any sync in progress will stop.",
                 confirmLabel: "Quit",
                 confirmColor: .red,
                 onCancel: {
@@ -449,6 +451,7 @@ struct BackupView: View {
                 },
                 onConfirm: {
                     store.pendingQuitConfirm = false
+                    receiveMonitor.clearStaleSignalFiles()  // Clean up before quit
                     (NSApp.delegate as? AppDelegate)?.quitConfirmed = true
                     NSApp.terminate(nil)
                 }
@@ -639,9 +642,7 @@ struct BackupView: View {
                 Button("Quit") { showQuitConfirm = true }
                     .buttonStyle(.plain)
                     .font(.system(size: 12))
-                    .foregroundColor(isReceiving ? Color(white: 0.25) : Color(white: 0.5))
-                    .disabled(isReceiving)
-                    .help(isReceiving ? "Transfer in progress" : "")
+                    .foregroundColor(Color(white: 0.5))
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 6)
