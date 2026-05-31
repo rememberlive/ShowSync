@@ -315,12 +315,32 @@ struct SettingsView: View {
                 Text("Bonjour error: \(reason)")
                     .font(.system(size: 11))
                     .foregroundColor(.red)
-            } else if bonjourBrowser.services.isEmpty {
+            } else if bonjourBrowser.services.isEmpty && store.config.destinationIP.isEmpty {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
                     Text("Searching for Backup Macs...")
                         .font(.system(size: 12))
                         .foregroundColor(labelColor)
+                }
+                .padding(.vertical, 2)
+            } else if bonjourBrowser.services.isEmpty {
+                // Fallback: live discovery empty but a saved connection exists — show it
+                let savedName = store.config.lastBackupDiscoveryName.isEmpty
+                    ? store.config.backupHostname
+                    : store.config.lastBackupDiscoveryName
+                HStack(spacing: 8) {
+                    Image(systemName: "largecircle.fill.circle")
+                        .font(.system(size: 12))
+                        .foregroundColor(.blue)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(savedName.isEmpty ? "Saved Backup" : savedName)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.white)
+                        Text(store.config.destinationIP)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(labelColor)
+                    }
+                    Spacer()
                 }
                 .padding(.vertical, 2)
             } else {
