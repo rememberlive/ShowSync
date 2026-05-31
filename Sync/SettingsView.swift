@@ -31,6 +31,7 @@ struct SettingsView: View {
     @State private var renameGeneration: Int = 0
     @State private var destinationCheckState: DestinationCheckState = .idle
     @State private var hasConfirmedDestinationThisConnection = false
+    @State private var manualModeFreeSpace: Int64 = 0  // Free space read via SSH for manual mode
 
     private enum DestinationCheckState: Equatable {
         case idle
@@ -750,11 +751,18 @@ struct SettingsView: View {
                                 .foregroundColor(labelColor)
                         case .confirmed:
                             HStack(spacing: 6) {
-                                Text(store.config.backupDestination.isEmpty ? "~/Sync" : store.config.backupDestination)
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.white)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
+                                VStack(alignment: .trailing, spacing: 2) {
+                                    Text(store.config.backupDestination.isEmpty ? "~/Sync" : store.config.backupDestination)
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.white)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                    if manualModeFreeSpace > 0 {
+                                        Text("\(formatBytes(manualModeFreeSpace)) free")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(labelColor)
+                                    }
+                                }
                                 Button { confirmBackupDestination() } label: {
                                     Image(systemName: "arrow.clockwise")
                                         .font(.system(size: 10))
@@ -1179,6 +1187,7 @@ struct SettingsView: View {
         let ip = store.config.destinationIP
         guard !username.isEmpty, !ip.isEmpty else { return }
         destinationCheckState = .checking
+        // Read config and free space in one SSH call
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         proc.arguments = [
@@ -1200,6 +1209,8 @@ struct SettingsView: View {
                    let dest = json["destinationFolder"] as? String, !dest.isEmpty {
                     store.config.backupDestination = dest
                     destinationCheckState = .confirmed
+                    // Now read free space for that destination
+                    readManualModeFreeSpace(username: username, ip: ip, remotePath: dest)
                 } else {
                     destinationCheckState = .failed
                 }
@@ -1213,6 +1224,37 @@ struct SettingsView: View {
                 Task { @MainActor in
                     destinationCheckState = .failed
                 }
+            }
+        }
+    }
+
+    private func readManualModeFreeSpace(username: String, ip: String, remotePath: String) {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        proc.arguments = [
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=3",
+            "-o", "StrictHostKeyChecking=no",
+            "\(username)@\(ip)",
+            "df -k \"\(remotePath)\" 2>/dev/null | awk 'NR==2 {print $4}'"
+        ]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        proc.terminationHandler = { p in
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            Task { @MainActor in
+                if p.terminationStatus == 0, let kb = Int64(output) {
+                    manualModeFreeSpace = kb * 1024  // Convert KB to bytes
+                }
+            }
+        }
+        DispatchQueue.global(qos: .utility).async {
+            do {
+                try proc.run()
+            } catch {
+                NSLog("[Sync] free space read failed: %@", error.localizedDescription)
             }
         }
     }

@@ -74,6 +74,8 @@ final class SyncEngine: ObservableObject {
     @Published var lastSyncTime: Date?
     @Published var dryRunResult: DryRunResult? = nil
     @Published var syncProgress: SyncProgress? = nil
+    @Published var fallbackNotice: String? = nil  // Calm notice when fallback to ~/Sync
+    @Published var lowSpaceNotice: String? = nil  // Notice when Backup refuses due to low space
 
     // Auto Sync - Independent timer system
     @Published var nextAutoSyncDate: Date?
@@ -187,8 +189,56 @@ final class SyncEngine: ObservableObject {
                 self.syncTotalFiles = fileCount
                 self.expectedSize   = totalBytes
                 self.syncStartTime  = Date()
-                self.status         = .syncing
-                self.writeSyncStart(totalBytes: totalBytes, totalFiles: fileCount)
+                self.fallbackNotice = nil
+                self.lowSpaceNotice = nil
+
+                // Sync-time write-test: verify destination is writable before sync
+                let originalRemotePath = self.syncRemotePath
+                self.runSyncTimeWriteTest(username: config.username, ip: config.destinationIP, remotePath: originalRemotePath) { [weak self] result, _ in
+                    guard let self else { return }
+                    switch result {
+                    case .writable:
+                        // Destination is writable, proceed normally
+                        break
+                    case .unwritable:
+                        // Fall back to ~/Sync
+                        self.syncRemotePath = "~/Sync"
+                        self.fallbackNotice = "Couldn't write to the chosen folder — backing up to the default Sync folder instead."
+                        NSLog("[Sync] Destination unwritable, falling back to ~/Sync")
+                    case .testFailed:
+                        // SSH error — don't block, proceed with original path
+                        NSLog("[Sync] Write-test failed (SSH error), proceeding anyway")
+                    }
+                    self.continueSyncAfterWriteTest(config: config, totalBytes: totalBytes, fileCount: fileCount, dryRunOutput: output)
+                }
+            }
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                try prepProc.run()
+            } catch {
+                NSLog("[Prepare] rsync launch failed: %@", error.localizedDescription)
+                Task { @MainActor [weak self] in
+                    self?.handleRsyncLaunchFailure()
+                }
+            }
+        }
+    }
+
+    private func continueSyncAfterWriteTest(config: Config, totalBytes: Int64, fileCount: Int, dryRunOutput: String) {
+        status = .syncing
+        writeSyncStart(totalBytes: totalBytes, totalFiles: fileCount)
+
+        // Rebuild dest with potentially updated syncRemotePath
+        let rawSource = config.sourceFolder.hasPrefix("~")
+            ? (NSHomeDirectory() as NSString).appendingPathComponent(String(config.sourceFolder.dropFirst()))
+            : config.sourceFolder
+        let source = rawSource.hasSuffix("/") ? rawSource : rawSource + "/"
+        let dest = "\(syncUsername)@\(syncIP):\(syncRemotePath)/"
+
+        let rsyncCandidates = ["/opt/homebrew/bin/rsync", "/usr/local/bin/rsync", "/usr/bin/rsync"]
+        let rsyncPath = rsyncCandidates.first { FileManager.default.fileExists(atPath: $0) } ?? "/usr/bin/rsync"
 
                 let launchRsync = { [weak self] in
                     guard let self else { return }
@@ -205,27 +255,43 @@ final class SyncEngine: ObservableObject {
                             NSLog("[Sync] exit %d", p.terminationStatus)
                         }
                         Task { @MainActor [weak self] in
-                            self?.stopDuPolling()
-                            self?.syncProgress = nil
+                            guard let self else { return }
+                            self.stopDuPolling()
+                            self.syncProgress = nil
                             ConfigStore.shared.isSyncing = false
-                            if p.terminationStatus == 0 {
-                                let duration = Int(Date().timeIntervalSince(self?.syncStartTime ?? Date()))
-                                self?.lastSyncTime = Date()
-                                ConfigStore.shared.config.sshKeysConfigured = true
-                                ConfigStore.shared.iconState = .success
-                                self?.status = .done
-                                self?.writeSyncComplete(
-                                    totalFiles: self?.syncTotalFiles ?? 0,
-                                    totalBytes: self?.expectedSize   ?? 0,
-                                    duration:   duration)
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
-                                    guard self?.status == .done else { return }
-                                    self?.status = .ready
+
+                            // Check for .sync_refused (Backup low on space)
+                            self.checkSyncRefused(username: self.syncUsername, ip: self.syncIP, remotePath: self.syncRemotePath) { [weak self] refused in
+                                guard let self else { return }
+                                if refused {
+                                    self.lowSpaceNotice = "Not enough space on the backup drive (under 2 GB free). Free up space to resume backups."
+                                    self.status = .error("Backup drive low on space")
+                                    ConfigStore.shared.iconState = .error
+                                    return
                                 }
-                            } else {
-                                self?.cleanupSignalFiles()
-                                self?.status = .error("Sync interrupted — files may be incomplete")
-                                ConfigStore.shared.iconState = .error
+
+                                if p.terminationStatus == 0 {
+                                    let duration = Int(Date().timeIntervalSince(self.syncStartTime))
+                                    self.lastSyncTime = Date()
+                                    ConfigStore.shared.config.sshKeysConfigured = true
+                                    ConfigStore.shared.iconState = .success
+                                    self.status = .done
+                                    self.writeSyncComplete(
+                                        totalFiles: self.syncTotalFiles,
+                                        totalBytes: self.expectedSize,
+                                        duration:   duration)
+                                    // Clear any stale .sync_refused on success
+                                    self.clearSyncRefused()
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                                        guard self?.status == .done else { return }
+                                        self?.status = .ready
+                                        self?.fallbackNotice = nil
+                                    }
+                                } else {
+                                    self.cleanupSignalFiles()
+                                    self.status = .error("Sync interrupted — files may be incomplete")
+                                    ConfigStore.shared.iconState = .error
+                                }
                             }
                         }
                     }
@@ -244,34 +310,21 @@ final class SyncEngine: ObservableObject {
                     }
                 }
 
-                if config.versionHistoryEnabled && fileCount > 0 {
-                    let changedFiles = Self.parseChangedFiles(output)
-                    if !changedFiles.isEmpty {
-                        self.runVersioning(
-                            files: changedFiles,
-                            username: config.username,
-                            ip: config.destinationIP,
-                            maxVersionCount: config.maxVersionCount,
-                            completion: launchRsync
-                        )
-                    } else {
-                        launchRsync()
-                    }
-                } else {
-                    launchRsync()
-                }
+        if config.versionHistoryEnabled && fileCount > 0 {
+            let changedFiles = Self.parseChangedFiles(dryRunOutput)
+            if !changedFiles.isEmpty {
+                runVersioning(
+                    files: changedFiles,
+                    username: config.username,
+                    ip: config.destinationIP,
+                    maxVersionCount: config.maxVersionCount,
+                    completion: launchRsync
+                )
+            } else {
+                launchRsync()
             }
-        }
-
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            do {
-                try prepProc.run()
-            } catch {
-                NSLog("[Prepare] rsync launch failed: %@", error.localizedDescription)
-                Task { @MainActor [weak self] in
-                    self?.handleRsyncLaunchFailure()
-                }
-            }
+        } else {
+            launchRsync()
         }
     }
 
@@ -501,6 +554,106 @@ final class SyncEngine: ObservableObject {
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError  = FileHandle.nullDevice
         DispatchQueue.global(qos: .utility).async { try? proc.run() }
+    }
+
+    // MARK: - Sync-time write-test with fallback
+
+    enum WriteTestResult {
+        case writable
+        case unwritable   // clear failure — folder gone or permission denied
+        case testFailed   // SSH error — don't block, proceed with sync
+    }
+
+    private func runSyncTimeWriteTest(
+        username: String,
+        ip: String,
+        remotePath: String,
+        completion: @escaping (WriteTestResult, String) -> Void
+    ) {
+        let testFile = "\(remotePath)/.sync_writetest_\(Int.random(in: 1000...9999))"
+        let cmd = "touch \(testFile) && rm -f \(testFile) && echo OK || echo FAIL"
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        proc.arguments = [
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=2",
+            "-o", "StrictHostKeyChecking=no",
+            "\(username)@\(ip)",
+            cmd
+        ]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        proc.terminationHandler = { p in
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            Task { @MainActor in
+                if p.terminationStatus != 0 {
+                    completion(.testFailed, remotePath)
+                } else if output.contains("OK") {
+                    completion(.writable, remotePath)
+                } else {
+                    completion(.unwritable, remotePath)
+                }
+            }
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try proc.run()
+            } catch {
+                NSLog("[Sync] write-test launch failed: %@", error.localizedDescription)
+                Task { @MainActor in
+                    completion(.testFailed, remotePath)
+                }
+            }
+        }
+    }
+
+    // MARK: - .sync_refused detection
+
+    private func checkSyncRefused(
+        username: String,
+        ip: String,
+        remotePath: String,
+        completion: @escaping (Bool) -> Void
+    ) {
+        let refusedPath = "\(remotePath)/.sync_refused"
+        let cmd = "test -f \(refusedPath) && echo YES || echo NO"
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        proc.arguments = [
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=2",
+            "-o", "StrictHostKeyChecking=no",
+            "\(username)@\(ip)",
+            cmd
+        ]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        proc.terminationHandler = { p in
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            Task { @MainActor in
+                completion(output.contains("YES"))
+            }
+        }
+        DispatchQueue.global(qos: .utility).async {
+            do {
+                try proc.run()
+            } catch {
+                NSLog("[Sync] sync_refused check failed: %@", error.localizedDescription)
+                Task { @MainActor in
+                    completion(false)
+                }
+            }
+        }
+    }
+
+    private func clearSyncRefused() {
+        sshWrite("rm -f \(syncRemotePath)/.sync_refused")
     }
 
     // MARK: - Auto sync
@@ -998,6 +1151,28 @@ struct MainView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 20)
                     .padding(.vertical, 10)
+            }
+
+            // Fallback notice (destination unwritable, fell back to ~/Sync)
+            if let notice = engine.fallbackNotice {
+                Divider()
+                Text(notice)
+                    .font(.system(size: 11))
+                    .foregroundColor(.yellow)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 8)
+            }
+
+            // Low space notice (Backup refused due to <2GB free)
+            if let notice = engine.lowSpaceNotice {
+                Divider()
+                Text(notice)
+                    .font(.system(size: 11))
+                    .foregroundColor(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 8)
             }
 
             Divider()
