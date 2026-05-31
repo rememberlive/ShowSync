@@ -81,11 +81,13 @@ final class BonjourAdvertiser: NSObject, ObservableObject {
         }
         let svc = NetService(domain: "", type: serviceType, name: advertisedName, port: 22)
         svc.delegate = self
-        // Publish EFFECTIVE destination (actual writable path) in TXT record for Main to read
-        let dest = ReceiveMonitor.shared.effectiveDestination
-        let freeBytes = Self.getFreeSpace(path: dest) ?? 0  // 0 in TXT = unknown
+        // Publish both paths so Main can display badge when drive unavailable
+        let intendedDest = ConfigStore.shared.config.destinationFolder  // User's chosen path
+        let effectiveDest = ReceiveMonitor.shared.effectiveDestination   // Where files actually go
+        let freeBytes = Self.getFreeSpace(path: effectiveDest) ?? 0      // Free space on effective path
         let txtData = NetService.data(fromTXTRecord: [
-            "dest": dest.data(using: .utf8) ?? Data(),
+            "dest": intendedDest.data(using: .utf8) ?? Data(),           // For display (may be unavailable)
+            "effectiveDest": effectiveDest.data(using: .utf8) ?? Data(), // For sync + free space
             "free": String(freeBytes).data(using: .utf8) ?? Data()
         ])
         svc.setTXTRecord(txtData)
@@ -174,8 +176,13 @@ struct DiscoveredBackup: Identifiable, Equatable {
     let id: String          // NetService.name — unique per host on the LAN
     let hostname: String    // display label
     let resolvedIP: String  // IPv4 used for SSH
-    let destinationPath: String  // Backup's receive folder (from TXT record, default ~/Sync)
-    let freeSpaceBytes: Int64    // Backup's free space (from TXT record, 0 if unknown)
+    let destinationPath: String       // Backup's intended folder (user's choice, may be unavailable)
+    let effectiveDestinationPath: String  // Where files actually go (~/Sync when drive unavailable)
+    let freeSpaceBytes: Int64         // Backup's free space on effective path (0 if unknown)
+
+    var isUsingFallback: Bool {
+        !effectiveDestinationPath.isEmpty && effectiveDestinationPath != destinationPath
+    }
 }
 
 enum BrowserState: Equatable {
@@ -318,12 +325,18 @@ extension BonjourBrowser: NetServiceDelegate {
             .replacingOccurrences(of: ".local.", with: "")
             .replacingOccurrences(of: ".local", with: "")
         // Parse destination folder and free space from TXT record
-        var destPath = "~/Sync"
+        var destPath = "~/Sync"           // User's intended destination
+        var effectivePath = "~/Sync"      // Where files actually go
         var freeBytes: Int64 = 0
         if let txtData = sender.txtRecordData() {
             let dict = NetService.dictionary(fromTXTRecord: txtData)
             if let destData = dict["dest"], let str = String(data: destData, encoding: .utf8), !str.isEmpty {
                 destPath = str
+            }
+            if let effectiveData = dict["effectiveDest"], let str = String(data: effectiveData, encoding: .utf8), !str.isEmpty {
+                effectivePath = str
+            } else {
+                effectivePath = destPath  // Fallback for older Backup versions
             }
             if let freeData = dict["free"], let str = String(data: freeData, encoding: .utf8), let val = Int64(str) {
                 freeBytes = val
@@ -348,7 +361,7 @@ extension BonjourBrowser: NetServiceDelegate {
         Task { @MainActor [weak self] in
             guard let self else { return }
             self.services.removeAll { $0.id == name }
-            self.services.append(DiscoveredBackup(id: name, hostname: host, resolvedIP: resolvedIP, destinationPath: destPath, freeSpaceBytes: freeBytes))
+            self.services.append(DiscoveredBackup(id: name, hostname: host, resolvedIP: resolvedIP, destinationPath: destPath, effectiveDestinationPath: effectivePath, freeSpaceBytes: freeBytes))
             self.services.sort { $0.hostname.localizedCaseInsensitiveCompare($1.hostname) == .orderedAscending }
 
             // Auto-reconnect: match by name (primary) or IP (fallback for renamed Backup)

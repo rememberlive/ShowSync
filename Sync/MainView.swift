@@ -123,7 +123,12 @@ final class SyncEngine: ObservableObject {
         syncTotalFiles = 0
         syncUsername   = config.username
         syncIP         = config.destinationIP
-        syncRemotePath = config.backupDestination.isEmpty ? "~/Sync" : config.backupDestination
+        // If usingFallback already set (from manual mode config read), sync to ~/Sync directly
+        if usingFallback {
+            syncRemotePath = "~/Sync"
+        } else {
+            syncRemotePath = config.backupDestination.isEmpty ? "~/Sync" : config.backupDestination
+        }
 
         let rawSource = config.sourceFolder.hasPrefix("~")
             ? (NSHomeDirectory() as NSString).appendingPathComponent(String(config.sourceFolder.dropFirst()))

@@ -376,12 +376,14 @@ struct SettingsView: View {
                             || store.config.backupHostname != service.hostname {
                             store.config.destinationIP   = service.resolvedIP
                             store.config.backupHostname  = service.hostname
-                            store.config.backupDestination = service.destinationPath
+                            store.config.backupDestination = service.destinationPath  // Intended path for display
                             store.config.sshKeysConfigured = false
                             // Save for auto-reconnect on subsequent discoveries
                             store.config.lastBackupDiscoveryName = service.id
                             store.config.lastBackupIP = service.resolvedIP
                         }
+                        // Set fallback state from discovered service
+                        SyncEngine.shared.usingFallback = service.isUsingFallback
                     } label: {
                         HStack(spacing: 8) {
                             Image(systemName: service.resolvedIP == store.config.destinationIP
@@ -704,10 +706,16 @@ struct SettingsView: View {
                         .foregroundColor(labelColor)
                     Spacer()
                     if SyncEngine.shared.usingFallback {
-                        Text("~/Sync (drive unavailable)")
-                            .font(.system(size: 11))
-                            .foregroundColor(.orange)
-                            .lineLimit(1)
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text("\(store.config.backupDestination) (drive unavailable)")
+                                .font(.system(size: 11))
+                                .foregroundColor(.orange)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Text("Syncing to ~/Sync")
+                                .font(.system(size: 10))
+                                .foregroundColor(.orange)
+                        }
                     } else {
                         Text(store.config.backupDestination.isEmpty ? "~/Sync" : store.config.backupDestination)
                             .font(.system(size: 11))
@@ -760,21 +768,25 @@ struct SettingsView: View {
                             HStack(spacing: 6) {
                                 VStack(alignment: .trailing, spacing: 2) {
                                     if SyncEngine.shared.usingFallback {
-                                        Text("~/Sync (drive unavailable)")
+                                        Text("\(store.config.backupDestination) (drive unavailable)")
                                             .font(.system(size: 11))
                                             .foregroundColor(.orange)
                                             .lineLimit(1)
+                                            .truncationMode(.middle)
+                                        Text("Syncing to ~/Sync")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(.orange)
                                     } else {
                                         Text(store.config.backupDestination.isEmpty ? "~/Sync" : store.config.backupDestination)
                                             .font(.system(size: 11))
                                             .foregroundColor(.white)
                                             .lineLimit(1)
                                             .truncationMode(.middle)
-                                    }
-                                    if manualModeFreeSpace > 0 && !SyncEngine.shared.usingFallback {
-                                        Text("\(formatBytes(manualModeFreeSpace)) free")
-                                            .font(.system(size: 10))
-                                            .foregroundColor(labelColor)
+                                        if manualModeFreeSpace > 0 {
+                                            Text("\(formatBytes(manualModeFreeSpace)) free")
+                                                .font(.system(size: 10))
+                                                .foregroundColor(labelColor)
+                                        }
                                     }
                                 }
                                 Button { confirmBackupDestination() } label: {
@@ -788,17 +800,19 @@ struct SettingsView: View {
                             HStack(spacing: 6) {
                                 VStack(alignment: .trailing, spacing: 2) {
                                     if SyncEngine.shared.usingFallback {
-                                        Text("~/Sync (drive unavailable)")
+                                        Text("\(store.config.backupDestination) (drive unavailable)")
                                             .font(.system(size: 11))
                                             .foregroundColor(.orange)
                                             .lineLimit(1)
+                                            .truncationMode(.middle)
+                                        Text("Syncing to ~/Sync")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(.orange)
                                     } else {
                                         Text(store.config.backupDestination.isEmpty ? "~/Sync" : store.config.backupDestination)
                                             .font(.system(size: 11))
                                             .foregroundColor(.white)
                                             .lineLimit(1)
-                                    }
-                                    if !SyncEngine.shared.usingFallback {
                                         Text("Couldn't confirm — using last known")
                                             .font(.system(size: 10))
                                             .foregroundColor(labelColor)
@@ -1245,10 +1259,17 @@ struct SettingsView: View {
                 if p.terminationStatus == 0,
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let dest = json["destinationFolder"] as? String, !dest.isEmpty {
+                    // destinationFolder = user's chosen intent (for display)
                     store.config.backupDestination = dest
+
+                    // effectivePath = where files actually go (for sync + free space)
+                    let effectivePath = (json["effectivePath"] as? String) ?? dest
+                    let isFallback = !effectivePath.isEmpty && effectivePath != dest
+                    SyncEngine.shared.usingFallback = isFallback
+
                     destinationCheckState = .confirmed
-                    // Now read free space for that destination
-                    readManualModeFreeSpace(username: username, ip: ip, remotePath: dest)
+                    // Read free space for EFFECTIVE destination (reality, not intent)
+                    readManualModeFreeSpace(username: username, ip: ip, remotePath: effectivePath)
                 } else {
                     destinationCheckState = .failed
                 }

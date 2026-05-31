@@ -90,6 +90,7 @@ private struct MainConfig: Codable {
 private struct BackupConfig: Codable {
     var mainIP: String = ""
     var destinationFolder: String = (NSHomeDirectory() as NSString).appendingPathComponent("Sync")
+    var effectivePath: String = ""  // Actual path being used (~/Sync when drive unavailable)
     var launchAtLogin: Bool = false
     var lastReceivedTime: Date? = nil
     var discoveryMode: String = "automatic"
@@ -229,6 +230,7 @@ final class ConfigStore: ObservableObject {
             let b = BackupConfig(
                 mainIP:            config.mainIP,
                 destinationFolder: config.destinationFolder,
+                effectivePath:     ReceiveMonitor.shared.effectiveDestination,
                 launchAtLogin:     config.launchAtLogin,
                 lastReceivedTime:  config.lastReceivedTime,
                 discoveryMode:     config.discoveryMode,
