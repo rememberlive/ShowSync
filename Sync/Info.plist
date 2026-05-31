@@ -32,6 +32,12 @@
 	<string></string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Sync uses Bonjour on your local network to find Backup Macs.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Sync needs access so you can choose a source or backup destination folder on your Desktop.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Sync needs access so you can choose a source or backup destination folder in Documents.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Sync needs access so you can choose a source or backup destination folder in Downloads.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>
