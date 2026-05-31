@@ -674,7 +674,7 @@ struct SettingsView: View {
         // Remote rename section (automatic mode + Backup selected)
         if isAutomatic && !store.config.destinationIP.isEmpty {
             Divider()
-            sectionHeader("BACKUP Name")
+            sectionHeader("CHANGE BACKUP NAME")
             VStack(spacing: 8) {
                 HStack {
                     if isEditingBackupName {
@@ -699,13 +699,13 @@ struct SettingsView: View {
                                 .foregroundColor(store.config.lastBackupDiscoveryName.isEmpty ? labelColor : .white)
                                 .lineLimit(1)
                             Spacer()
-                            Button("Edit") {
+                            Button("Rename") {
                                 editingBackupName = store.config.lastBackupDiscoveryName
                                 isEditingBackupName = true
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(.bordered)
                             .font(.system(size: 11))
-                            .foregroundColor(.blue)
+                            .tint(.blue)
                         case .pending:
                             Text("\(editingBackupName)...")
                                 .font(.system(size: 12))
