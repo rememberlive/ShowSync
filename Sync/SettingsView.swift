@@ -440,6 +440,8 @@ struct SettingsView: View {
 
     private var displayedDiscoveryName: String {
         if !advertiser.confirmedName.isEmpty { return advertiser.confirmedName }
+        let customName = store.config.networkDiscoveryName
+        if !customName.isEmpty { return customName }
         return ProcessInfo.processInfo.hostName.replacingOccurrences(of: ".local", with: "")
     }
 
