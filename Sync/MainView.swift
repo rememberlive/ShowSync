@@ -137,10 +137,14 @@ final class SyncEngine: ObservableObject {
         let source = rawSource.hasSuffix("/") ? rawSource : rawSource + "/"
         let dest   = "\(syncUsername)@\(syncIP):\(syncRemotePath)/"
 
+        let mode = config.discoveryMode
+        NSLog("[SyncTrace] 1 sync requested, mode=%@, remotePath='%@', dest='%@', usingFallback=%d", mode, syncRemotePath, dest, usingFallback ? 1 : 0)
+
         let rsyncCandidates = ["/opt/homebrew/bin/rsync", "/usr/local/bin/rsync", "/usr/bin/rsync"]
         let rsyncPath = rsyncCandidates.first { FileManager.default.fileExists(atPath: $0) } ?? "/usr/bin/rsync"
 
         // Phase 1: dry run — accurate file count + total bytes before starting transfer
+        NSLog("[SyncTrace] 2 starting dry-run, rsyncPath=%@", rsyncPath)
         let prepProc = Process()
         prepProc.executableURL = URL(fileURLWithPath: rsyncPath)
         prepProc.arguments = ["-av", "--dry-run", "--stats", source, dest]
@@ -148,15 +152,35 @@ final class SyncEngine: ObservableObject {
         prepProc.standardOutput = prepPipe
         prepProc.standardError  = prepPipe
         task = prepProc
+
+        // Drain pipe concurrently to prevent buffer deadlock with large file lists
+        var outputData = Data()
+        let outputLock = NSLock()
+        prepPipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if !chunk.isEmpty {
+                outputLock.lock()
+                outputData.append(chunk)
+                outputLock.unlock()
+            }
+        }
+
         prepProc.terminationHandler = { [weak self] p in
-            let data   = prepPipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(data: data, encoding: .utf8) ?? ""
+            NSLog("[SyncTrace] 3 dry-run terminated, exit=%d", p.terminationStatus)
+            prepPipe.fileHandleForReading.readabilityHandler = nil
+            outputLock.lock()
+            outputData.append(prepPipe.fileHandleForReading.readDataToEndOfFile())
+            let output = String(data: outputData, encoding: .utf8) ?? ""
+            outputLock.unlock()
             // Only log on non-zero exit; suppress full output (may contain paths).
             if p.terminationStatus != 0 {
                 NSLog("[Prepare] exit=%d", p.terminationStatus)
             }
             Task { @MainActor [weak self] in
-                guard let self, self.status == .preparing else { return }
+                guard let self, self.status == .preparing else {
+                    NSLog("[SyncTrace] 3b dry-run guard FAILED, status != preparing")
+                    return
+                }
 
                 if p.terminationStatus != 0 {
                     self.status = .error("Couldn't prepare the sync — check your connection")
@@ -201,8 +225,13 @@ final class SyncEngine: ObservableObject {
 
                 // Sync-time write-test: verify destination is writable before sync
                 let originalRemotePath = self.syncRemotePath
+                NSLog("[SyncTrace] 4 starting write-test, remotePath='%@'", originalRemotePath)
                 self.runSyncTimeWriteTest(username: config.username, ip: config.destinationIP, remotePath: originalRemotePath) { [weak self] result, _ in
-                    guard let self else { return }
+                    guard let self else {
+                        NSLog("[SyncTrace] 5 write-test callback but self is nil")
+                        return
+                    }
+                    NSLog("[SyncTrace] 5 write-test result=%d (0=writable, 1=unwritable, 2=testFailed)", result == .writable ? 0 : (result == .unwritable ? 1 : 2))
                     switch result {
                     case .writable:
                         // Destination is writable, proceed normally
@@ -217,15 +246,19 @@ final class SyncEngine: ObservableObject {
                         // SSH error — don't block, proceed with original path
                         NSLog("[Sync] Write-test failed (SSH error), proceeding anyway")
                     }
+                    NSLog("[SyncTrace] 6 calling continueSyncAfterWriteTest")
                     self.continueSyncAfterWriteTest(config: config, totalBytes: totalBytes, fileCount: fileCount, dryRunOutput: output)
                 }
             }
         }
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            NSLog("[SyncTrace] 2b dry-run dispatch block executing")
             do {
                 try prepProc.run()
+                NSLog("[SyncTrace] 2c dry-run process started (run() returned)")
             } catch {
+                NSLog("[SyncTrace] 2d dry-run launch FAILED: %@", error.localizedDescription)
                 NSLog("[Prepare] rsync launch failed: %@", error.localizedDescription)
                 Task { @MainActor [weak self] in
                     self?.handleRsyncLaunchFailure()
@@ -235,6 +268,7 @@ final class SyncEngine: ObservableObject {
     }
 
     private func continueSyncAfterWriteTest(config: Config, totalBytes: Int64, fileCount: Int, dryRunOutput: String) {
+        NSLog("[SyncTrace] 7 continueSyncAfterWriteTest entered, setting status=syncing")
         status = .syncing
         writeSyncStart(totalBytes: totalBytes, totalFiles: fileCount)
 
@@ -248,8 +282,11 @@ final class SyncEngine: ObservableObject {
         let rsyncCandidates = ["/opt/homebrew/bin/rsync", "/usr/local/bin/rsync", "/usr/bin/rsync"]
         let rsyncPath = rsyncCandidates.first { FileManager.default.fileExists(atPath: $0) } ?? "/usr/bin/rsync"
 
+        NSLog("[SyncTrace] 8 about to launch rsync, source='%@', dest='%@'", source, dest)
+
                 let launchRsync = { [weak self] in
                     guard let self else { return }
+                    NSLog("[SyncTrace] 9 launchRsync closure executing")
                     let proc = Process()
                     proc.executableURL = URL(fileURLWithPath: rsyncPath)
                     proc.arguments = ["-av", source, dest]
@@ -258,6 +295,7 @@ final class SyncEngine: ObservableObject {
                     proc.standardError  = errPipe
 
                     proc.terminationHandler = { [weak self] p in
+                        NSLog("[SyncTrace] 10 rsync terminated, exit=%d", p.terminationStatus)
                         _ = errPipe.fileHandleForReading.readDataToEndOfFile() // drain pipe
                         if p.terminationStatus != 0 {
                             NSLog("[Sync] exit %d", p.terminationStatus)
@@ -482,6 +520,7 @@ final class SyncEngine: ObservableObject {
     private func runDu(username: String, ip: String, completion: @escaping (Int64) -> Void) {
         guard !duInFlight else { return }
         duInFlight = true
+        let escaped = Self.shellEscapeForDoubleQuotes(syncRemotePath)
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         proc.arguments = [
@@ -489,7 +528,7 @@ final class SyncEngine: ObservableObject {
             "-o", "ConnectTimeout=3",
             "-o", "StrictHostKeyChecking=no",
             "\(username)@\(ip)",
-            "du -sk \(syncRemotePath) 2>/dev/null | cut -f1"
+            "du -sk \"\(escaped)\" 2>/dev/null | cut -f1"
         ]
         let pipe = Pipe()
         proc.standardOutput = pipe
@@ -538,19 +577,23 @@ final class SyncEngine: ObservableObject {
     }
 
     private func writeSyncStart(totalBytes: Int64, totalFiles: Int) {
-        sshWrite("echo '{\"totalBytes\":\(totalBytes),\"totalFiles\":\(totalFiles)}' > \(syncRemotePath)/.sync_start")
+        let escaped = Self.shellEscapeForDoubleQuotes(syncRemotePath)
+        sshWrite("echo '{\"totalBytes\":\(totalBytes),\"totalFiles\":\(totalFiles)}' > \"\(escaped)/.sync_start\"")
     }
 
     private func writeSyncProgress(percent: Int) {
-        sshWrite("echo '{\"percent\":\(percent)}' > \(syncRemotePath)/.sync_progress")
+        let escaped = Self.shellEscapeForDoubleQuotes(syncRemotePath)
+        sshWrite("echo '{\"percent\":\(percent)}' > \"\(escaped)/.sync_progress\"")
     }
 
     private func writeSyncComplete(totalFiles: Int, totalBytes: Int64, duration: Int) {
-        sshWrite("echo '{\"totalFiles\":\(totalFiles),\"totalBytes\":\(totalBytes),\"duration\":\(duration)}' > \(syncRemotePath)/.sync_complete; rm -f \(syncRemotePath)/.sync_start \(syncRemotePath)/.sync_progress")
+        let escaped = Self.shellEscapeForDoubleQuotes(syncRemotePath)
+        sshWrite("echo '{\"totalFiles\":\(totalFiles),\"totalBytes\":\(totalBytes),\"duration\":\(duration)}' > \"\(escaped)/.sync_complete\"; rm -f \"\(escaped)/.sync_start\" \"\(escaped)/.sync_progress\"")
     }
 
     private func cleanupSignalFiles() {
-        sshWrite("rm -f \(syncRemotePath)/.sync_start \(syncRemotePath)/.sync_progress \(syncRemotePath)/.sync_complete")
+        let escaped = Self.shellEscapeForDoubleQuotes(syncRemotePath)
+        sshWrite("rm -f \"\(escaped)/.sync_start\" \"\(escaped)/.sync_progress\" \"\(escaped)/.sync_complete\"")
     }
 
     private func sshWrite(_ command: String) {
@@ -569,12 +612,21 @@ final class SyncEngine: ObservableObject {
         DispatchQueue.global(qos: .utility).async { try? proc.run() }
     }
 
+    // MARK: - Shell path escaping (double-quoted, allows ~ expansion)
+
+    private static func shellEscapeForDoubleQuotes(_ path: String) -> String {
+        path.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "$", with: "\\$")
+            .replacingOccurrences(of: "`", with: "\\`")
+    }
+
     // MARK: - Sync-time write-test with fallback
 
     enum WriteTestResult {
         case writable
         case unwritable   // clear failure — folder gone or permission denied
-        case testFailed   // SSH error — don't block, proceed with sync
+        case testFailed   // SSH error or timeout — don't block, proceed with sync
     }
 
     private func runSyncTimeWriteTest(
@@ -583,14 +635,17 @@ final class SyncEngine: ObservableObject {
         remotePath: String,
         completion: @escaping (WriteTestResult, String) -> Void
     ) {
-        let testFile = "\(remotePath)/.sync_writetest_\(Int.random(in: 1000...9999))"
-        let cmd = "touch \(testFile) && rm -f \(testFile) && echo OK || echo FAIL"
+        let escaped = Self.shellEscapeForDoubleQuotes(remotePath)
+        let testFile = "\(escaped)/.sync_writetest_\(Int.random(in: 1000...9999))"
+        let cmd = "touch \"\(testFile)\" && rm -f \"\(testFile)\" && echo OK || echo FAIL"
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         proc.arguments = [
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=2",
+            "-o", "ServerAliveInterval=2",
+            "-o", "ServerAliveCountMax=2",
             "-o", "StrictHostKeyChecking=no",
             "\(username)@\(ip)",
             cmd
@@ -598,27 +653,48 @@ final class SyncEngine: ObservableObject {
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = FileHandle.nullDevice
+
+        var completed = false
+        let completionLock = NSLock()
+
+        let safeComplete: (WriteTestResult) -> Void = { result in
+            completionLock.lock()
+            defer { completionLock.unlock() }
+            guard !completed else { return }
+            completed = true
+            Task { @MainActor in
+                completion(result, remotePath)
+            }
+        }
+
+        let timeoutItem = DispatchWorkItem { [weak proc] in
+            if let p = proc, p.isRunning {
+                NSLog("[Sync] write-test timeout (10s), killing process")
+                p.terminate()
+            }
+            safeComplete(.testFailed)
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 10, execute: timeoutItem)
+
         proc.terminationHandler = { p in
+            timeoutItem.cancel()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            Task { @MainActor in
-                if p.terminationStatus != 0 {
-                    completion(.testFailed, remotePath)
-                } else if output.contains("OK") {
-                    completion(.writable, remotePath)
-                } else {
-                    completion(.unwritable, remotePath)
-                }
+            if p.terminationStatus != 0 {
+                safeComplete(.testFailed)
+            } else if output.contains("OK") {
+                safeComplete(.writable)
+            } else {
+                safeComplete(.unwritable)
             }
         }
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 try proc.run()
             } catch {
+                timeoutItem.cancel()
                 NSLog("[Sync] write-test launch failed: %@", error.localizedDescription)
-                Task { @MainActor in
-                    completion(.testFailed, remotePath)
-                }
+                safeComplete(.testFailed)
             }
         }
     }
@@ -631,8 +707,9 @@ final class SyncEngine: ObservableObject {
         remotePath: String,
         completion: @escaping (Bool) -> Void
     ) {
-        let refusedPath = "\(remotePath)/.sync_refused"
-        let cmd = "test -f \(refusedPath) && echo YES || echo NO"
+        let escaped = Self.shellEscapeForDoubleQuotes(remotePath)
+        let refusedPath = "\(escaped)/.sync_refused"
+        let cmd = "test -f \"\(refusedPath)\" && echo YES || echo NO"
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
@@ -666,7 +743,8 @@ final class SyncEngine: ObservableObject {
     }
 
     private func clearSyncRefused() {
-        sshWrite("rm -f \(syncRemotePath)/.sync_refused")
+        let escaped = Self.shellEscapeForDoubleQuotes(syncRemotePath)
+        sshWrite("rm -f \"\(escaped)/.sync_refused\"")
     }
 
     // MARK: - Auto sync
