@@ -409,7 +409,7 @@ final class SyncEngine: ObservableObject {
                     proc.standardOutput = stdoutPipe
 
                     let stdoutHandle = stdoutPipe.fileHandleForReading
-                    NotificationCenter.default.addObserver(
+                    let stdoutObserver = NotificationCenter.default.addObserver(
                         forName: .NSFileHandleDataAvailable,
                         object: stdoutHandle,
                         queue: nil
@@ -427,12 +427,18 @@ final class SyncEngine: ObservableObject {
                     proc.standardError  = errPipe
 
                     proc.terminationHandler = { [weak self] p in
-                        NSLog("[SyncTrace] 10 rsync terminated, exit=%d", p.terminationStatus)
-                        NotificationCenter.default.removeObserver(self as Any, name: .NSFileHandleDataAvailable, object: stdoutHandle)
+                        // Capture decision values IMMEDIATELY before any async hop
+                        let exitCode = p.terminationStatus
+                        let wasUsingFallback = self?.usingFallback ?? false
+                        let syncTrigger = (self?.isAutoSync ?? false) ? "auto" : ((self?.isPushSync ?? false) ? "push" : "manual")
+                        let syncDest = self?.syncRemotePath ?? "~/Sync"
+
+                        NSLog("[SyncTrace] 10 rsync terminated, exit=%d", exitCode)
+                        NotificationCenter.default.removeObserver(stdoutObserver)
                         let statsOutput = stdoutBuffer.getString()
                         _ = errPipe.fileHandleForReading.readDataToEndOfFile() // drain stderr
-                        if p.terminationStatus != 0 {
-                            NSLog("[Sync] exit %d", p.terminationStatus)
+                        if exitCode != 0 {
+                            NSLog("[Sync] exit %d", exitCode)
                         }
                         Task { @MainActor [weak self] in
                             guard let self else { return }
@@ -451,47 +457,45 @@ final class SyncEngine: ObservableObject {
 
                                     // Record refused transfer log entry
                                     let duration = Int(Date().timeIntervalSince(self.syncStartTime))
-                                    let trigger = self.isAutoSync ? "auto" : (self.isPushSync ? "push" : "manual")
                                     let entry = TransferLogEntry(
                                         id: UUID(),
                                         date: Date(),
-                                        trigger: trigger,
+                                        trigger: syncTrigger,
                                         result: "refused",
                                         fileCount: 0,
                                         totalBytes: 0,
                                         durationSeconds: duration,
-                                        destination: self.syncRemotePath,
-                                        usedFallback: self.usingFallback
+                                        destination: syncDest,
+                                        usedFallback: wasUsingFallback
                                     )
                                     ConfigStore.shared.appendTransferLogEntry(entry)
                                     return
                                 }
 
-                                if p.terminationStatus == 0 {
+                                if exitCode == 0 {
                                     let duration = Int(Date().timeIntervalSince(self.syncStartTime))
                                     self.lastSyncTime = Date()
                                     ConfigStore.shared.config.sshKeysConfigured = true
-                                    ConfigStore.shared.iconState = self.usingFallback ? .warning : .success
+                                    ConfigStore.shared.iconState = wasUsingFallback ? .warning : .success
                                     self.status = .done
                                     self.writeSyncComplete(
                                         totalFiles: self.syncTotalFiles,
                                         totalBytes: self.expectedSize,
                                         duration:   duration)
 
-                                    // Record transfer log entry
+                                    // Record transfer log entry (stats parsing is additive, outside decision path)
                                     let actualFileCount = Self.parseStatsFileCount(statsOutput)
                                     let actualBytes = Self.parseStatsTotalBytes(statsOutput)
-                                    let trigger = self.isAutoSync ? "auto" : (self.isPushSync ? "push" : "manual")
                                     let entry = TransferLogEntry(
                                         id: UUID(),
                                         date: Date(),
-                                        trigger: trigger,
-                                        result: self.usingFallback ? "fallback" : "success",
+                                        trigger: syncTrigger,
+                                        result: wasUsingFallback ? "fallback" : "success",
                                         fileCount: actualFileCount,
                                         totalBytes: actualBytes,
                                         durationSeconds: duration,
-                                        destination: self.syncRemotePath,
-                                        usedFallback: self.usingFallback
+                                        destination: syncDest,
+                                        usedFallback: wasUsingFallback
                                     )
                                     ConfigStore.shared.appendTransferLogEntry(entry)
 
@@ -513,17 +517,16 @@ final class SyncEngine: ObservableObject {
 
                                     // Record failed transfer log entry
                                     let duration = Int(Date().timeIntervalSince(self.syncStartTime))
-                                    let trigger = self.isAutoSync ? "auto" : (self.isPushSync ? "push" : "manual")
                                     let entry = TransferLogEntry(
                                         id: UUID(),
                                         date: Date(),
-                                        trigger: trigger,
+                                        trigger: syncTrigger,
                                         result: "failed",
                                         fileCount: 0,
                                         totalBytes: 0,
                                         durationSeconds: duration,
-                                        destination: self.syncRemotePath,
-                                        usedFallback: self.usingFallback
+                                        destination: syncDest,
+                                        usedFallback: wasUsingFallback
                                     )
                                     ConfigStore.shared.appendTransferLogEntry(entry)
                                 }
