@@ -333,6 +333,21 @@ final class ReceiveMonitor: ObservableObject {
             let renamePath   = base.appendingPathComponent(".sync_rename_request")
             let fm           = FileManager.default
 
+            // Clear low-space error when space recovers (honest self-clear on every poll cycle)
+            // Only clear if .sync_refused exists (we wrote it) AND space is now OK
+            let refusedPath = base.appendingPathComponent(".sync_refused")
+            let minFreeBytes: Int64 = 2 * 1024 * 1024 * 1024 // 2GB
+            if fm.fileExists(atPath: refusedPath.path),
+               let freeBytes = BonjourAdvertiser.getFreeSpace(path: base.path),
+               freeBytes >= minFreeBytes {
+                try? fm.removeItem(at: refusedPath)  // Clean up the refusal
+                Task { @MainActor in
+                    if ConfigStore.shared.iconState == .error {
+                        ConfigStore.shared.iconState = .idle
+                    }
+                }
+            }
+
             // Handle remote rename request from Main
             if fm.fileExists(atPath: renamePath.path) {
                 let content = (try? String(contentsOf: renamePath, encoding: .utf8))?
@@ -405,6 +420,7 @@ final class ReceiveMonitor: ObservableObject {
                     try? "low_space".write(to: refusedPath, atomically: true, encoding: .utf8)
                     Task { @MainActor [weak self] in
                         self?.isChecking = false
+                        ConfigStore.shared.iconState = .error
                     }
                     return
                 }
