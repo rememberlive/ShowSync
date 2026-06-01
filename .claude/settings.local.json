@@ -51,7 +51,9 @@
       "Bash(time netstat -an)",
       "Bash(defaults read *)",
       "Bash(plutil -p -)",
-      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('destinationFolder:', d.get\\('destinationFolder', 'NOT FOUND'\\)\\)\")"
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('destinationFolder:', d.get\\('destinationFolder', 'NOT FOUND'\\)\\)\")",
+      "Bash(ssh)",
+      "Bash(rsync --help)"
     ]
   }
 }
