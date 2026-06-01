@@ -88,12 +88,15 @@ final class BonjourAdvertiser: NSObject, ObservableObject {
         let intendedDest = ConfigStore.shared.config.destinationFolder  // User's chosen path
         let effectiveDest = ReceiveMonitor.shared.effectiveDestination   // Where files actually go
         let freeBytes = Self.getFreeSpace(path: effectiveDest) ?? 0      // Free space on effective path
-        let txtData = NetService.data(fromTXTRecord: [
+        var txtDict: [String: Data] = [
             "dest": intendedDest.data(using: .utf8) ?? Data(),           // For display (may be unavailable)
             "effectiveDest": effectiveDest.data(using: .utf8) ?? Data(), // For sync + free space
-            "free": String(freeBytes).data(using: .utf8) ?? Data(),
-            "verifyReq": verifyRequestNonce.data(using: .utf8) ?? Data() // Backup-initiated verify request
-        ])
+            "free": String(freeBytes).data(using: .utf8) ?? Data()
+        ]
+        if !verifyRequestNonce.isEmpty {
+            txtDict["verifyReq"] = verifyRequestNonce.data(using: .utf8) ?? Data()
+        }
+        let txtData = NetService.data(fromTXTRecord: txtDict)
         svc.setTXTRecord(txtData)
         // Schedule on the background thread's runloop, not main
         if let runLoop = bonjourRunLoop {
@@ -127,12 +130,15 @@ final class BonjourAdvertiser: NSObject, ObservableObject {
         let intendedDest = ConfigStore.shared.config.destinationFolder
         let effectiveDest = ReceiveMonitor.shared.effectiveDestination
         let freeBytes = Self.getFreeSpace(path: effectiveDest) ?? 0
-        let txtData = NetService.data(fromTXTRecord: [
+        var txtDict: [String: Data] = [
             "dest": intendedDest.data(using: .utf8) ?? Data(),
             "effectiveDest": effectiveDest.data(using: .utf8) ?? Data(),
-            "free": String(freeBytes).data(using: .utf8) ?? Data(),
-            "verifyReq": verifyRequestNonce.data(using: .utf8) ?? Data()
-        ])
+            "free": String(freeBytes).data(using: .utf8) ?? Data()
+        ]
+        if !verifyRequestNonce.isEmpty {
+            txtDict["verifyReq"] = verifyRequestNonce.data(using: .utf8) ?? Data()
+        }
+        let txtData = NetService.data(fromTXTRecord: txtDict)
         svc.setTXTRecord(txtData)
         NSLog("[Bonjour] TXT record updated in place: dest=%@, effective=%@, verifyReq=%@", intendedDest, effectiveDest, verifyRequestNonce)
     }
