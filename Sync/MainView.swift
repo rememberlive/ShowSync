@@ -131,20 +131,64 @@ final class SyncEngine: ObservableObject {
             syncRemotePath = config.backupDestination.isEmpty ? "~/Sync" : config.backupDestination
         }
 
+        let mode = config.discoveryMode
+        NSLog("[SyncTrace] 1 sync requested, mode=%@, remotePath='%@', usingFallback=%d, dryRunEnabled=%d, isAuto=%d",
+              mode, syncRemotePath, usingFallback ? 1 : 0, config.dryRunEnabled ? 1 : 0, isAuto ? 1 : 0)
+
+        // Check if this is a "Check Files" preview request
+        let isPreviewOnly = config.dryRunEnabled && !isAuto
+
+        if isPreviewOnly {
+            // Preview mode: run dry-run to show file list (uses fixed pipe drain)
+            runDryRunPreview(config: config)
+        } else {
+            // Normal sync: SKIP dry-run entirely, go straight to write-test and rsync
+            NSLog("[SyncTrace] 2 SKIPPING dry-run (normal sync path)")
+            syncTotalFiles = 0
+            expectedSize   = 0
+            syncStartTime  = Date()
+            fallbackNotice = nil
+            lowSpaceNotice = nil
+
+            // Write-test then rsync
+            let originalRemotePath = syncRemotePath
+            NSLog("[SyncTrace] 4 starting write-test, remotePath='%@'", originalRemotePath)
+            runSyncTimeWriteTest(username: config.username, ip: config.destinationIP, remotePath: originalRemotePath) { [weak self] result, _ in
+                guard let self else {
+                    NSLog("[SyncTrace] 5 write-test callback but self is nil")
+                    return
+                }
+                NSLog("[SyncTrace] 5 write-test result=%d (0=writable, 1=unwritable, 2=testFailed)", result == .writable ? 0 : (result == .unwritable ? 1 : 2))
+                switch result {
+                case .writable:
+                    break
+                case .unwritable:
+                    self.syncRemotePath = "~/Sync"
+                    self.usingFallback = true
+                    self.fallbackNotice = "Couldn't write to the chosen folder — backing up to the default Sync folder instead."
+                    NSLog("[Sync] Destination unwritable, falling back to ~/Sync")
+                case .testFailed:
+                    NSLog("[Sync] Write-test failed (SSH error), proceeding anyway")
+                }
+                NSLog("[SyncTrace] 6 calling continueSyncAfterWriteTest")
+                self.continueSyncAfterWriteTest(config: config, totalBytes: 0, fileCount: 0, dryRunOutput: "")
+            }
+        }
+    }
+
+    // MARK: - Dry-run preview (Check Files only)
+
+    private func runDryRunPreview(config: Config) {
         let rawSource = config.sourceFolder.hasPrefix("~")
             ? (NSHomeDirectory() as NSString).appendingPathComponent(String(config.sourceFolder.dropFirst()))
             : config.sourceFolder
         let source = rawSource.hasSuffix("/") ? rawSource : rawSource + "/"
-        let dest   = "\(syncUsername)@\(syncIP):\(syncRemotePath)/"
-
-        let mode = config.discoveryMode
-        NSLog("[SyncTrace] 1 sync requested, mode=%@, remotePath='%@', dest='%@', usingFallback=%d", mode, syncRemotePath, dest, usingFallback ? 1 : 0)
+        let dest = "\(syncUsername)@\(syncIP):\(syncRemotePath)/"
 
         let rsyncCandidates = ["/opt/homebrew/bin/rsync", "/usr/local/bin/rsync", "/usr/bin/rsync"]
         let rsyncPath = rsyncCandidates.first { FileManager.default.fileExists(atPath: $0) } ?? "/usr/bin/rsync"
 
-        // Phase 1: dry run — accurate file count + total bytes before starting transfer
-        NSLog("[SyncTrace] 2 starting dry-run, rsyncPath=%@", rsyncPath)
+        NSLog("[SyncTrace] 2 starting dry-run PREVIEW, rsyncPath=%@", rsyncPath)
         let prepProc = Process()
         prepProc.executableURL = URL(fileURLWithPath: rsyncPath)
         prepProc.arguments = ["-av", "--dry-run", "--stats", source, dest]
@@ -153,18 +197,17 @@ final class SyncEngine: ObservableObject {
         prepProc.standardError  = prepPipe
         task = prepProc
 
-        // Class wrapper to ensure proper sharing between closures
+        // Thread-safe output buffer
         class OutputBuffer {
-            var data = Data()
-            let lock = NSLock()
+            private var data = Data()
+            private let lock = NSLock()
             func append(_ chunk: Data) {
                 lock.lock()
                 data.append(chunk)
                 lock.unlock()
             }
-            func finalize(_ remaining: Data) -> String {
+            func getString() -> String {
                 lock.lock()
-                data.append(remaining)
                 let result = String(data: data, encoding: .utf8) ?? ""
                 lock.unlock()
                 return result
@@ -172,27 +215,31 @@ final class SyncEngine: ObservableObject {
         }
         let outputBuffer = OutputBuffer()
 
-        // Drain pipe concurrently on background queue to prevent buffer deadlock
-        let readQueue = DispatchQueue(label: "sync.dryrun.pipe", qos: .userInitiated)
+        // Use readInBackgroundAndNotify for proper async pipe drain (no deadlock)
         let fileHandle = prepPipe.fileHandleForReading
-        readQueue.async {
-            while true {
-                let chunk = fileHandle.availableData
-                if chunk.isEmpty { break }
+        NotificationCenter.default.addObserver(
+            forName: .NSFileHandleDataAvailable,
+            object: fileHandle,
+            queue: nil
+        ) { [weak fileHandle] _ in
+            guard let fh = fileHandle else { return }
+            let chunk = fh.availableData
+            if !chunk.isEmpty {
                 outputBuffer.append(chunk)
+                fh.waitForDataInBackgroundAndNotify()
             }
-            NSLog("[SyncTrace] 2e pipe drain complete")
         }
+        fileHandle.waitForDataInBackgroundAndNotify()
 
-        // Timeout: if dry-run takes >30s, kill it and proceed without stats
-        var dryRunCompleted = false
-        let dryRunLock = NSLock()
+        // Timeout: 30s backstop
+        var completed = false
+        let completedLock = NSLock()
         let timeoutItem = DispatchWorkItem { [weak prepProc] in
-            dryRunLock.lock()
-            let alreadyDone = dryRunCompleted
-            dryRunLock.unlock()
-            if !alreadyDone, let p = prepProc, p.isRunning {
-                NSLog("[SyncTrace] 2f dry-run TIMEOUT (30s), killing process")
+            completedLock.lock()
+            let done = completed
+            completedLock.unlock()
+            if !done, let p = prepProc, p.isRunning {
+                NSLog("[SyncTrace] 2f dry-run PREVIEW TIMEOUT (30s)")
                 p.terminate()
             }
         }
@@ -200,109 +247,68 @@ final class SyncEngine: ObservableObject {
 
         prepProc.terminationHandler = { [weak self] p in
             timeoutItem.cancel()
-            dryRunLock.lock()
-            dryRunCompleted = true
-            dryRunLock.unlock()
-            NSLog("[SyncTrace] 3 dry-run terminated, exit=%d", p.terminationStatus)
-            let output = outputBuffer.finalize(fileHandle.readDataToEndOfFile())
-            // Only log on non-zero exit; suppress full output (may contain paths).
-            if p.terminationStatus != 0 {
-                NSLog("[Prepare] exit=%d", p.terminationStatus)
-            }
+            completedLock.lock()
+            completed = true
+            completedLock.unlock()
+            NotificationCenter.default.removeObserver(self as Any, name: .NSFileHandleDataAvailable, object: fileHandle)
+            NSLog("[SyncTrace] 3 dry-run PREVIEW terminated, exit=%d", p.terminationStatus)
+            let output = outputBuffer.getString()
+
             Task { @MainActor [weak self] in
                 guard let self, self.status == .preparing else {
-                    NSLog("[SyncTrace] 3b dry-run guard FAILED, status != preparing")
+                    NSLog("[SyncTrace] 3b dry-run guard FAILED")
                     return
                 }
 
-                // On timeout (exit -1 from terminate()), proceed with unknown totals
+                self.status = .ready
+                ConfigStore.shared.isSyncing = false
+                ConfigStore.shared.iconState = ConfigStore.shared.config.isReadyToSync ? .idle : .notConfigured
+
                 let wasTimeout = p.terminationStatus == -1 || p.terminationStatus == 15
-                if p.terminationStatus != 0 && !wasTimeout {
-                    self.status = .error("Couldn't prepare the sync — check your connection")
-                    ConfigStore.shared.isSyncing = false
-                    ConfigStore.shared.iconState = .error
+                if wasTimeout {
+                    self.dryRunResult = DryRunResult(
+                        title: "Check Files Timeout",
+                        body: "The file check took too long. Try syncing directly."
+                    )
+                    return
+                }
+                if p.terminationStatus != 0 {
+                    self.dryRunResult = DryRunResult(
+                        title: "Check Files Failed",
+                        body: "Couldn't connect to the backup. Check your connection."
+                    )
                     return
                 }
 
-                let fileCount  = wasTimeout ? 0 : Self.parseDryRunFileCount(output)
-                let totalBytes = wasTimeout ? Int64(0) : (Self.parseTotalSize(output) ?? 0)
-                NSLog("[Prepare] fileCount=%d totalBytes=%lld wasTimeout=%d", fileCount, totalBytes, wasTimeout ? 1 : 0)
+                let fileCount  = Self.parseDryRunFileCount(output)
+                let totalBytes = Self.parseTotalSize(output) ?? 0
+                NSLog("[SyncTrace] 3c preview parsed: fileCount=%d totalBytes=%lld", fileCount, totalBytes)
 
-                if config.dryRunEnabled && !self.isAutoSync {
-                    // Preview mode: show file list, no transfer
-                    self.status = .ready
-                    ConfigStore.shared.isSyncing = false
-                    ConfigStore.shared.iconState = ConfigStore.shared.config.isReadyToSync ? .idle : .notConfigured
-                    if wasTimeout {
-                        self.dryRunResult = DryRunResult(
-                            title: "Check Files Timeout",
-                            body: "The file check took too long. Try syncing directly."
-                        )
-                    } else {
-                        let (previewFiles, _) = Self.parseDryRunOutput(output)
-                        if fileCount > 0 && previewFiles.isEmpty {
-                            // GNU rsync: file list parser doesn't apply, but count is known
-                            let note = totalBytes > 0 ? "\nTotal size: \(SyncEngine.formatBytes(totalBytes))" : ""
-                            self.dryRunResult = DryRunResult(
-                                title: "Check Files Complete",
-                                body: "\(fileCount) file\(fileCount == 1 ? "" : "s") will be transferred\(note)"
-                            )
-                        } else {
-                            let (title, body) = Self.formatDryRunMessage(
-                                files: previewFiles,
-                                transferBytes: totalBytes > 0 ? totalBytes : nil
-                            )
-                            self.dryRunResult = DryRunResult(title: title, body: body)
-                        }
-                    }
-                    return
-                }
-
-                // Phase 2: real transfer — totals are accurate from dry run (or 0 on timeout)
-                self.syncTotalFiles = fileCount
-                self.expectedSize   = totalBytes
-                self.syncStartTime  = Date()
-                self.fallbackNotice = nil
-                self.lowSpaceNotice = nil
-
-                // Sync-time write-test: verify destination is writable before sync
-                let originalRemotePath = self.syncRemotePath
-                NSLog("[SyncTrace] 4 starting write-test, remotePath='%@'", originalRemotePath)
-                self.runSyncTimeWriteTest(username: config.username, ip: config.destinationIP, remotePath: originalRemotePath) { [weak self] result, _ in
-                    guard let self else {
-                        NSLog("[SyncTrace] 5 write-test callback but self is nil")
-                        return
-                    }
-                    NSLog("[SyncTrace] 5 write-test result=%d (0=writable, 1=unwritable, 2=testFailed)", result == .writable ? 0 : (result == .unwritable ? 1 : 2))
-                    switch result {
-                    case .writable:
-                        // Destination is writable, proceed normally
-                        break
-                    case .unwritable:
-                        // Fall back to ~/Sync
-                        self.syncRemotePath = "~/Sync"
-                        self.usingFallback = true
-                        self.fallbackNotice = "Couldn't write to the chosen folder — backing up to the default Sync folder instead."
-                        NSLog("[Sync] Destination unwritable, falling back to ~/Sync")
-                    case .testFailed:
-                        // SSH error — don't block, proceed with original path
-                        NSLog("[Sync] Write-test failed (SSH error), proceeding anyway")
-                    }
-                    NSLog("[SyncTrace] 6 calling continueSyncAfterWriteTest")
-                    self.continueSyncAfterWriteTest(config: config, totalBytes: totalBytes, fileCount: fileCount, dryRunOutput: output)
+                let (previewFiles, _) = Self.parseDryRunOutput(output)
+                if fileCount > 0 && previewFiles.isEmpty {
+                    let note = totalBytes > 0 ? "\nTotal size: \(SyncEngine.formatBytes(totalBytes))" : ""
+                    self.dryRunResult = DryRunResult(
+                        title: "Check Files Complete",
+                        body: "\(fileCount) file\(fileCount == 1 ? "" : "s") will be transferred\(note)"
+                    )
+                } else {
+                    let (title, body) = Self.formatDryRunMessage(
+                        files: previewFiles,
+                        transferBytes: totalBytes > 0 ? totalBytes : nil
+                    )
+                    self.dryRunResult = DryRunResult(title: title, body: body)
                 }
             }
         }
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            NSLog("[SyncTrace] 2b dry-run dispatch block executing")
+            NSLog("[SyncTrace] 2b dry-run PREVIEW dispatch executing")
             do {
                 try prepProc.run()
-                NSLog("[SyncTrace] 2c dry-run process started (run() returned)")
+                NSLog("[SyncTrace] 2c dry-run PREVIEW process started")
             } catch {
                 timeoutItem.cancel()
-                NSLog("[SyncTrace] 2d dry-run launch FAILED: %@", error.localizedDescription)
-                NSLog("[Prepare] rsync launch failed: %@", error.localizedDescription)
+                NSLog("[SyncTrace] 2d dry-run PREVIEW launch FAILED: %@", error.localizedDescription)
                 Task { @MainActor [weak self] in
                     self?.handleRsyncLaunchFailure()
                 }
