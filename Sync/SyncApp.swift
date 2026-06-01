@@ -97,6 +97,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         startPushSyncIfNeeded()
         startReceiveMonitorIfNeeded()
         startGlobalHotkeyIfNeeded()
+        applyAppPresence()
+    }
+
+    // Applies the user's app presence preference (Menu Bar only or Menu Bar & Dock).
+    // Called on launch and live when the setting changes.
+    func applyAppPresence() {
+        let presence = ConfigStore.shared.config.appPresence
+        if presence == "both" {
+            NSApp.setActivationPolicy(.regular)
+        } else {
+            NSApp.setActivationPolicy(.accessory)
+        }
     }
 
     // Registers the global sync hotkey (⌃⌥⌘S) for Main role if enabled.

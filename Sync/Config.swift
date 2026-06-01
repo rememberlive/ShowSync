@@ -72,6 +72,9 @@ struct Config {
     // Global hotkey (Main role only)
     var globalHotkeyEnabled: Bool = true  // ⌃⌥⌘S triggers Sync Now from anywhere
 
+    // App presence (shared, not role-specific)
+    var appPresence: String = "menubar"  // "menubar" | "both"
+
     var isReadyToSync: Bool {
         !sourceFolder.isEmpty && !destinationIP.isEmpty && !username.isEmpty && sshKeysConfigured
     }
@@ -121,6 +124,10 @@ private struct BackupConfig: Codable {
     var networkDiscoveryName: String = ""
     var minFreeSpaceGB: Int = 2
     var preferredInterface: String = ""
+}
+
+private struct SharedConfig: Codable {
+    var appPresence: String = "menubar"  // "menubar" | "both"
 }
 
 // All fields optional — used only during one-time migration from the legacy config.json.
@@ -173,6 +180,7 @@ final class ConfigStore: ObservableObject {
     private let roleURL: URL
     private let mainConfigURL: URL
     private let backupConfigURL: URL
+    private let sharedConfigURL: URL
     private let transferLogURL: URL
 
     private init() {
@@ -183,6 +191,7 @@ final class ConfigStore: ObservableObject {
         roleURL         = dir.appendingPathComponent("role.json")
         mainConfigURL   = dir.appendingPathComponent("config_main.json")
         backupConfigURL = dir.appendingPathComponent("config_backup.json")
+        sharedConfigURL = dir.appendingPathComponent("config_shared.json")
         transferLogURL  = dir.appendingPathComponent("transfer_log.json")
 
         // One-time migration from the legacy monolithic config.json
@@ -197,6 +206,9 @@ final class ConfigStore: ObservableObject {
         if role == "backup" && loaded.username.isEmpty {
             loaded.username = NSUserName()
         }
+        // Load shared config (applies to both roles)
+        let shared = Self.readSharedConfig(from: sharedConfigURL)
+        loaded.appPresence = shared.appPresence
         config = loaded
         UserDefaults.standard.set(role, forKey: "syncRole")
 
@@ -217,6 +229,9 @@ final class ConfigStore: ObservableObject {
         if role == "backup" && newConfig.username.isEmpty {
             newConfig.username = NSUserName()
         }
+        // Preserve shared config (role-independent settings)
+        let shared = Self.readSharedConfig(from: sharedConfigURL)
+        newConfig.appPresence = shared.appPresence
 
         config = newConfig   // triggers didSet → save() which writes to the new role's file
         writeRole(role)
@@ -288,6 +303,8 @@ final class ConfigStore: ObservableObject {
                 if !lastConfigSaveFailed { lastConfigSaveFailed = true }
             }
         }
+        // Always save shared config (role-independent settings)
+        saveSharedConfig()
     }
 
     private func writeRole(_ role: String) {
@@ -326,6 +343,26 @@ final class ConfigStore: ObservableObject {
             return []
         }
         return log
+    }
+
+    // MARK: - Shared Config
+
+    private static func readSharedConfig(from url: URL) -> SharedConfig {
+        guard let data = try? Data(contentsOf: url),
+              let s = try? JSONDecoder().decode(SharedConfig.self, from: data) else {
+            return SharedConfig()
+        }
+        return s
+    }
+
+    private func saveSharedConfig() {
+        let s = SharedConfig(appPresence: config.appPresence)
+        do {
+            let data = try JSONEncoder().encode(s)
+            try data.write(to: sharedConfigURL, options: .atomic)
+        } catch {
+            NSLog("[Sync] config_shared.json save failed: %@", error.localizedDescription)
+        }
     }
 
     // MARK: - Static loading helpers (static so they can run before init completes)

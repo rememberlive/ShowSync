@@ -366,6 +366,9 @@ struct SettingsView: View {
                 BonjourBrowser.shared.restart()
             }
         }
+        .onChange(of: store.config.appPresence) { _ in
+            AppDelegate.shared?.applyAppPresence()
+        }
         .onChange(of: bonjourBrowser.services) { services in
             // Detect remote rename confirmation: same IP, new name
             let isWaitingForRename = { () -> Bool in
@@ -1336,6 +1339,18 @@ struct SettingsView: View {
             Text("Triggers Sync Now from anywhere")
                 .font(.system(size: 10))
                 .foregroundColor(labelColor)
+            HStack {
+                Text("Show Sync in")
+                    .font(.system(size: 12))
+                    .foregroundColor(labelColor)
+                Spacer()
+                Picker("", selection: $store.config.appPresence) {
+                    Text("Menu Bar").tag("menubar")
+                    Text("Menu Bar & Dock").tag("both")
+                }
+                .pickerStyle(.menu)
+                .frame(width: 140)
+            }
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 12)
@@ -1507,6 +1522,18 @@ struct SettingsView: View {
                 Text(err)
                     .font(.caption)
                     .foregroundColor(.red)
+            }
+            HStack {
+                Text("Show Sync in")
+                    .font(.system(size: 12))
+                    .foregroundColor(labelColor)
+                Spacer()
+                Picker("", selection: $store.config.appPresence) {
+                    Text("Menu Bar").tag("menubar")
+                    Text("Menu Bar & Dock").tag("both")
+                }
+                .pickerStyle(.menu)
+                .frame(width: 140)
             }
         }
         .padding(.horizontal, 20)
