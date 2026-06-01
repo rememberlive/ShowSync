@@ -357,6 +357,12 @@ struct SettingsView: View {
                 SyncEngine.shared.startAutoSync(delay: interval)
             }
         }
+        .onChange(of: store.config.preferredInterface) { _ in
+            // Re-browse to refresh reachability flags based on new interface's subnet
+            if isMain && isAutomatic {
+                BonjourBrowser.shared.restart()
+            }
+        }
         .onChange(of: bonjourBrowser.services) { services in
             // Detect remote rename confirmation: same IP, new name
             let isWaitingForRename = { () -> Bool in
@@ -411,6 +417,8 @@ struct SettingsView: View {
             } else {
                 ForEach(bonjourBrowser.services) { service in
                     Button {
+                        // Guard: only allow selection if reachable on selected interface
+                        guard service.isReachableOnSelectedInterface else { return }
                         if store.config.destinationIP != service.resolvedIP
                             || store.config.backupHostname != service.hostname {
                             store.config.destinationIP   = service.resolvedIP
@@ -435,16 +443,23 @@ struct SettingsView: View {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(service.id)
                                     .font(.system(size: 12, weight: .medium))
-                                    .foregroundColor(.white)
-                                Text("\(service.resolvedIP) · \(formatBytes(service.freeSpaceBytes)) free")
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundColor(labelColor)
+                                    .foregroundColor(service.isReachableOnSelectedInterface ? .white : .red)
+                                if service.isReachableOnSelectedInterface {
+                                    Text("\(service.resolvedIP) · \(formatBytes(service.freeSpaceBytes)) free")
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .foregroundColor(labelColor)
+                                } else {
+                                    Text("On another network – wrong port?")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(.red)
+                                }
                             }
                             Spacer()
                         }
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .disabled(!service.isReachableOnSelectedInterface)
                     .padding(.vertical, 2)
                 }
             }

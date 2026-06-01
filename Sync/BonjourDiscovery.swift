@@ -222,6 +222,7 @@ struct DiscoveredBackup: Identifiable, Equatable {
     let destinationPath: String       // Backup's intended folder (user's choice, may be unavailable)
     let effectiveDestinationPath: String  // Where files actually go (~/Sync when drive unavailable)
     let freeSpaceBytes: Int64         // Backup's free space on effective path (0 if unknown)
+    var isReachableOnSelectedInterface: Bool = true  // False if Backup is on a different subnet than user's selected interface
 
     var isUsingFallback: Bool {
         !effectiveDestinationPath.isEmpty && effectiveDestinationPath != destinationPath
@@ -304,6 +305,13 @@ final class BonjourBrowser: NSObject, ObservableObject {
         perform(#selector(stopSearching), on: bonjourThread, with: nil, waitUntilDone: false)
     }
 
+    func restart() {
+        stop()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.start()
+        }
+    }
+
     @objc private func stopSearching() {
         browser.stop()
         // Clean up resolving services
@@ -379,7 +387,7 @@ extension BonjourBrowser: NetServiceBrowserDelegate {
 
 extension BonjourBrowser: NetServiceDelegate {
     func netServiceDidResolveAddress(_ sender: NetService) {
-        let ip = Self.firstIPv4(in: sender.addresses ?? [])
+        let allIPs = Self.allIPv4Addresses(in: sender.addresses ?? [])
         let name = sender.name
         // hostName looks like "Remembers-MacBook-Air.local." — strip the mDNS suffix.
         let host = (sender.hostName ?? name)
@@ -407,7 +415,32 @@ extension BonjourBrowser: NetServiceDelegate {
         // Move from resolving to monitoring for TXT updates
         resolving.removeAll { $0 === sender }
 
-        guard let resolvedIP = ip else {
+        // Classify reachability based on selected interface
+        let preferred = ConfigStore.shared.config.preferredInterface
+        var resolvedIP: String?
+        var isReachable = true
+
+        if preferred.isEmpty {
+            // Automatic mode: use first IPv4, mark reachable (unchanged behavior)
+            resolvedIP = allIPs.first
+            isReachable = true
+        } else if let subnet = Self.getInterfaceSubnet(name: preferred) {
+            // Interface selected: prefer on-subnet address
+            if let onSubnetIP = allIPs.first(where: { Self.isOnSubnet($0, ifaceIP: subnet.ip, mask: subnet.mask) }) {
+                resolvedIP = onSubnetIP
+                isReachable = true
+            } else {
+                // No on-subnet address — use first IP for DISPLAY, flag unreachable
+                resolvedIP = allIPs.first
+                isReachable = false
+            }
+        } else {
+            // Interface set but has no IP (down) — fallback: use first, mark reachable (with notice)
+            resolvedIP = allIPs.first
+            isReachable = true
+        }
+
+        guard let resolvedIP else {
             // Resolution failed - clean up
             if let runLoop = bonjourRunLoop {
                 sender.remove(from: runLoop, forMode: .common)
@@ -429,10 +462,13 @@ extension BonjourBrowser: NetServiceDelegate {
         Task { @MainActor [weak self] in
             guard let self else { return }
             self.services.removeAll { $0.id == name }
-            self.services.append(DiscoveredBackup(id: name, hostname: host, resolvedIP: resolvedIP, destinationPath: destPath, effectiveDestinationPath: effectivePath, freeSpaceBytes: freeBytes))
+            self.services.append(DiscoveredBackup(id: name, hostname: host, resolvedIP: resolvedIP, destinationPath: destPath, effectiveDestinationPath: effectivePath, freeSpaceBytes: freeBytes, isReachableOnSelectedInterface: isReachable))
             self.services.sort { $0.hostname.localizedCaseInsensitiveCompare($1.hostname) == .orderedAscending }
 
             // Auto-reconnect: match by name (primary) or IP (fallback for renamed Backup)
+            // GUARD: only auto-reconnect if the Backup is reachable on selected interface
+            guard isReachable else { return }
+
             let config = ConfigStore.shared.config
             let nameMatch = !config.lastBackupDiscoveryName.isEmpty && name == config.lastBackupDiscoveryName
             let ipMatch = !config.lastBackupIP.isEmpty && resolvedIP == config.lastBackupIP
@@ -500,18 +536,20 @@ extension BonjourBrowser: NetServiceDelegate {
             guard let self else { return }
 
             // Handle Backup-initiated verify: trigger if new nonce from currently connected Backup
+            // GUARD: skip verify if Backup is unreachable on selected interface
             let config = ConfigStore.shared.config
             if !verifyReq.isEmpty && verifyReq != self.lastHandledVerifyNonce {
                 // Find the service to check if it's our connected Backup
                 if let service = self.services.first(where: { $0.id == name }),
-                   config.destinationIP == service.resolvedIP {
+                   config.destinationIP == service.resolvedIP,
+                   service.isReachableOnSelectedInterface {
                     self.lastHandledVerifyNonce = verifyReq
                     NSLog("[Bonjour] Received verify request from Backup: nonce=%@", verifyReq)
                     SyncEngine.shared.triggerRemoteVerify()
                 }
             }
 
-            // Update the service entry in our array
+            // Update the service entry in our array (preserve reachability flag)
             if let idx = self.services.firstIndex(where: { $0.id == name }) {
                 let old = self.services[idx]
                 self.services[idx] = DiscoveredBackup(
@@ -520,7 +558,8 @@ extension BonjourBrowser: NetServiceDelegate {
                     resolvedIP: old.resolvedIP,
                     destinationPath: destPath,
                     effectiveDestinationPath: effectivePath,
-                    freeSpaceBytes: freeBytes
+                    freeSpaceBytes: freeBytes,
+                    isReachableOnSelectedInterface: old.isReachableOnSelectedInterface
                 )
                 NSLog("[Bonjour] TXT update for %@: dest=%@, effective=%@", name, destPath, effectivePath)
 
@@ -602,6 +641,51 @@ extension BonjourBrowser: NetServiceDelegate {
             ptr = ifa.ifa_next
         }
         return nil
+    }
+
+    // Returns ALL IPv4 addresses from resolved NetService addresses (Backup may advertise on multiple interfaces)
+    private static func allIPv4Addresses(in addresses: [Data]) -> [String] {
+        var result: [String] = []
+        for data in addresses {
+            let ip: String? = data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> String? in
+                guard let base = raw.baseAddress else { return nil }
+                let sa = base.assumingMemoryBound(to: sockaddr.self)
+                guard sa.pointee.sa_family == sa_family_t(AF_INET) else { return nil }
+                var addr = base.assumingMemoryBound(to: sockaddr_in.self).pointee
+                var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+                guard inet_ntop(AF_INET, &addr.sin_addr, &buf, socklen_t(INET_ADDRSTRLEN)) != nil else { return nil }
+                return String(cString: buf)
+            }
+            if let ip { result.append(ip) }
+        }
+        return result
+    }
+
+    // Returns IP and netmask for the given interface (for subnet comparison)
+    private static func getInterfaceSubnet(name interfaceName: String) -> (ip: UInt32, mask: UInt32)? {
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
+        defer { freeifaddrs(first) }
+        var ptr = Optional(first)
+        while let current = ptr {
+            let ifa = current.pointee
+            if ifa.ifa_addr.pointee.sa_family == UInt8(AF_INET),
+               String(cString: ifa.ifa_name) == interfaceName,
+               let netmaskPtr = ifa.ifa_netmask {
+                let addrIn = ifa.ifa_addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee }
+                let maskIn = netmaskPtr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee }
+                return (ip: addrIn.sin_addr.s_addr, mask: maskIn.sin_addr.s_addr)
+            }
+            ptr = ifa.ifa_next
+        }
+        return nil
+    }
+
+    // Check if an IP string is on the same subnet as the given interface IP/mask
+    private static func isOnSubnet(_ ipString: String, ifaceIP: UInt32, mask: UInt32) -> Bool {
+        var addr = in_addr()
+        guard inet_pton(AF_INET, ipString, &addr) == 1 else { return false }
+        return (addr.s_addr & mask) == (ifaceIP & mask)
     }
 
     // Validate TXT record format before calling dictionary(fromTXTRecord:)

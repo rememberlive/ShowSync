@@ -32,8 +32,52 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "373"
             endingLineNumber = "373"
-            landmarkName = "netServiceBrowser(_:didNotSearch:)"
+            landmarkName = "netServiceBrowser(_:didRemove:moreComing:)"
             landmarkType = "7">
+            <Locations>
+               <Location
+                  uuid = "531CA0BD-879C-4E92-A9B9-6B473A5C27C4 - 3503a62aa6dc5c03"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "Sync.BonjourBrowser.netServiceBrowser(_: __C.NSNetServiceBrowser, didNotSearch: Swift.Dictionary&lt;Swift.String, __C.NSNumber&gt;) -&gt; ()"
+                  moduleName = "Sync.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/remember/Documents/LiveAudioApps/Sync/Sync/BonjourDiscovery.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "373"
+                  endingLineNumber = "373">
+               </Location>
+               <Location
+                  uuid = "531CA0BD-879C-4E92-A9B9-6B473A5C27C4 - c3e1e0a1395ed280"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "Sync.BonjourBrowser.netServiceBrowser(_: __C.NSNetServiceBrowser, didRemove: __C.NSNetService, moreComing: Swift.Bool) -&gt; ()"
+                  moduleName = "Sync.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/remember/Documents/LiveAudioApps/Sync/Sync/BonjourDiscovery.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "373"
+                  endingLineNumber = "373">
+               </Location>
+               <Location
+                  uuid = "531CA0BD-879C-4E92-A9B9-6B473A5C27C4 - a462bedba0131bd7"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "closure #2 (__C.NSNetService) -&gt; Swift.Bool in Sync.BonjourBrowser.netServiceBrowser(_: __C.NSNetServiceBrowser, didRemove: __C.NSNetService, moreComing: Swift.Bool) -&gt; ()"
+                  moduleName = "Sync.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/remember/Documents/LiveAudioApps/Sync/Sync/BonjourDiscovery.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "373"
+                  endingLineNumber = "373">
+               </Location>
+            </Locations>
          </BreakpointContent>
       </BreakpointProxy>
    </Breakpoints>
