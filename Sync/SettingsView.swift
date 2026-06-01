@@ -27,6 +27,8 @@ struct SettingsView: View {
     @State private var editingDiscoveryName = ""
     @State private var isEditingUsername = false
     @State private var editingUsername = ""
+    @State private var isEditingIP = false
+    @State private var editingIP = ""
     @State private var isEditingBackupName = false
     @State private var editingBackupName = ""
     @State private var renameState: RenameState = .idle
@@ -782,16 +784,40 @@ struct SettingsView: View {
                         .font(.system(size: 12))
                         .foregroundColor(labelColor)
                     Spacer()
-                    TextField("e.g. 192.168.1.x", text: Binding(
-                        get: { store.config.destinationIP },
-                        set: {
-                            store.config.destinationIP = $0
+                    if isEditingIP {
+                        TextField("e.g. 192.168.1.x", text: $editingIP)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 100)
+                            .multilineTextAlignment(.trailing)
+                        Button("Save") {
+                            let trimmed = editingIP.trimmingCharacters(in: .whitespaces)
+                            store.config.destinationIP = trimmed
                             store.config.sshKeysConfigured = false
+                            isEditingIP = false
                         }
-                    ))
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 100)
-                    .multilineTextAlignment(.trailing)
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundColor(editingIP.trimmingCharacters(in: .whitespaces).isEmpty ? Color(white: 0.4) : .blue)
+                        .disabled(editingIP.trimmingCharacters(in: .whitespaces).isEmpty)
+                        Button("Cancel") {
+                            isEditingIP = false
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(white: 0.5))
+                    } else {
+                        Text(store.config.destinationIP.isEmpty ? "Not set" : store.config.destinationIP)
+                            .font(.system(size: 12))
+                            .foregroundColor(store.config.destinationIP.isEmpty ? labelColor : .white)
+                            .lineLimit(1)
+                        Button("Edit") {
+                            editingIP = store.config.destinationIP
+                            isEditingIP = true
+                        }
+                        .buttonStyle(.bordered)
+                        .font(.system(size: 11))
+                        .tint(.blue)
+                    }
                 }
                 // Manual mode: Confirm Destination button + status
                 if !store.config.destinationIP.isEmpty {
