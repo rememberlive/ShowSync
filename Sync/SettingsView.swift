@@ -44,6 +44,7 @@ struct SettingsView: View {
     private enum RenameState: Equatable {
         case idle
         case pending(oldName: String)
+        case sent       // SSH write succeeded, waiting for Bonjour re-advertise
         case failed
     }
 
@@ -334,7 +335,12 @@ struct SettingsView: View {
         }
         .onChange(of: bonjourBrowser.services) { services in
             // Detect remote rename confirmation: same IP, new name
-            guard case .pending = renameState else { return }
+            let isWaitingForRename = { () -> Bool in
+                if case .pending = renameState { return true }
+                if case .sent = renameState { return true }
+                return false
+            }()
+            guard isWaitingForRename else { return }
             let targetIP = store.config.destinationIP
             if let match = services.first(where: { $0.resolvedIP == targetIP }) {
                 handleRenameConfirmed(newName: match.id)
@@ -586,9 +592,13 @@ struct SettingsView: View {
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError = FileHandle.nullDevice
         proc.terminationHandler = { p in
-            if p.terminationStatus != 0 {
-                Task { @MainActor in
-                    guard renameGeneration == thisGen else { return }
+            Task { @MainActor in
+                guard renameGeneration == thisGen else { return }
+                if p.terminationStatus == 0 {
+                    // SSH write succeeded — wait for Bonjour re-advertise
+                    renameState = .sent
+                } else {
+                    // SSH write failed — show error
                     renameState = .failed
                     try? await Task.sleep(nanoseconds: 3_000_000_000)
                     if renameState == .failed && renameGeneration == thisGen { renameState = .idle }
@@ -597,13 +607,16 @@ struct SettingsView: View {
         }
         DispatchQueue.global(qos: .utility).async { try? proc.run() }
 
-        // 3s timeout
+        // 30s fallback timeout (Bonjour re-advertise can take ~18s)
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            guard renameGeneration == thisGen, case .pending = renameState else { return }
-            renameState = .failed
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            if renameState == .failed && renameGeneration == thisGen { renameState = .idle }
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            guard renameGeneration == thisGen else { return }
+            // Only fail if still in pending/sent state after 30s
+            if case .pending = renameState {
+                renameState = .failed
+            } else if case .sent = renameState {
+                renameState = .idle  // Soft timeout: just clear, name may have updated via onChange
+            }
         }
     }
 
@@ -898,6 +911,12 @@ struct SettingsView: View {
                             Text("\(editingBackupName)...")
                                 .font(.system(size: 12))
                                 .foregroundColor(.yellow)
+                                .lineLimit(1)
+                            Spacer()
+                        case .sent:
+                            Text("Rename sent — updating...")
+                                .font(.system(size: 12))
+                                .foregroundColor(.green)
                                 .lineLimit(1)
                             Spacer()
                         case .failed:
