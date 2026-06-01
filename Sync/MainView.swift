@@ -885,8 +885,17 @@ final class SyncEngine: ObservableObject {
     static func parseStatsFileCount(_ output: String) -> Int {
         for line in output.components(separatedBy: .newlines) {
             let t = line.trimmingCharacters(in: .whitespaces)
+            // GNU rsync 3.x: "Number of regular files transferred:"
             if t.hasPrefix("Number of regular files transferred:") {
                 let numStr = t.dropFirst("Number of regular files transferred:".count)
+                    .trimmingCharacters(in: .whitespaces)
+                    .replacingOccurrences(of: ",", with: "")
+                    .components(separatedBy: CharacterSet.decimalDigits.inverted).first ?? ""
+                if let n = Int(numStr) { return n }
+            }
+            // openrsync / Apple: "Number of files transferred:"
+            if t.hasPrefix("Number of files transferred:") {
+                let numStr = t.dropFirst("Number of files transferred:".count)
                     .trimmingCharacters(in: .whitespaces)
                     .replacingOccurrences(of: ",", with: "")
                     .components(separatedBy: CharacterSet.decimalDigits.inverted).first ?? ""
