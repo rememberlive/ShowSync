@@ -136,8 +136,11 @@ struct SettingsView: View {
                                 while BonjourAdvertiser.shared.state != .idle {
                                     try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
                                 }
+                                // Register global hotkey for Main role
+                                GlobalHotkey.shared.register()
                             } else if currentRole == "main" && targetRole == "backup" {
-                                // Main → Backup: Start advertising immediately
+                                // Main → Backup: Stop global hotkey, start advertising
+                                GlobalHotkey.shared.unregister()
                                 BonjourAdvertiser.shared.start()
                             }
 
@@ -580,6 +583,15 @@ struct SettingsView: View {
             }
         } catch {
             launchAtLoginError = error.localizedDescription
+        }
+    }
+
+    private func setGlobalHotkeyEnabled(_ enabled: Bool) {
+        store.config.globalHotkeyEnabled = enabled
+        if enabled {
+            GlobalHotkey.shared.register()
+        } else {
+            GlobalHotkey.shared.unregister()
         }
     }
 
@@ -1315,6 +1327,15 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundColor(.red)
             }
+            Toggle("Global shortcut ⌃⌥⌘S", isOn: Binding(
+                get: { store.config.globalHotkeyEnabled },
+                set: { setGlobalHotkeyEnabled($0) }
+            ))
+            .font(.system(size: 12))
+            .foregroundColor(.white)
+            Text("Triggers Sync Now from anywhere")
+                .font(.system(size: 10))
+                .foregroundColor(labelColor)
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 12)

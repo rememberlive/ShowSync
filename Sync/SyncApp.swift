@@ -96,6 +96,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         startAutoSyncIfNeeded()
         startPushSyncIfNeeded()
         startReceiveMonitorIfNeeded()
+        startGlobalHotkeyIfNeeded()
+    }
+
+    // Registers the global sync hotkey (⌃⌥⌘S) for Main role if enabled.
+    func startGlobalHotkeyIfNeeded() {
+        let cfg = ConfigStore.shared.config
+        if cfg.role == "main" && cfg.globalHotkeyEnabled {
+            GlobalHotkey.shared.register()
+        }
     }
 
     // Starts Auto Sync timer at app launch for Main role with Auto Sync enabled.
@@ -297,6 +306,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // clean up state that persists on disk after the process is gone — the Backup signal
     // files in ~/Sync are the only such state.
     func applicationWillTerminate(_ notification: Notification) {
+        GlobalHotkey.shared.unregister()
         if ConfigStore.shared.config.role == "backup" {
             cleanupStaleSignalFiles()
         }

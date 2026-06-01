@@ -69,6 +69,9 @@ struct Config {
     // Network interface selection (both roles)
     var preferredInterface: String = ""  // Empty = "Automatic", otherwise interface name like "en0"
 
+    // Global hotkey (Main role only)
+    var globalHotkeyEnabled: Bool = true  // ⌃⌥⌘S triggers Sync Now from anywhere
+
     var isReadyToSync: Bool {
         !sourceFolder.isEmpty && !destinationIP.isEmpty && !username.isEmpty && sshKeysConfigured
     }
@@ -105,6 +108,7 @@ private struct MainConfig: Codable {
     var lastBackupDiscoveryName: String = ""
     var lastBackupIP: String = ""
     var preferredInterface: String = ""
+    var globalHotkeyEnabled: Bool = true
 }
 
 private struct BackupConfig: Codable {
@@ -252,7 +256,8 @@ final class ConfigStore: ObservableObject {
                 backupHostname:                config.backupHostname,
                 lastBackupDiscoveryName:       config.lastBackupDiscoveryName,
                 lastBackupIP:                  config.lastBackupIP,
-                preferredInterface:            config.preferredInterface
+                preferredInterface:            config.preferredInterface,
+                globalHotkeyEnabled:           config.globalHotkeyEnabled
             )
             do {
                 let data = try JSONEncoder().encode(m)
@@ -364,6 +369,7 @@ final class ConfigStore: ObservableObject {
         c.lastBackupDiscoveryName       = m.lastBackupDiscoveryName
         c.lastBackupIP                  = m.lastBackupIP
         c.preferredInterface            = m.preferredInterface
+        c.globalHotkeyEnabled           = m.globalHotkeyEnabled
         return c
     }
 
