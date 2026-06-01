@@ -5,6 +5,114 @@ import Network
 private let darkBg = Color(red: 0.12, green: 0.12, blue: 0.12)
 private let popoverWidth: CGFloat = 360
 
+// MARK: - Network interface enumeration
+
+struct NetworkInterface: Identifiable, Hashable {
+    let id: String       // interface name, e.g. "en0"
+    let name: String     // same as id
+    let displayName: String  // friendly name, e.g. "Wi-Fi" or "Ethernet"
+    let ipv4: String     // e.g. "192.168.1.50"
+
+    var displayLabel: String {
+        "\(name) · \(displayName) · \(ipv4)"
+    }
+}
+
+final class NetworkInterfaceManager: ObservableObject {
+    static let shared = NetworkInterfaceManager()
+
+    @Published var availableInterfaces: [NetworkInterface] = []
+    @Published var usingFallback: Bool = false
+
+    private let monitor = NWPathMonitor()
+    private let queue = DispatchQueue(label: "com.sync.interfacemanager", qos: .utility)
+
+    private init() {
+        monitor.pathUpdateHandler = { [weak self] path in
+            self?.updateInterfaces(from: path)
+        }
+        monitor.start(queue: queue)
+    }
+
+    deinit { monitor.cancel() }
+
+    private func updateInterfaces(from path: NWPath) {
+        var interfaces: [NetworkInterface] = []
+        for iface in path.availableInterfaces {
+            if iface.type == .loopback { continue }
+            guard let ip = Self.ipv4Address(for: iface.name) else { continue }
+            let displayName: String
+            switch iface.type {
+            case .wifi:          displayName = "Wi-Fi"
+            case .wiredEthernet: displayName = "Ethernet"
+            case .cellular:      displayName = "Cellular"
+            default:             displayName = "Network"
+            }
+            interfaces.append(NetworkInterface(
+                id: iface.name,
+                name: iface.name,
+                displayName: displayName,
+                ipv4: ip
+            ))
+        }
+
+        let preferred = ConfigStore.shared.config.preferredInterface
+        let preferredAvailable = preferred.isEmpty || interfaces.contains { $0.name == preferred }
+
+        Task { @MainActor [weak self] in
+            self?.availableInterfaces = interfaces
+            self?.usingFallback = !preferred.isEmpty && !preferredAvailable
+            if self?.usingFallback == true {
+                if ConfigStore.shared.iconState != .syncing && ConfigStore.shared.iconState != .receiving {
+                    ConfigStore.shared.iconState = .warning
+                }
+            } else if ConfigStore.shared.iconState == .warning {
+                ConfigStore.shared.iconState = .idle
+            }
+        }
+    }
+
+    static func ipv4Address(for interfaceName: String) -> String? {
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
+        defer { freeifaddrs(first) }
+        var ptr = Optional(first)
+        while let current = ptr {
+            let ifa = current.pointee
+            if ifa.ifa_addr.pointee.sa_family == UInt8(AF_INET),
+               String(cString: ifa.ifa_name) == interfaceName {
+                var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                getnameinfo(ifa.ifa_addr, socklen_t(ifa.ifa_addr.pointee.sa_len),
+                            &hostname, socklen_t(hostname.count),
+                            nil, 0, NI_NUMERICHOST)
+                return String(cString: hostname)
+            }
+            ptr = ifa.ifa_next
+        }
+        return nil
+    }
+
+    func getEffectiveIP() -> String? {
+        let preferred = ConfigStore.shared.config.preferredInterface
+        if !preferred.isEmpty {
+            if let iface = availableInterfaces.first(where: { $0.name == preferred }) {
+                return iface.ipv4
+            }
+        }
+        return availableInterfaces.first?.ipv4
+    }
+
+    func getEffectiveInterface() -> NetworkInterface? {
+        let preferred = ConfigStore.shared.config.preferredInterface
+        if !preferred.isEmpty {
+            if let iface = availableInterfaces.first(where: { $0.name == preferred }) {
+                return iface
+            }
+        }
+        return availableInterfaces.first
+    }
+}
+
 // MARK: - Network monitor
 
 final class NetworkMonitor: ObservableObject {
@@ -35,6 +143,14 @@ final class NetworkMonitor: ObservableObject {
     deinit { monitor.cancel() }
 
     private static func extractIPv4(from path: NWPath) -> String? {
+        let preferred = ConfigStore.shared.config.preferredInterface
+        if !preferred.isEmpty {
+            for iface in path.availableInterfaces {
+                if iface.name == preferred, let ip = ipv4Address(for: iface.name) {
+                    return ip
+                }
+            }
+        }
         for iface in path.availableInterfaces {
             if iface.type == .loopback { continue }
             if let ip = ipv4Address(for: iface.name) { return ip }

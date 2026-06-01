@@ -12,6 +12,7 @@ struct SettingsView: View {
     @ObservedObject private var bonjourBrowser = BonjourBrowser.shared
     @ObservedObject private var advertiser  = BonjourAdvertiser.shared
     @ObservedObject private var engine = SyncEngine.shared
+    @ObservedObject private var interfaceManager = NetworkInterfaceManager.shared
     // Spec §5: callback to return to main dropdown view
     var onBack: () -> Void = {}
 
@@ -664,6 +665,10 @@ struct SettingsView: View {
 
         Divider()
 
+        interfacePickerSection
+
+        Divider()
+
         sectionHeader("Identity")
         VStack(spacing: 8) {
             HStack {
@@ -982,6 +987,42 @@ struct SettingsView: View {
         }
     }
 
+    @ViewBuilder private var interfacePickerSection: some View {
+        sectionHeader("Network Interface")
+        VStack(alignment: .leading, spacing: 8) {
+            Picker("", selection: Binding(
+                get: { store.config.preferredInterface },
+                set: { store.config.preferredInterface = $0 }
+            )) {
+                Text("Automatic").tag("")
+                ForEach(interfaceManager.availableInterfaces) { iface in
+                    Text(iface.displayLabel).tag(iface.name)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if interfaceManager.usingFallback {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(Color.orange)
+                        .frame(width: 6, height: 6)
+                    Text("Preferred network unavailable — using automatic")
+                        .font(.system(size: 11))
+                        .foregroundColor(.orange)
+                }
+            }
+
+            Text("Controls which network Sync connects over. Does not restrict Bonjour advertising.")
+                .font(.system(size: 10))
+                .foregroundColor(Color(white: 0.45))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 12)
+    }
+
     @ViewBuilder private var behaviourSectionContent: some View {
         Divider()
 
@@ -1169,6 +1210,10 @@ struct SettingsView: View {
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 12)
+
+        Divider()
+
+        interfacePickerSection
 
         Divider()
 

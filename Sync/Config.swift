@@ -52,6 +52,9 @@ struct Config {
     var networkDiscoveryName: String = ""
     var minFreeSpaceGB: Int = 2  // Minimum free space threshold (floor 1GB)
 
+    // Network interface selection (both roles)
+    var preferredInterface: String = ""  // Empty = "Automatic", otherwise interface name like "en0"
+
     var isReadyToSync: Bool {
         !sourceFolder.isEmpty && !destinationIP.isEmpty && !username.isEmpty && sshKeysConfigured
     }
@@ -87,6 +90,7 @@ private struct MainConfig: Codable {
     var backupHostname: String = ""
     var lastBackupDiscoveryName: String = ""
     var lastBackupIP: String = ""
+    var preferredInterface: String = ""
 }
 
 private struct BackupConfig: Codable {
@@ -98,6 +102,7 @@ private struct BackupConfig: Codable {
     var discoveryMode: String = "automatic"
     var networkDiscoveryName: String = ""
     var minFreeSpaceGB: Int = 2
+    var preferredInterface: String = ""
 }
 
 // All fields optional — used only during one-time migration from the legacy config.json.
@@ -224,7 +229,8 @@ final class ConfigStore: ObservableObject {
                 discoveryMode:                 config.discoveryMode,
                 backupHostname:                config.backupHostname,
                 lastBackupDiscoveryName:       config.lastBackupDiscoveryName,
-                lastBackupIP:                  config.lastBackupIP
+                lastBackupIP:                  config.lastBackupIP,
+                preferredInterface:            config.preferredInterface
             )
             do {
                 let data = try JSONEncoder().encode(m)
@@ -243,7 +249,8 @@ final class ConfigStore: ObservableObject {
                 lastReceivedTime:  config.lastReceivedTime,
                 discoveryMode:     config.discoveryMode,
                 networkDiscoveryName: config.networkDiscoveryName,
-                minFreeSpaceGB:    max(1, config.minFreeSpaceGB)  // Floor of 1GB
+                minFreeSpaceGB:    max(1, config.minFreeSpaceGB),  // Floor of 1GB
+                preferredInterface: config.preferredInterface
             )
             do {
                 let data = try JSONEncoder().encode(b)
@@ -303,6 +310,7 @@ final class ConfigStore: ObservableObject {
         c.backupHostname                = m.backupHostname
         c.lastBackupDiscoveryName       = m.lastBackupDiscoveryName
         c.lastBackupIP                  = m.lastBackupIP
+        c.preferredInterface            = m.preferredInterface
         return c
     }
 
@@ -319,6 +327,7 @@ final class ConfigStore: ObservableObject {
         c.discoveryMode    = b.discoveryMode.isEmpty ? "automatic" : b.discoveryMode
         c.networkDiscoveryName = b.networkDiscoveryName
         c.minFreeSpaceGB   = max(1, b.minFreeSpaceGB)  // Floor of 1GB
+        c.preferredInterface = b.preferredInterface
         return c
     }
 

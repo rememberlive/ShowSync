@@ -517,8 +517,13 @@ extension BonjourBrowser: NetServiceDelegate {
         return nil
     }
 
-    // IP detection using getifaddrs directly
+    // IP detection using getifaddrs directly — prefers selected interface if set
     private static func getCurrentIP() -> String? {
+        let preferred = ConfigStore.shared.config.preferredInterface
+        if !preferred.isEmpty, let ip = ipv4Address(for: preferred) {
+            return ip
+        }
+
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
         defer { freeifaddrs(first) }

@@ -191,7 +191,13 @@ final class SyncEngine: ObservableObject {
         NSLog("[SyncTrace] 2 starting dry-run PREVIEW, rsyncPath=%@", rsyncPath)
         let prepProc = Process()
         prepProc.executableURL = URL(fileURLWithPath: rsyncPath)
-        prepProc.arguments = ["-av", "--dry-run", "--stats", source, dest]
+        var prepArgs = ["-av", "--dry-run", "--stats"]
+        if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
+           !ConfigStore.shared.config.preferredInterface.isEmpty {
+            prepArgs.insert(contentsOf: ["-e", "ssh -b \(bindIP)"], at: 0)
+        }
+        prepArgs.append(contentsOf: [source, dest])
+        prepProc.arguments = prepArgs
         let prepPipe = Pipe()
         prepProc.standardOutput = prepPipe
         prepProc.standardError  = prepPipe
@@ -338,7 +344,13 @@ final class SyncEngine: ObservableObject {
                     NSLog("[SyncTrace] 9 launchRsync closure executing")
                     let proc = Process()
                     proc.executableURL = URL(fileURLWithPath: rsyncPath)
-                    proc.arguments = ["-av", source, dest]
+                    var rsyncArgs = ["-av"]
+                    if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
+                       !ConfigStore.shared.config.preferredInterface.isEmpty {
+                        rsyncArgs.insert(contentsOf: ["-e", "ssh -b \(bindIP)"], at: 0)
+                    }
+                    rsyncArgs.append(contentsOf: [source, dest])
+                    proc.arguments = rsyncArgs
                     proc.standardOutput = FileHandle.nullDevice
                     let errPipe = Pipe()
                     proc.standardError  = errPipe
@@ -572,13 +584,13 @@ final class SyncEngine: ObservableObject {
         let escaped = Self.shellEscapeForDoubleQuotes(syncRemotePath)
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        proc.arguments = [
-            "-o", "BatchMode=yes",
-            "-o", "ConnectTimeout=3",
-            "-o", "StrictHostKeyChecking=no",
-            "\(username)@\(ip)",
-            "du -sk \"\(escaped)\" 2>/dev/null | cut -f1"
-        ]
+        var duArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no"]
+        if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
+           !ConfigStore.shared.config.preferredInterface.isEmpty {
+            duArgs.insert(contentsOf: ["-b", bindIP], at: 0)
+        }
+        duArgs.append(contentsOf: ["\(username)@\(ip)", "du -sk \"\(escaped)\" 2>/dev/null | cut -f1"])
+        proc.arguments = duArgs
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError  = FileHandle.nullDevice
@@ -649,13 +661,13 @@ final class SyncEngine: ObservableObject {
         guard !syncUsername.isEmpty, !syncIP.isEmpty else { return }
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        proc.arguments = [
-            "-o", "BatchMode=yes",
-            "-o", "ConnectTimeout=2",
-            "-o", "StrictHostKeyChecking=no",
-            "\(syncUsername)@\(syncIP)",
-            command
-        ]
+        var sshArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=2", "-o", "StrictHostKeyChecking=no"]
+        if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
+           !ConfigStore.shared.config.preferredInterface.isEmpty {
+            sshArgs.insert(contentsOf: ["-b", bindIP], at: 0)
+        }
+        sshArgs.append(contentsOf: ["\(syncUsername)@\(syncIP)", command])
+        proc.arguments = sshArgs
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError  = FileHandle.nullDevice
         DispatchQueue.global(qos: .utility).async { try? proc.run() }
@@ -690,15 +702,14 @@ final class SyncEngine: ObservableObject {
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        proc.arguments = [
-            "-o", "BatchMode=yes",
-            "-o", "ConnectTimeout=2",
-            "-o", "ServerAliveInterval=2",
-            "-o", "ServerAliveCountMax=2",
-            "-o", "StrictHostKeyChecking=no",
-            "\(username)@\(ip)",
-            cmd
-        ]
+        var testArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=2", "-o", "ServerAliveInterval=2",
+                        "-o", "ServerAliveCountMax=2", "-o", "StrictHostKeyChecking=no"]
+        if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
+           !ConfigStore.shared.config.preferredInterface.isEmpty {
+            testArgs.insert(contentsOf: ["-b", bindIP], at: 0)
+        }
+        testArgs.append(contentsOf: ["\(username)@\(ip)", cmd])
+        proc.arguments = testArgs
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = FileHandle.nullDevice
@@ -762,13 +773,13 @@ final class SyncEngine: ObservableObject {
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        proc.arguments = [
-            "-o", "BatchMode=yes",
-            "-o", "ConnectTimeout=2",
-            "-o", "StrictHostKeyChecking=no",
-            "\(username)@\(ip)",
-            cmd
-        ]
+        var refuseArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=2", "-o", "StrictHostKeyChecking=no"]
+        if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
+           !ConfigStore.shared.config.preferredInterface.isEmpty {
+            refuseArgs.insert(contentsOf: ["-b", bindIP], at: 0)
+        }
+        refuseArgs.append(contentsOf: ["\(username)@\(ip)", cmd])
+        proc.arguments = refuseArgs
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = FileHandle.nullDevice
@@ -910,17 +921,16 @@ final class SyncEngine: ObservableObject {
             group.enter()
             let proc = Process()
             proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-            proc.arguments = [
-                "-o", "BatchMode=yes",
-                "-o", "ConnectTimeout=3",
-                "-o", "StrictHostKeyChecking=no",
-                "\(username)@\(ip)",
-                cmd
-            ]
+            var versionArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no"]
+            if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
+               !ConfigStore.shared.config.preferredInterface.isEmpty {
+                versionArgs.insert(contentsOf: ["-b", bindIP], at: 0)
+            }
+            versionArgs.append(contentsOf: ["\(username)@\(ip)", cmd])
+            proc.arguments = versionArgs
             proc.standardOutput = FileHandle.nullDevice
             proc.standardError  = FileHandle.nullDevice
             proc.terminationHandler = { p in
-                // Filename redacted — paths are PII in syslog.
                 NSLog("[Version] exit=%d", p.terminationStatus)
                 group.leave()
             }
@@ -1066,13 +1076,13 @@ final class SSHChecker: ObservableObject {
         if isManualMode {
             // Manual mode: read config + free space in one call (also proves reachability)
             let cmd = "cat \"$HOME/Library/Application Support/Sync/config_backup.json\" 2>/dev/null || echo '{}'; echo '---DF---'; df -k ~ 2>/dev/null | awk 'NR==2 {print $4}'"
-            proc.arguments = [
-                "-o", "ConnectTimeout=2",
-                "-o", "BatchMode=yes",
-                "-o", "StrictHostKeyChecking=no",
-                "\(username)@\(ip)",
-                cmd
-            ]
+            var manualArgs = ["-o", "ConnectTimeout=2", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no"]
+            if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
+               !ConfigStore.shared.config.preferredInterface.isEmpty {
+                manualArgs.insert(contentsOf: ["-b", bindIP], at: 0)
+            }
+            manualArgs.append(contentsOf: ["\(username)@\(ip)", cmd])
+            proc.arguments = manualArgs
             let pipe = Pipe()
             proc.standardOutput = pipe
             proc.standardError = FileHandle.nullDevice
@@ -1117,13 +1127,13 @@ final class SSHChecker: ObservableObject {
             DispatchQueue.global(qos: .utility).async { try? proc.run() }
         } else {
             // Auto mode: simple exit test (TXT push handles config updates)
-            proc.arguments = [
-                "-o", "ConnectTimeout=2",
-                "-o", "BatchMode=yes",
-                "-o", "StrictHostKeyChecking=no",
-                "\(username)@\(ip)",
-                "exit"
-            ]
+            var autoArgs = ["-o", "ConnectTimeout=2", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no"]
+            if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
+               !ConfigStore.shared.config.preferredInterface.isEmpty {
+                autoArgs.insert(contentsOf: ["-b", bindIP], at: 0)
+            }
+            autoArgs.append(contentsOf: ["\(username)@\(ip)", "exit"])
+            proc.arguments = autoArgs
             proc.standardOutput = FileHandle.nullDevice
             proc.standardError = FileHandle.nullDevice
             proc.terminationHandler = { [weak self] p in
