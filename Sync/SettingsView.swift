@@ -357,20 +357,6 @@ struct SettingsView: View {
                 SyncEngine.shared.startAutoSync(delay: interval)
             }
         }
-        .onChange(of: store.config.pushSyncEnabled) { enabled in
-            if enabled {
-                if !store.config.sourceFolder.isEmpty {
-                    FSEventsWatcher.shared.start(path: store.config.sourceFolder, debounceSeconds: store.config.pushSyncDebounce)
-                }
-            } else {
-                FSEventsWatcher.shared.stop()
-            }
-        }
-        .onChange(of: store.config.pushSyncDebounce) { _ in
-            if store.config.pushSyncEnabled && !store.config.sourceFolder.isEmpty {
-                FSEventsWatcher.shared.start(path: store.config.sourceFolder, debounceSeconds: store.config.pushSyncDebounce)
-            }
-        }
         .onChange(of: bonjourBrowser.services) { services in
             // Detect remote rename confirmation: same IP, new name
             let isWaitingForRename = { () -> Bool in

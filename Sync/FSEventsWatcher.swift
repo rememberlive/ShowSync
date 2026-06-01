@@ -42,6 +42,18 @@ final class FSEventsWatcher: ObservableObject {
     func start(path: String, debounceSeconds: Int) {
         guard !path.isEmpty else { return }
 
+        // Ensure callbacks are always wired (may have been cleared or never set)
+        if onDebounceComplete == nil {
+            onDebounceComplete = {
+                SyncEngine.shared.triggerPushSync()
+            }
+        }
+        if onDebounceStart == nil {
+            onDebounceStart = { date in
+                SyncEngine.shared.nextPushSyncDate = date
+            }
+        }
+
         // If already watching the same path, just update debounce
         if watchedPath == path && stream != nil {
             self.debounceSeconds = debounceSeconds
