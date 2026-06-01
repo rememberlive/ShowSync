@@ -965,7 +965,6 @@ final class SSHChecker: ObservableObject {
 
                     // Parse output: JSON config, then ---DF---, then free space KB
                     let output = String(data: data, encoding: .utf8) ?? ""
-                    NSLog("[ManualPoll] RAW OUTPUT:\n%@", output)
                     let parts = output.components(separatedBy: "---DF---")
 
                     // Parse config JSON (only update if parse succeeds)
@@ -975,13 +974,10 @@ final class SSHChecker: ObservableObject {
                        let dest = json["destinationFolder"] as? String, !dest.isEmpty {
                         let effectivePath = (json["effectivePath"] as? String) ?? dest
                         let isFallback = !effectivePath.isEmpty && effectivePath != dest
-                        NSLog("[ManualPoll] PARSED: dest=%@, effectivePath=%@, isFallback=%d", dest, effectivePath, isFallback ? 1 : 0)
                         ConfigStore.shared.config.backupDestination = dest
                         SyncEngine.shared.usingFallback = isFallback
-                        NSLog("[ManualPoll] SET: backupDestination=%@, usingFallback=%d", ConfigStore.shared.config.backupDestination, SyncEngine.shared.usingFallback ? 1 : 0)
-                    } else {
-                        NSLog("[ManualPoll] JSON PARSE FAILED - keeping last-known values")
                     }
+                    // On parse failure: keep last-known values (no else branch needed)
                     // Parse free space (only update if parse succeeds)
                     if parts.count > 1,
                        let kbStr = parts[1].trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: .newlines).first,

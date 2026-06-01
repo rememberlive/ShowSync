@@ -273,8 +273,9 @@ final class ReceiveMonitor: ObservableObject {
             // Custom folder is available (or came back)
             usingFallback = false
             if wasFallback {
-                // Drive returned! Update TXT in place (fast, no service restart)
+                // Drive returned! Update TXT (auto) + config file (manual)
                 BonjourAdvertiser.shared.updateTXTRecord()
+                ConfigStore.shared.forceSave()
             }
             return
         }
@@ -286,8 +287,9 @@ final class ReceiveMonitor: ObservableObject {
         if !isDefault {
             usingFallback = true
             if !wasFallback {
-                // Just started fallback - update TXT in place (fast, no service restart)
+                // Just started fallback - update TXT (auto) + config file (manual)
                 BonjourAdvertiser.shared.updateTXTRecord()
+                ConfigStore.shared.forceSave()
             }
         } else {
             usingFallback = false

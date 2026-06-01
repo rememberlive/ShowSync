@@ -189,7 +189,12 @@ final class ConfigStore: ObservableObject {
         UserDefaults.standard.set(role, forKey: "syncRole")
     }
 
-    // MARK: - Private persistence
+    // MARK: - Persistence
+
+    /// Force a save of the current config (e.g., when effectivePath changes but config fields don't).
+    func forceSave() {
+        save()
+    }
 
     private func save() {
         if config.role == "main" {
