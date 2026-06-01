@@ -40,6 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     var statusItem: NSStatusItem!
     var popover = NSPopover()
+    private var fallbackAnchorWindow: NSWindow?
 
     var quitConfirmed = false
 
@@ -314,9 +315,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
         if !popover.isShown {
-            togglePopover()
+            if let button = statusItem.button, button.window != nil {
+                togglePopover()
+            } else {
+                showPopoverScreenAnchored()
+            }
         }
         return false
+    }
+
+    private func showPopoverScreenAnchored() {
+        guard let screen = NSScreen.main else { return }
+
+        let anchorWindow: NSWindow
+        if let existing = fallbackAnchorWindow {
+            anchorWindow = existing
+        } else {
+            anchorWindow = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 1, height: 1),
+                styleMask: .borderless,
+                backing: .buffered,
+                defer: false
+            )
+            anchorWindow.isOpaque = false
+            anchorWindow.backgroundColor = .clear
+            anchorWindow.level = .popUpMenu
+            anchorWindow.collectionBehavior = [.canJoinAllSpaces, .stationary]
+            anchorWindow.ignoresMouseEvents = true
+            fallbackAnchorWindow = anchorWindow
+        }
+
+        let screenFrame = screen.frame
+        let menuBarHeight: CGFloat = 24
+        let anchorX = screenFrame.midX
+        let anchorY = screenFrame.maxY - menuBarHeight
+        anchorWindow.setFrameOrigin(NSPoint(x: anchorX, y: anchorY))
+        anchorWindow.orderFront(nil)
+
+        if let anchorView = anchorWindow.contentView {
+            popover.show(relativeTo: anchorView.bounds, of: anchorView, preferredEdge: .minY)
+            popover.contentViewController?.view.window?.makeKey()
+
+            let store = ConfigStore.shared
+            if store.iconState == .success || store.iconState == .error || store.iconState == .warning {
+                store.iconState = store.config.role == "backup"
+                    ? .idle
+                    : (store.config.isReadyToSync ? .idle : .notConfigured)
+            }
+        }
     }
 
     // MARK: - Quit protection
