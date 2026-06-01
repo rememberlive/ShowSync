@@ -488,6 +488,22 @@ struct SettingsView: View {
         panel.level = .floating
         let response = panel.runModal()
         guard response == .OK, let url = panel.url else { return }
+
+        // Block TCC-protected folders: rsync-over-SSH can't write to these even though
+        // the local GUI app can (NSOpenPanel grants TCC access that SSH won't have)
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let tccProtected = ["Documents", "Desktop", "Downloads"].map { "\(home)/\($0)" }
+        let chosenPath = url.path
+        if tccProtected.contains(where: { chosenPath == $0 || chosenPath.hasPrefix("\($0)/") }) {
+            let alert = NSAlert()
+            alert.messageText = "This folder can't receive files over the network"
+            alert.informativeText = "Documents, Desktop, and Downloads are protected by macOS. Please choose another folder, like a folder in your home directory or an external drive."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+
         // Write-test: verify folder is writable before accepting
         let testFile = url.appendingPathComponent(".sync_writetest")
         do {
