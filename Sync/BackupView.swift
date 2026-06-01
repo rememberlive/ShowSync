@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import Network
+import SystemConfiguration
 
 private let darkBg = Color(red: 0.12, green: 0.12, blue: 0.12)
 private let popoverWidth: CGFloat = 360
@@ -37,24 +38,54 @@ final class NetworkInterfaceManager: ObservableObject {
     deinit { monitor.cancel() }
 
     private func updateInterfaces(from path: NWPath) {
-        var interfaces: [NetworkInterface] = []
-        for iface in path.availableInterfaces {
-            if iface.type == .loopback { continue }
-            guard let ip = Self.ipv4Address(for: iface.name) else { continue }
-            let displayName: String
-            switch iface.type {
-            case .wifi:          displayName = "Wi-Fi"
-            case .wiredEthernet: displayName = "Ethernet"
-            case .cellular:      displayName = "Cellular"
-            default:             displayName = "Network"
+        // Enumerate via getifaddrs directly (not NWPathMonitor.availableInterfaces)
+        // to include interfaces with self-assigned IPs (169.254.x.x) for direct cables
+        var ifaceDict: [String: NetworkInterface] = [:]  // Dedupe by BSD name
+
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return }
+        defer { freeifaddrs(first) }
+
+        // Build lookup for friendly names from SystemConfiguration
+        let friendlyNames = Self.buildFriendlyNameLookup()
+
+        var ptr = Optional(first)
+        while let current = ptr {
+            let ifa = current.pointee
+            let bsdName = String(cString: ifa.ifa_name)
+
+            // Skip loopback
+            if bsdName == "lo0" || bsdName.hasPrefix("lo") {
+                ptr = ifa.ifa_next
+                continue
             }
-            interfaces.append(NetworkInterface(
-                id: iface.name,
-                name: iface.name,
-                displayName: displayName,
-                ipv4: ip
-            ))
+
+            // Only include interfaces with IPv4 addresses
+            if ifa.ifa_addr.pointee.sa_family == UInt8(AF_INET) {
+                // Skip if we already have this interface (dedupe)
+                if ifaceDict[bsdName] == nil {
+                    var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                    getnameinfo(ifa.ifa_addr, socklen_t(ifa.ifa_addr.pointee.sa_len),
+                                &hostname, socklen_t(hostname.count),
+                                nil, 0, NI_NUMERICHOST)
+                    let ip = String(cString: hostname)
+
+                    // Get friendly name from SystemConfiguration, fall back to BSD name
+                    let displayName = friendlyNames[bsdName] ?? bsdName
+
+                    ifaceDict[bsdName] = NetworkInterface(
+                        id: bsdName,
+                        name: bsdName,
+                        displayName: displayName,
+                        ipv4: ip
+                    )
+                }
+            }
+            ptr = ifa.ifa_next
         }
+
+        // Sort by BSD name for consistent ordering
+        let interfaces = ifaceDict.values.sorted { $0.name < $1.name }
 
         let preferred = ConfigStore.shared.config.preferredInterface
         let preferredAvailable = preferred.isEmpty || interfaces.contains { $0.name == preferred }
@@ -70,6 +101,18 @@ final class NetworkInterfaceManager: ObservableObject {
                 ConfigStore.shared.iconState = .idle
             }
         }
+    }
+
+    private static func buildFriendlyNameLookup() -> [String: String] {
+        var lookup: [String: String] = [:]
+        guard let interfaces = SCNetworkInterfaceCopyAll() as? [SCNetworkInterface] else { return lookup }
+        for iface in interfaces {
+            if let bsdName = SCNetworkInterfaceGetBSDName(iface) as String?,
+               let displayName = SCNetworkInterfaceGetLocalizedDisplayName(iface) as String? {
+                lookup[bsdName] = displayName
+            }
+        }
+        return lookup
     }
 
     static func ipv4Address(for interfaceName: String) -> String? {
