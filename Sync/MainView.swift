@@ -65,6 +65,34 @@ extension SyncStatus: Equatable {
     }
 }
 
+enum VerifyStatus: Equatable {
+    case idle
+    case verifying
+    case verified
+    case differs(Int)  // Number of files that differ
+    case failed(String)
+
+    var color: Color {
+        switch self {
+        case .idle:      return .gray
+        case .verifying: return .yellow
+        case .verified:  return .green
+        case .differs:   return .orange
+        case .failed:    return .red
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .idle:             return ""
+        case .verifying:        return "Verifying… (checks every file)"
+        case .verified:         return "Verified — all files match"
+        case .differs(let n):   return "\(n) file\(n == 1 ? "" : "s") differ — re-sync recommended"
+        case .failed(let msg):  return msg
+        }
+    }
+}
+
 // MARK: - Sync engine
 
 final class SyncEngine: ObservableObject {
@@ -98,10 +126,15 @@ final class SyncEngine: ObservableObject {
     private var isAutoSync:     Bool   = false
     private var isPushSync:     Bool   = false
 
+    // Verify Now - separate from sync
+    @Published var verifyStatus: VerifyStatus = .idle
+    private var verifyTask: Process?
+
     private init() {}
 
     deinit {
         task?.terminate()
+        verifyTask?.terminate()
         duPollTimer?.invalidate()
         autoSyncTimer?.invalidate()
         Task { @MainActor in
@@ -456,6 +489,176 @@ final class SyncEngine: ObservableObject {
                 if self?.status == .cancelled { self?.status = .ready }
             }
         }
+    }
+
+    // MARK: - Verify Now
+
+    func verifyNow(config: Config) {
+        guard config.isReadyToSync else { return }
+        guard verifyStatus != .verifying else { return }
+
+        verifyStatus = .verifying
+
+        let rawSource = config.sourceFolder
+        let source = rawSource.hasSuffix("/") ? rawSource : rawSource + "/"
+        let remotePath = usingFallback ? "~/Sync" : (config.backupDestination.isEmpty ? "~/Sync" : config.backupDestination)
+        let dest = "\(config.username)@\(config.destinationIP):\(remotePath)/"
+
+        let rsyncCandidates = ["/opt/homebrew/bin/rsync", "/usr/local/bin/rsync", "/usr/bin/rsync"]
+        let rsyncPath = rsyncCandidates.first { FileManager.default.fileExists(atPath: $0) } ?? "/usr/bin/rsync"
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: rsyncPath)
+
+        var args = ["-avc", "--dry-run"]
+        if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
+           !config.preferredInterface.isEmpty {
+            args.insert(contentsOf: ["-e", "ssh -b \(bindIP)"], at: 0)
+        }
+        args.append(contentsOf: [source, dest])
+        proc.arguments = args
+
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        proc.standardOutput = stdoutPipe
+        proc.standardError = stderrPipe
+
+        // Thread-safe output buffer for concurrent drain
+        class OutputBuffer {
+            private var data = Data()
+            private let lock = NSLock()
+            func append(_ chunk: Data) {
+                lock.lock()
+                data.append(chunk)
+                lock.unlock()
+            }
+            func getString() -> String {
+                lock.lock()
+                let result = String(data: data, encoding: .utf8) ?? ""
+                lock.unlock()
+                return result
+            }
+        }
+        let outputBuffer = OutputBuffer()
+
+        // CRITICAL: Concurrent pipe drain to avoid deadlock
+        // Use readInBackgroundAndNotify for async, non-blocking reads
+        let stdoutHandle = stdoutPipe.fileHandleForReading
+        NotificationCenter.default.addObserver(
+            forName: .NSFileHandleDataAvailable,
+            object: stdoutHandle,
+            queue: nil
+        ) { [weak stdoutHandle] _ in
+            guard let fh = stdoutHandle else { return }
+            let chunk = fh.availableData
+            if !chunk.isEmpty {
+                outputBuffer.append(chunk)
+                fh.waitForDataInBackgroundAndNotify()
+            }
+        }
+        stdoutHandle.waitForDataInBackgroundAndNotify()
+
+        // Drain stderr too (discard, but must drain to avoid pipe full)
+        let stderrHandle = stderrPipe.fileHandleForReading
+        NotificationCenter.default.addObserver(
+            forName: .NSFileHandleDataAvailable,
+            object: stderrHandle,
+            queue: nil
+        ) { [weak stderrHandle] _ in
+            guard let fh = stderrHandle else { return }
+            let chunk = fh.availableData
+            if !chunk.isEmpty {
+                fh.waitForDataInBackgroundAndNotify()
+            }
+        }
+        stderrHandle.waitForDataInBackgroundAndNotify()
+
+        proc.terminationHandler = { [weak self] p in
+            // Small delay to let final data arrive
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) {
+                let output = outputBuffer.getString()
+
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.verifyTask = nil
+
+                    if p.terminationStatus == 0 {
+                        // Success: count files that would transfer (= differ)
+                        let differCount = self.countDifferingFiles(output)
+                        if differCount == 0 {
+                            self.verifyStatus = .verified
+                        } else {
+                            self.verifyStatus = .differs(differCount)
+                        }
+                    } else {
+                        // SSH/connection failure
+                        self.verifyStatus = .failed("Verify failed — couldn't reach Backup")
+                    }
+
+                    // Clear status after 10 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+                        if case .verified = self?.verifyStatus { self?.verifyStatus = .idle }
+                        if case .differs = self?.verifyStatus { self?.verifyStatus = .idle }
+                        if case .failed = self?.verifyStatus { self?.verifyStatus = .idle }
+                    }
+                }
+            }
+        }
+
+        verifyTask = proc
+        DispatchQueue.global(qos: .utility).async {
+            do {
+                try proc.run()
+            } catch {
+                Task { @MainActor [weak self] in
+                    self?.verifyTask = nil
+                    self?.verifyStatus = .failed("Verify failed — couldn't start rsync")
+                }
+            }
+        }
+    }
+
+    func cancelVerify() {
+        verifyTask?.terminate()
+        verifyTask = nil
+        verifyStatus = .idle
+    }
+
+    private func countDifferingFiles(_ output: String) -> Int {
+        // rsync -avc --dry-run output: files that would transfer appear as regular file lines
+        // Lines that start with typical rsync prefixes or are file paths indicate differences
+        // Count lines that look like file paths (not summary/stats lines)
+        let lines = output.components(separatedBy: .newlines)
+        var count = 0
+
+        var inFileList = false
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { continue }
+
+            // GNU rsync: files after "sending incremental file list"
+            if trimmed.contains("sending incremental file list") {
+                inFileList = true
+                continue
+            }
+            // openrsync: files after "Transfer starting:"
+            if trimmed.hasPrefix("Transfer starting:") {
+                inFileList = true
+                continue
+            }
+            // End of file list markers
+            if trimmed.hasPrefix("sent ") || trimmed.hasPrefix("total size") ||
+               trimmed.hasPrefix("Number of") || trimmed.contains("speedup is") {
+                inFileList = false
+                continue
+            }
+
+            // Count file lines (not directories ending in /)
+            if inFileList && !trimmed.hasSuffix("/") && !trimmed.isEmpty {
+                count += 1
+            }
+        }
+        return count
     }
 
     // Called when rsync (prepare or transfer) cannot be launched at all — distinct from
@@ -1420,18 +1623,49 @@ struct MainView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.red)
-                } else {
-                    Button {
-                        // Manual Sync: Direct engine call with no additional guards
-                        engine.sync(config: store.config)
-                    } label: {
-                        Text(store.config.dryRunEnabled ? "Check Files" : "Sync Now")
+                } else if engine.verifyStatus == .verifying {
+                    // Verifying in progress - show cancel button
+                    Text(engine.verifyStatus.label)
+                        .font(.system(size: 12))
+                        .foregroundColor(engine.verifyStatus.color)
+                    Button { engine.cancelVerify() } label: {
+                        Text("Cancel Verify")
                             .font(.system(size: 13, weight: .semibold))
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(!store.config.isReadyToSync || syncButtonDisabled)
-                    .help(store.config.isReadyToSync ? "" : "Set source folder and BACKUP IP in Settings first")
+                    .tint(.orange)
+                } else {
+                    // Normal state - show Sync and Verify buttons
+                    HStack(spacing: 8) {
+                        Button {
+                            engine.sync(config: store.config)
+                        } label: {
+                            Text(store.config.dryRunEnabled ? "Check Files" : "Sync Now")
+                                .font(.system(size: 13, weight: .semibold))
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!store.config.isReadyToSync || syncButtonDisabled)
+                        .help(store.config.isReadyToSync ? "" : "Set source folder and BACKUP IP in Settings first")
+
+                        Button {
+                            engine.verifyNow(config: store.config)
+                        } label: {
+                            Text("Verify")
+                                .font(.system(size: 13, weight: .semibold))
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(!store.config.isReadyToSync)
+                        .help("Checksum every file to confirm Backup matches")
+                    }
+
+                    // Show verify result if any (not idle)
+                    if engine.verifyStatus != .idle {
+                        Text(engine.verifyStatus.label)
+                            .font(.system(size: 12))
+                            .foregroundColor(engine.verifyStatus.color)
+                    }
                 }
             }
             .padding(.horizontal, 20)
