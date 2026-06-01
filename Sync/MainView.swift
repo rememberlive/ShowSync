@@ -148,6 +148,8 @@ final class SyncEngine: ObservableObject {
     // Phase 2 starts the real transfer once totals are known (skipped in preview mode).
     func sync(config: Config, isAuto: Bool = false, isPush: Bool = false) {
         guard config.isReadyToSync else { return }
+        // Sync supersedes verify - cancel any in-flight verify before starting
+        if verifyStatus == .verifying { cancelVerify() }
         isAutoSync         = isAuto
         isPushSync         = isPush
         status             = .preparing
@@ -497,6 +499,7 @@ final class SyncEngine: ObservableObject {
     func verifyNow(config: Config) {
         guard config.isReadyToSync else { return }
         guard verifyStatus != .verifying else { return }
+        guard !status.isActive else { return }  // Verify yields to sync
 
         verifyStatus = .verifying
 
@@ -639,6 +642,7 @@ final class SyncEngine: ObservableObject {
     // Called by BonjourBrowser when Backup requests a verify via TXT record
     func triggerRemoteVerify() {
         guard !isRemoteVerify else { return }  // Already handling a remote verify
+        guard !status.isActive else { return }  // Verify yields to sync
         isRemoteVerify = true
         verifyNow(config: ConfigStore.shared.config)
     }
