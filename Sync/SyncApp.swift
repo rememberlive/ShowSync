@@ -310,6 +310,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.image = tinted
     }
 
+    // MARK: - Dock click handling
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if !popover.isShown {
+            togglePopover()
+        }
+        return false
+    }
+
     // MARK: - Quit protection
 
     // Cleanup that must happen on EVERY clean quit (Cmd+Q, Quit button, NSApp.terminate).
