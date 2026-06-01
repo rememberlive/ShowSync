@@ -389,7 +389,7 @@ extension BonjourBrowser: NetServiceDelegate {
         var destPath = "~/Sync"           // User's intended destination
         var effectivePath = "~/Sync"      // Where files actually go
         var freeBytes: Int64 = 0
-        if let txtData = sender.txtRecordData() {
+        if let txtData = sender.txtRecordData(), Self.isValidTXTFormat(txtData) {
             let dict = NetService.dictionary(fromTXTRecord: txtData)
             if let destData = dict["dest"], let str = String(data: destData, encoding: .utf8), !str.isEmpty {
                 destPath = str
@@ -471,6 +471,8 @@ extension BonjourBrowser: NetServiceDelegate {
 
     func netService(_ sender: NetService, didUpdateTXTRecord data: Data) {
         let name = sender.name
+        // Validate TXT format before parsing (malformed data can SIGABRT)
+        guard Self.isValidTXTFormat(data) else { return }
         // Parse updated TXT record
         var destPath = "~/Sync"
         var effectivePath = "~/Sync"
@@ -600,5 +602,19 @@ extension BonjourBrowser: NetServiceDelegate {
             ptr = ifa.ifa_next
         }
         return nil
+    }
+
+    // Validate TXT record format before calling dictionary(fromTXTRecord:)
+    // which can SIGABRT on malformed data. Format: length-prefixed entries.
+    private static func isValidTXTFormat(_ data: Data) -> Bool {
+        guard !data.isEmpty else { return true }
+        var offset = 0
+        while offset < data.count {
+            let length = Int(data[offset])
+            offset += 1
+            if offset + length > data.count { return false }
+            offset += length
+        }
+        return offset == data.count
     }
 }
