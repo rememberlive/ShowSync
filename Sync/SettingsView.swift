@@ -38,6 +38,12 @@ struct SettingsView: View {
     @State private var hasConfirmedDestinationThisConnection = false
     @State private var manualModeFreeSpace: Int64 = 0  // Free space read via SSH for manual mode
 
+    // Custom timing option editing state
+    @State private var isEditingAutoInterval = false
+    @State private var editingAutoInterval = ""
+    @State private var isEditingPushDebounce = false
+    @State private var editingPushDebounce = ""
+
     private enum DestinationCheckState: Equatable {
         case idle
         case checking
@@ -1114,6 +1120,29 @@ struct SettingsView: View {
         .padding(.bottom, 12)
     }
 
+    // Preset sets for timing options
+    private static let autoIntervalPresets: Set<Int> = [0, 5, 10, 15, 30, 60]
+    private static let pushDebouncePresets: Set<Int> = [5, 10, 30, 60]
+
+    private var isAutoIntervalCustom: Bool {
+        !Self.autoIntervalPresets.contains(store.config.autoSyncInterval)
+    }
+
+    private var isPushDebounceCustom: Bool {
+        !Self.pushDebouncePresets.contains(store.config.pushSyncDebounce)
+    }
+
+    private func autoIntervalDisplayText(_ value: Int) -> String {
+        if value == 0 { return "30s" }
+        if value == 60 { return "1 hour" }
+        return "\(value) min"
+    }
+
+    private func pushDebounceDisplayText(_ value: Int) -> String {
+        if value == 60 { return "1 min" }
+        return "\(value)s"
+    }
+
     @ViewBuilder private var behaviourSectionContent: some View {
         Divider()
 
@@ -1128,16 +1157,61 @@ struct SettingsView: View {
                         .font(.system(size: 12))
                         .foregroundColor(labelColor)
                     Spacer()
-                    Picker("", selection: $store.config.autoSyncInterval) {
-                        Text("30s").tag(0)
-                        Text("5 min").tag(5)
-                        Text("10 min").tag(10)
-                        Text("15 min").tag(15)
-                        Text("30 min").tag(30)
-                        Text("1 hour").tag(60)
+                    if isEditingAutoInterval {
+                        TextField("min", text: $editingAutoInterval)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 50)
+                            .multilineTextAlignment(.trailing)
+                        Text("min")
+                            .font(.system(size: 12))
+                            .foregroundColor(labelColor)
+                        Button("Save") {
+                            if let val = Int(editingAutoInterval.trimmingCharacters(in: .whitespaces)),
+                               val >= 1 && val <= 360 {
+                                store.config.autoSyncInterval = val
+                            }
+                            isEditingAutoInterval = false
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundColor(.blue)
+                        Button("Cancel") {
+                            isEditingAutoInterval = false
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(white: 0.5))
+                    } else if isAutoIntervalCustom {
+                        Text(autoIntervalDisplayText(store.config.autoSyncInterval))
+                            .font(.system(size: 12))
+                            .foregroundColor(.white)
+                        Button("Edit") {
+                            editingAutoInterval = "\(store.config.autoSyncInterval)"
+                            isEditingAutoInterval = true
+                        }
+                        .buttonStyle(.bordered)
+                        .font(.system(size: 11))
+                        .tint(.blue)
+                    } else {
+                        Picker("", selection: $store.config.autoSyncInterval) {
+                            Text("30s").tag(0)
+                            Text("5 min").tag(5)
+                            Text("10 min").tag(10)
+                            Text("15 min").tag(15)
+                            Text("30 min").tag(30)
+                            Text("1 hour").tag(60)
+                            Text("Custom…").tag(-1)
+                        }
+                        .pickerStyle(.menu)
+                        .frame(width: 100)
+                        .onChange(of: store.config.autoSyncInterval) { newValue in
+                            if newValue == -1 {
+                                editingAutoInterval = "10"
+                                isEditingAutoInterval = true
+                                store.config.autoSyncInterval = 10  // Reset to valid default
+                            }
+                        }
                     }
-                    .pickerStyle(.menu)
-                    .frame(width: 90)
                 }
             }
             Toggle("Push Sync", isOn: $store.config.pushSyncEnabled)
@@ -1149,14 +1223,59 @@ struct SettingsView: View {
                         .font(.system(size: 12))
                         .foregroundColor(labelColor)
                     Spacer()
-                    Picker("", selection: $store.config.pushSyncDebounce) {
-                        Text("5s").tag(5)
-                        Text("10s").tag(10)
-                        Text("30s").tag(30)
-                        Text("1 min").tag(60)
+                    if isEditingPushDebounce {
+                        TextField("sec", text: $editingPushDebounce)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 50)
+                            .multilineTextAlignment(.trailing)
+                        Text("sec")
+                            .font(.system(size: 12))
+                            .foregroundColor(labelColor)
+                        Button("Save") {
+                            if let val = Int(editingPushDebounce.trimmingCharacters(in: .whitespaces)),
+                               val >= 5 && val <= 300 {
+                                store.config.pushSyncDebounce = val
+                            }
+                            isEditingPushDebounce = false
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundColor(.blue)
+                        Button("Cancel") {
+                            isEditingPushDebounce = false
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(white: 0.5))
+                    } else if isPushDebounceCustom {
+                        Text(pushDebounceDisplayText(store.config.pushSyncDebounce))
+                            .font(.system(size: 12))
+                            .foregroundColor(.white)
+                        Button("Edit") {
+                            editingPushDebounce = "\(store.config.pushSyncDebounce)"
+                            isEditingPushDebounce = true
+                        }
+                        .buttonStyle(.bordered)
+                        .font(.system(size: 11))
+                        .tint(.blue)
+                    } else {
+                        Picker("", selection: $store.config.pushSyncDebounce) {
+                            Text("5s").tag(5)
+                            Text("10s").tag(10)
+                            Text("30s").tag(30)
+                            Text("1 min").tag(60)
+                            Text("Custom…").tag(-1)
+                        }
+                        .pickerStyle(.menu)
+                        .frame(width: 100)
+                        .onChange(of: store.config.pushSyncDebounce) { newValue in
+                            if newValue == -1 {
+                                editingPushDebounce = "10"
+                                isEditingPushDebounce = true
+                                store.config.pushSyncDebounce = 10  // Reset to valid default
+                            }
+                        }
                     }
-                    .pickerStyle(.menu)
-                    .frame(width: 70)
                 }
             }
         }

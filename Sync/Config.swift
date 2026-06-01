@@ -349,11 +349,14 @@ final class ConfigStore: ObservableObject {
         c.sshKeyConfiguredForIP     = m.sshKeyConfiguredForIP
         c.sshKeyConfiguredForUsername = m.sshKeyConfiguredForUsername
         c.autoSyncEnabled               = m.autoSyncEnabled
-        c.autoSyncInterval              = m.autoSyncInterval
+        // Clamp autoSyncInterval: 0 is special (30s), otherwise 1-360 minutes
+        let autoInt = m.autoSyncInterval
+        c.autoSyncInterval = (autoInt == 0) ? 0 : max(1, min(360, autoInt))
         c.nextAutoSyncDate              = m.nextAutoSyncDate
         c.nextAutoSyncScheduledInterval = m.nextAutoSyncScheduledInterval
         c.pushSyncEnabled               = m.pushSyncEnabled
-        c.pushSyncDebounce              = m.pushSyncDebounce
+        // Clamp pushSyncDebounce: 5-300 seconds
+        c.pushSyncDebounce              = max(5, min(300, m.pushSyncDebounce))
         c.versionHistoryEnabled         = m.versionHistoryEnabled
         c.maxVersionCount               = m.maxVersionCount
         c.discoveryMode                 = m.discoveryMode.isEmpty ? "automatic" : m.discoveryMode
