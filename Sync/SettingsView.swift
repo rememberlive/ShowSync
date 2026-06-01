@@ -1157,13 +1157,18 @@ struct SettingsView: View {
                         .font(.system(size: 12))
                         .foregroundColor(labelColor)
                     Spacer()
-                    Picker("", selection: $store.config.autoSyncInterval) {
-                        Text("30s").tag(0)
-                        Text("5 min").tag(5)
-                        Text("10 min").tag(10)
-                        Text("15 min").tag(15)
-                        Text("30 min").tag(30)
-                        Text("1 hour").tag(60)
+                    Picker("", selection: Binding<Int?>(
+                        get: { Self.autoIntervalPresets.contains(store.config.autoSyncInterval)
+                               ? store.config.autoSyncInterval : nil },
+                        set: { if let v = $0 { store.config.autoSyncInterval = v } }
+                    )) {
+                        Text("").tag(nil as Int?)
+                        Text("30s").tag(0 as Int?)
+                        Text("5 min").tag(5 as Int?)
+                        Text("10 min").tag(10 as Int?)
+                        Text("15 min").tag(15 as Int?)
+                        Text("30 min").tag(30 as Int?)
+                        Text("1 hour").tag(60 as Int?)
                     }
                     .pickerStyle(.menu)
                     .frame(width: 100)
@@ -1211,11 +1216,16 @@ struct SettingsView: View {
                         .font(.system(size: 12))
                         .foregroundColor(labelColor)
                     Spacer()
-                    Picker("", selection: $store.config.pushSyncDebounce) {
-                        Text("5s").tag(5)
-                        Text("10s").tag(10)
-                        Text("30s").tag(30)
-                        Text("1 min").tag(60)
+                    Picker("", selection: Binding<Int?>(
+                        get: { Self.pushDebouncePresets.contains(store.config.pushSyncDebounce)
+                               ? store.config.pushSyncDebounce : nil },
+                        set: { if let v = $0 { store.config.pushSyncDebounce = v } }
+                    )) {
+                        Text("").tag(nil as Int?)
+                        Text("5s").tag(5 as Int?)
+                        Text("10s").tag(10 as Int?)
+                        Text("30s").tag(30 as Int?)
+                        Text("1 min").tag(60 as Int?)
                     }
                     .pickerStyle(.menu)
                     .frame(width: 80)
