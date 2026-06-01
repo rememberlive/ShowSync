@@ -11,6 +11,7 @@ struct SettingsView: View {
     @EnvironmentObject var store: ConfigStore
     @ObservedObject private var bonjourBrowser = BonjourBrowser.shared
     @ObservedObject private var advertiser  = BonjourAdvertiser.shared
+    @ObservedObject private var engine = SyncEngine.shared
     // Spec §5: callback to return to main dropdown view
     var onBack: () -> Void = {}
 
@@ -716,7 +717,7 @@ struct SettingsView: View {
                         .font(.system(size: 11))
                         .foregroundColor(labelColor)
                     Spacer()
-                    if SyncEngine.shared.usingFallback {
+                    if engine.usingFallback {
                         VStack(alignment: .trailing, spacing: 2) {
                             Text("\(store.config.backupDestination) (drive unavailable)")
                                 .font(.system(size: 11))
@@ -778,7 +779,7 @@ struct SettingsView: View {
                         case .confirmed:
                             HStack(spacing: 6) {
                                 VStack(alignment: .trailing, spacing: 2) {
-                                    if SyncEngine.shared.usingFallback {
+                                    if engine.usingFallback {
                                         Text("\(store.config.backupDestination) (drive unavailable)")
                                             .font(.system(size: 11))
                                             .foregroundColor(.orange)
@@ -810,7 +811,7 @@ struct SettingsView: View {
                         case .failed:
                             HStack(spacing: 6) {
                                 VStack(alignment: .trailing, spacing: 2) {
-                                    if SyncEngine.shared.usingFallback {
+                                    if engine.usingFallback {
                                         Text("\(store.config.backupDestination) (drive unavailable)")
                                             .font(.system(size: 11))
                                             .foregroundColor(.orange)
