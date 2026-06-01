@@ -276,6 +276,10 @@ final class ReceiveMonitor: ObservableObject {
                 // Drive returned! Update TXT (auto) + config file (manual)
                 BonjourAdvertiser.shared.updateTXTRecord()
                 ConfigStore.shared.forceSave()
+                // Clear warning icon (only if it was warning)
+                if ConfigStore.shared.iconState == .warning {
+                    ConfigStore.shared.iconState = .idle
+                }
             }
             return
         }
@@ -290,6 +294,11 @@ final class ReceiveMonitor: ObservableObject {
                 // Just started fallback - update TXT (auto) + config file (manual)
                 BonjourAdvertiser.shared.updateTXTRecord()
                 ConfigStore.shared.forceSave()
+                // Set warning icon (only if not in higher-priority state)
+                let current = ConfigStore.shared.iconState
+                if current == .idle || current == .notConfigured || current == .success {
+                    ConfigStore.shared.iconState = .warning
+                }
             }
         } else {
             usingFallback = false

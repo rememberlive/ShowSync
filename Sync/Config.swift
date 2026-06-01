@@ -8,6 +8,7 @@ enum SyncIconState: Equatable {
     case syncing        // yellow — rsync running (Main only)
     case receiving      // yellow — transfer in progress (Backup only)
     case success        // green — completed, stays until dropdown opens
+    case warning        // amber — attention needed (fallback active, folder unwritable)
     case error          // red — rsync failure or network lost
 }
 

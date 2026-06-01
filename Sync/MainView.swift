@@ -370,7 +370,7 @@ final class SyncEngine: ObservableObject {
                                     let duration = Int(Date().timeIntervalSince(self.syncStartTime))
                                     self.lastSyncTime = Date()
                                     ConfigStore.shared.config.sshKeysConfigured = true
-                                    ConfigStore.shared.iconState = .success
+                                    ConfigStore.shared.iconState = self.usingFallback ? .warning : .success
                                     self.status = .done
                                     self.writeSyncComplete(
                                         totalFiles: self.syncTotalFiles,

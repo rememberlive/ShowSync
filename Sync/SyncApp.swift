@@ -254,9 +254,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // In an .accessory-policy app the popover window is not automatically made key,
             // so SwiftUI controls (Toggle/checkbox) don't receive events. Force it here.
             popover.contentViewController?.view.window?.makeKey()
-            // Acknowledge persistent success/error icon — revert to grey on open.
+            // Acknowledge persistent success/error/warning icon — revert to grey on open.
             let store = ConfigStore.shared
-            if store.iconState == .success || store.iconState == .error {
+            if store.iconState == .success || store.iconState == .error || store.iconState == .warning {
                 store.iconState = store.config.role == "backup"
                     ? .idle
                     : (store.config.isReadyToSync ? .idle : .notConfigured)
@@ -278,6 +278,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .syncing:       color = .systemYellow
         case .receiving:     color = .systemYellow
         case .success:       color = .systemGreen
+        case .warning:       color = .systemOrange
         case .error:         color = .systemRed
         }
 
