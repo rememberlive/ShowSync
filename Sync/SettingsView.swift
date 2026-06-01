@@ -1157,61 +1157,49 @@ struct SettingsView: View {
                         .font(.system(size: 12))
                         .foregroundColor(labelColor)
                     Spacer()
-                    if isEditingAutoInterval {
-                        TextField("min", text: $editingAutoInterval)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 50)
-                            .multilineTextAlignment(.trailing)
-                        Text("min")
-                            .font(.system(size: 12))
-                            .foregroundColor(labelColor)
-                        Button("Save") {
-                            if let val = Int(editingAutoInterval.trimmingCharacters(in: .whitespaces)),
-                               val >= 1 && val <= 360 {
-                                store.config.autoSyncInterval = val
-                            }
-                            isEditingAutoInterval = false
-                        }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 11))
-                        .foregroundColor(.blue)
-                        Button("Cancel") {
-                            isEditingAutoInterval = false
-                        }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 11))
-                        .foregroundColor(Color(white: 0.5))
-                    } else if isAutoIntervalCustom {
-                        Text(autoIntervalDisplayText(store.config.autoSyncInterval))
+                    Picker("", selection: $store.config.autoSyncInterval) {
+                        Text("30s").tag(0)
+                        Text("5 min").tag(5)
+                        Text("10 min").tag(10)
+                        Text("15 min").tag(15)
+                        Text("30 min").tag(30)
+                        Text("1 hour").tag(60)
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 100)
+                }
+                HStack {
+                    Text("Custom")
+                        .font(.system(size: 12))
+                        .foregroundColor(labelColor)
+                    Spacer()
+                    if isAutoIntervalCustom {
+                        Text("\(store.config.autoSyncInterval) min")
                             .font(.system(size: 12))
                             .foregroundColor(.white)
-                        Button("Edit") {
-                            editingAutoInterval = "\(store.config.autoSyncInterval)"
-                            isEditingAutoInterval = true
-                        }
-                        .buttonStyle(.bordered)
+                        Text("(active)")
+                            .font(.system(size: 10))
+                            .foregroundColor(Color(white: 0.5))
+                    }
+                    TextField(isAutoIntervalCustom ? "\(store.config.autoSyncInterval)" : "1-360",
+                              text: $editingAutoInterval)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 50)
+                        .multilineTextAlignment(.trailing)
+                    Text("min")
                         .font(.system(size: 11))
-                        .tint(.blue)
-                    } else {
-                        Picker("", selection: $store.config.autoSyncInterval) {
-                            Text("30s").tag(0)
-                            Text("5 min").tag(5)
-                            Text("10 min").tag(10)
-                            Text("15 min").tag(15)
-                            Text("30 min").tag(30)
-                            Text("1 hour").tag(60)
-                            Text("Custom…").tag(-1)
-                        }
-                        .pickerStyle(.menu)
-                        .frame(width: 100)
-                        .onChange(of: store.config.autoSyncInterval) { newValue in
-                            if newValue == -1 {
-                                editingAutoInterval = "10"
-                                isEditingAutoInterval = true
-                                store.config.autoSyncInterval = 10  // Reset to valid default
-                            }
+                        .foregroundColor(labelColor)
+                    Button("Apply") {
+                        if let val = Int(editingAutoInterval.trimmingCharacters(in: .whitespaces)),
+                           val >= 1 && val <= 360 {
+                            store.config.autoSyncInterval = val
+                            editingAutoInterval = ""
                         }
                     }
+                    .buttonStyle(.bordered)
+                    .font(.system(size: 11))
+                    .tint(.blue)
+                    .disabled(editingAutoInterval.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
             Toggle("Push Sync", isOn: $store.config.pushSyncEnabled)
@@ -1223,59 +1211,47 @@ struct SettingsView: View {
                         .font(.system(size: 12))
                         .foregroundColor(labelColor)
                     Spacer()
-                    if isEditingPushDebounce {
-                        TextField("sec", text: $editingPushDebounce)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 50)
-                            .multilineTextAlignment(.trailing)
-                        Text("sec")
-                            .font(.system(size: 12))
-                            .foregroundColor(labelColor)
-                        Button("Save") {
-                            if let val = Int(editingPushDebounce.trimmingCharacters(in: .whitespaces)),
-                               val >= 5 && val <= 300 {
-                                store.config.pushSyncDebounce = val
-                            }
-                            isEditingPushDebounce = false
-                        }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 11))
-                        .foregroundColor(.blue)
-                        Button("Cancel") {
-                            isEditingPushDebounce = false
-                        }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 11))
-                        .foregroundColor(Color(white: 0.5))
-                    } else if isPushDebounceCustom {
-                        Text(pushDebounceDisplayText(store.config.pushSyncDebounce))
+                    Picker("", selection: $store.config.pushSyncDebounce) {
+                        Text("5s").tag(5)
+                        Text("10s").tag(10)
+                        Text("30s").tag(30)
+                        Text("1 min").tag(60)
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 80)
+                }
+                HStack {
+                    Text("Custom")
+                        .font(.system(size: 12))
+                        .foregroundColor(labelColor)
+                    Spacer()
+                    if isPushDebounceCustom {
+                        Text("\(store.config.pushSyncDebounce)s")
                             .font(.system(size: 12))
                             .foregroundColor(.white)
-                        Button("Edit") {
-                            editingPushDebounce = "\(store.config.pushSyncDebounce)"
-                            isEditingPushDebounce = true
-                        }
-                        .buttonStyle(.bordered)
+                        Text("(active)")
+                            .font(.system(size: 10))
+                            .foregroundColor(Color(white: 0.5))
+                    }
+                    TextField(isPushDebounceCustom ? "\(store.config.pushSyncDebounce)" : "5-300",
+                              text: $editingPushDebounce)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 50)
+                        .multilineTextAlignment(.trailing)
+                    Text("sec")
                         .font(.system(size: 11))
-                        .tint(.blue)
-                    } else {
-                        Picker("", selection: $store.config.pushSyncDebounce) {
-                            Text("5s").tag(5)
-                            Text("10s").tag(10)
-                            Text("30s").tag(30)
-                            Text("1 min").tag(60)
-                            Text("Custom…").tag(-1)
-                        }
-                        .pickerStyle(.menu)
-                        .frame(width: 100)
-                        .onChange(of: store.config.pushSyncDebounce) { newValue in
-                            if newValue == -1 {
-                                editingPushDebounce = "10"
-                                isEditingPushDebounce = true
-                                store.config.pushSyncDebounce = 10  // Reset to valid default
-                            }
+                        .foregroundColor(labelColor)
+                    Button("Apply") {
+                        if let val = Int(editingPushDebounce.trimmingCharacters(in: .whitespaces)),
+                           val >= 5 && val <= 300 {
+                            store.config.pushSyncDebounce = val
+                            editingPushDebounce = ""
                         }
                     }
+                    .buttonStyle(.bordered)
+                    .font(.system(size: 11))
+                    .tint(.blue)
+                    .disabled(editingPushDebounce.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
         }
