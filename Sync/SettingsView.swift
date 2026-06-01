@@ -20,6 +20,7 @@ struct SettingsView: View {
 
     @State private var showRoleConfirm = false
     @State private var showResetConnectionConfirm = false
+    @State private var showResetToDefaultsConfirm = false
     @State private var sshConnectionState: SSHConnectionState = .checking
     @State private var launchAtLoginError: String?
     @State private var localDiscoveryMode = "automatic"
@@ -160,6 +161,18 @@ struct SettingsView: View {
                         resetSSHKeys()
                     }
                 )
+            } else if showResetToDefaultsConfirm {
+                InlineConfirm(
+                    title: "Reset to Defaults?",
+                    message: "This will erase all settings, the backup pairing, and sync history, and return Sync to its first-launch state. Your synced files will NOT be deleted. This cannot be undone.",
+                    confirmLabel: "Reset",
+                    confirmColor: .red,
+                    onCancel: { showResetToDefaultsConfirm = false },
+                    onConfirm: {
+                        showResetToDefaultsConfirm = false
+                        performResetToDefaults()
+                    }
+                )
             } else {
             VStack(alignment: .leading, spacing: 0) {
                 if isMain {
@@ -248,6 +261,22 @@ struct SettingsView: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 16)
+
+                Divider()
+
+                // Reset to Defaults
+                VStack(alignment: .leading, spacing: 8) {
+                    Button {
+                        showResetToDefaultsConfirm = true
+                    } label: {
+                        Text("Reset to Defaults")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.red)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
             }
             } // end else
         }
@@ -544,6 +573,42 @@ struct SettingsView: View {
             }
         } catch {
             launchAtLoginError = error.localizedDescription
+        }
+    }
+
+    private func performResetToDefaults() {
+        // 1. Unregister Launch at Login if enabled (must happen before wipe)
+        if store.config.launchAtLogin {
+            try? SMAppService.mainApp.unregister()
+        }
+
+        // 2. Stop Bonjour services
+        BonjourAdvertiser.shared.stopAndClearState()
+        BonjourBrowser.shared.stop()
+
+        // 3. Delete entire App Support/Sync directory
+        let fm = FileManager.default
+        let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let syncDir = appSupport.appendingPathComponent("Sync", isDirectory: true)
+        try? fm.removeItem(at: syncDir)
+
+        // 4. Clear UserDefaults key
+        UserDefaults.standard.removeObject(forKey: "syncRole")
+
+        // 5. Relaunch app
+        relaunchApp()
+    }
+
+    private func relaunchApp() {
+        let url = URL(fileURLWithPath: Bundle.main.bundlePath)
+        let config = NSWorkspace.OpenConfiguration()
+        config.createsNewApplicationInstance = true
+
+        // Launch new instance, then terminate this one
+        NSWorkspace.shared.openApplication(at: url, configuration: config) { _, _ in
+            DispatchQueue.main.async {
+                NSApp.terminate(nil)
+            }
         }
     }
 
