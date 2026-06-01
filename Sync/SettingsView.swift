@@ -1203,6 +1203,33 @@ struct SettingsView: View {
         .padding(.horizontal, 20)
         .padding(.bottom, 12)
 
+        HStack {
+            Text("Minimum free space")
+                .font(.system(size: 12))
+                .foregroundColor(labelColor)
+            Spacer()
+            Stepper(value: Binding(
+                get: { store.config.minFreeSpaceGB },
+                set: { store.config.minFreeSpaceGB = max(1, $0) }
+            ), in: 1...99) {
+                Text("\(store.config.minFreeSpaceGB) GB")
+                    .font(.system(size: 12))
+                    .foregroundColor(.white)
+            }
+            .labelsHidden()
+            Text("\(store.config.minFreeSpaceGB) GB")
+                .font(.system(size: 12))
+                .foregroundColor(.white)
+                .frame(width: 40, alignment: .trailing)
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 4)
+        Text("Sync is refused if the drive has less than this free")
+            .font(.system(size: 10))
+            .foregroundColor(labelColor)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 12)
+
         Divider()
 
         sectionHeader("Options")

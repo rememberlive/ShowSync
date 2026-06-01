@@ -359,7 +359,7 @@ final class SyncEngine: ObservableObject {
                             self.checkSyncRefused(username: self.syncUsername, ip: self.syncIP, remotePath: self.syncRemotePath) { [weak self] refused in
                                 guard let self else { return }
                                 if refused {
-                                    self.lowSpaceNotice = "Not enough space on the backup drive (under 2 GB free). Free up space to resume backups."
+                                    self.lowSpaceNotice = "Not enough space on the backup drive. Free up space to resume backups."
                                     self.status = .error("Backup drive low on space")
                                     ConfigStore.shared.iconState = .error
                                     self.cleanupSignalFiles()  // FIX 1: clean up .sync_start on refusal

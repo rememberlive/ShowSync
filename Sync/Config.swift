@@ -50,6 +50,7 @@ struct Config {
     var destinationFolder: String = (NSHomeDirectory() as NSString).appendingPathComponent("Sync")
     var lastReceivedTime: Date? = nil
     var networkDiscoveryName: String = ""
+    var minFreeSpaceGB: Int = 2  // Minimum free space threshold (floor 1GB)
 
     var isReadyToSync: Bool {
         !sourceFolder.isEmpty && !destinationIP.isEmpty && !username.isEmpty && sshKeysConfigured
@@ -96,6 +97,7 @@ private struct BackupConfig: Codable {
     var lastReceivedTime: Date? = nil
     var discoveryMode: String = "automatic"
     var networkDiscoveryName: String = ""
+    var minFreeSpaceGB: Int = 2
 }
 
 // All fields optional — used only during one-time migration from the legacy config.json.
@@ -240,7 +242,8 @@ final class ConfigStore: ObservableObject {
                 launchAtLogin:     config.launchAtLogin,
                 lastReceivedTime:  config.lastReceivedTime,
                 discoveryMode:     config.discoveryMode,
-                networkDiscoveryName: config.networkDiscoveryName
+                networkDiscoveryName: config.networkDiscoveryName,
+                minFreeSpaceGB:    max(1, config.minFreeSpaceGB)  // Floor of 1GB
             )
             do {
                 let data = try JSONEncoder().encode(b)
@@ -315,6 +318,7 @@ final class ConfigStore: ObservableObject {
         c.lastReceivedTime = b.lastReceivedTime
         c.discoveryMode    = b.discoveryMode.isEmpty ? "automatic" : b.discoveryMode
         c.networkDiscoveryName = b.networkDiscoveryName
+        c.minFreeSpaceGB   = max(1, b.minFreeSpaceGB)  // Floor of 1GB
         return c
     }
 
