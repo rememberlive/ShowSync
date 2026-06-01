@@ -77,6 +77,7 @@ final class SyncEngine: ObservableObject {
     @Published var fallbackNotice: String? = nil  // Calm notice when fallback to ~/Sync
     @Published var lowSpaceNotice: String? = nil  // Notice when Backup refuses due to low space
     @Published var usingFallback: Bool = false    // True when sync redirected to ~/Sync due to unavailable drive
+    @Published var manualModeFreeSpace: Int64 = 0 // Free space from manual-mode config poll (bytes)
 
     // Auto Sync - Independent timer system
     @Published var nextAutoSyncDate: Date?
@@ -926,32 +927,92 @@ final class SSHChecker: ObservableObject {
 
     private func check(username: String, ip: String) {
         cancelInFlight()
-        // Defer state change off layout pass to avoid recursion
         DispatchQueue.main.async { [weak self] in
             self?.state = .checking
         }
         let currentID = checkID
+        let isManualMode = ConfigStore.shared.config.discoveryMode == "manual"
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        proc.arguments = [
-            "-o", "ConnectTimeout=2",
-            "-o", "BatchMode=yes",
-            "-o", "StrictHostKeyChecking=no",
-            "\(username)@\(ip)",
-            "exit"
-        ]
-        proc.standardOutput = FileHandle.nullDevice
-        proc.standardError  = FileHandle.nullDevice
-        proc.terminationHandler = { [weak self] p in
-            Task { @MainActor [weak self] in
-                guard let self, self.checkID == currentID else { return }
-                self.state   = p.terminationStatus == 0 ? .reachable : .unreachable
-                self.process = nil
+
+        if isManualMode {
+            // Manual mode: read config + free space in one call (also proves reachability)
+            let cmd = "cat \"$HOME/Library/Application Support/Sync/config_backup.json\" 2>/dev/null || echo '{}'; echo '---DF---'; df -k ~ 2>/dev/null | awk 'NR==2 {print $4}'"
+            proc.arguments = [
+                "-o", "ConnectTimeout=2",
+                "-o", "BatchMode=yes",
+                "-o", "StrictHostKeyChecking=no",
+                "\(username)@\(ip)",
+                cmd
+            ]
+            let pipe = Pipe()
+            proc.standardOutput = pipe
+            proc.standardError = FileHandle.nullDevice
+            proc.terminationHandler = { [weak self] p in
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                Task { @MainActor [weak self] in
+                    guard let self, self.checkID == currentID else { return }
+                    self.process = nil
+
+                    if p.terminationStatus != 0 {
+                        // SSH failed — unreachable, but keep last-known config values
+                        self.state = .unreachable
+                        return
+                    }
+
+                    self.state = .reachable
+
+                    // Parse output: JSON config, then ---DF---, then free space KB
+                    let output = String(data: data, encoding: .utf8) ?? ""
+                    NSLog("[ManualPoll] RAW OUTPUT:\n%@", output)
+                    let parts = output.components(separatedBy: "---DF---")
+
+                    // Parse config JSON (only update if parse succeeds)
+                    if let jsonPart = parts.first?.trimmingCharacters(in: .whitespacesAndNewlines),
+                       let jsonData = jsonPart.data(using: .utf8),
+                       let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                       let dest = json["destinationFolder"] as? String, !dest.isEmpty {
+                        let effectivePath = (json["effectivePath"] as? String) ?? dest
+                        let isFallback = !effectivePath.isEmpty && effectivePath != dest
+                        NSLog("[ManualPoll] PARSED: dest=%@, effectivePath=%@, isFallback=%d", dest, effectivePath, isFallback ? 1 : 0)
+                        ConfigStore.shared.config.backupDestination = dest
+                        SyncEngine.shared.usingFallback = isFallback
+                        NSLog("[ManualPoll] SET: backupDestination=%@, usingFallback=%d", ConfigStore.shared.config.backupDestination, SyncEngine.shared.usingFallback ? 1 : 0)
+                    } else {
+                        NSLog("[ManualPoll] JSON PARSE FAILED - keeping last-known values")
+                    }
+                    // Parse free space (only update if parse succeeds)
+                    if parts.count > 1,
+                       let kbStr = parts[1].trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: .newlines).first,
+                       let kb = Int64(kbStr) {
+                        SyncEngine.shared.manualModeFreeSpace = kb * 1024
+                    }
+                }
             }
+            process = proc
+            DispatchQueue.global(qos: .utility).async { try? proc.run() }
+        } else {
+            // Auto mode: simple exit test (TXT push handles config updates)
+            proc.arguments = [
+                "-o", "ConnectTimeout=2",
+                "-o", "BatchMode=yes",
+                "-o", "StrictHostKeyChecking=no",
+                "\(username)@\(ip)",
+                "exit"
+            ]
+            proc.standardOutput = FileHandle.nullDevice
+            proc.standardError = FileHandle.nullDevice
+            proc.terminationHandler = { [weak self] p in
+                Task { @MainActor [weak self] in
+                    guard let self, self.checkID == currentID else { return }
+                    self.state = p.terminationStatus == 0 ? .reachable : .unreachable
+                    self.process = nil
+                }
+            }
+            process = proc
+            DispatchQueue.global(qos: .utility).async { try? proc.run() }
         }
-        process = proc
-        DispatchQueue.global(qos: .utility).async { try? proc.run() }
     }
 
     private func cancelInFlight() {
