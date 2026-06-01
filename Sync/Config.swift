@@ -1,5 +1,19 @@
 import Foundation
 
+// MARK: - Transfer Log Entry
+
+struct TransferLogEntry: Codable, Identifiable {
+    let id: UUID
+    let date: Date
+    let trigger: String      // "manual" | "auto" | "push"
+    let result: String       // "success" | "failed" | "refused" | "cancelled" | "fallback"
+    let fileCount: Int
+    let totalBytes: Int64
+    let durationSeconds: Int
+    let destination: String
+    let usedFallback: Bool
+}
+
 // Single source of truth for the menu bar icon colour.
 // AppDelegate observes this via Combine and updates the status item image.
 enum SyncIconState: Equatable {
@@ -149,9 +163,13 @@ final class ConfigStore: ObservableObject {
     // (used by AppDelegate.applicationShouldTerminate when Cmd+Q hit mid-sync).
     @Published var pendingQuitConfirm: Bool = false
 
+    // Transfer log — persisted to transfer_log.json, capped at 100 entries
+    @Published var transferLog: [TransferLogEntry] = []
+
     private let roleURL: URL
     private let mainConfigURL: URL
     private let backupConfigURL: URL
+    private let transferLogURL: URL
 
     private init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -161,6 +179,7 @@ final class ConfigStore: ObservableObject {
         roleURL         = dir.appendingPathComponent("role.json")
         mainConfigURL   = dir.appendingPathComponent("config_main.json")
         backupConfigURL = dir.appendingPathComponent("config_backup.json")
+        transferLogURL  = dir.appendingPathComponent("transfer_log.json")
 
         // One-time migration from the legacy monolithic config.json
         Self.migrateIfNeeded(dir: dir, roleURL: roleURL,
@@ -176,6 +195,9 @@ final class ConfigStore: ObservableObject {
         }
         config = loaded
         UserDefaults.standard.set(role, forKey: "syncRole")
+
+        // Load transfer log (corruption-safe: bad/missing file -> empty array)
+        transferLog = Self.loadTransferLog(from: transferLogURL)
     }
 
     // Saves the current role's settings, then loads the new role's settings.
@@ -271,6 +293,34 @@ final class ConfigStore: ObservableObject {
             NSLog("[Sync] role.json save failed: %@", error.localizedDescription)
             if !lastConfigSaveFailed { lastConfigSaveFailed = true }
         }
+    }
+
+    // MARK: - Transfer Log
+
+    func appendTransferLogEntry(_ entry: TransferLogEntry) {
+        var log = transferLog
+        log.insert(entry, at: 0)  // newest first
+        if log.count > 100 { log = Array(log.prefix(100)) }  // cap at 100
+        transferLog = log
+        saveTransferLog()
+    }
+
+    private func saveTransferLog() {
+        do {
+            let data = try JSONEncoder().encode(transferLog)
+            try data.write(to: transferLogURL, options: .atomic)
+        } catch {
+            NSLog("[Sync] transfer_log.json save failed: %@", error.localizedDescription)
+        }
+    }
+
+    private static func loadTransferLog(from url: URL) -> [TransferLogEntry] {
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        guard let log = try? JSONDecoder().decode([TransferLogEntry].self, from: data) else {
+            NSLog("[Sync] transfer_log.json corrupted, starting fresh")
+            return []
+        }
+        return log
     }
 
     // MARK: - Static loading helpers (static so they can run before init completes)

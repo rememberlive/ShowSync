@@ -18,7 +18,7 @@ struct SyncProgress: Equatable {
 }
 
 enum MainViewState {
-    case normal, dryRunResult, confirmCancel, confirmQuit
+    case normal, dryRunResult, confirmCancel, confirmQuit, history
 }
 
 enum SyncStatus {
@@ -380,20 +380,57 @@ final class SyncEngine: ObservableObject {
                     NSLog("[SyncTrace] 9 launchRsync closure executing")
                     let proc = Process()
                     proc.executableURL = URL(fileURLWithPath: rsyncPath)
-                    var rsyncArgs = ["-av"]
+                    var rsyncArgs = ["-av", "--stats"]
                     if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
                        !ConfigStore.shared.config.preferredInterface.isEmpty {
                         rsyncArgs.insert(contentsOf: ["-e", "ssh -b \(bindIP)"], at: 0)
                     }
                     rsyncArgs.append(contentsOf: [source, dest])
                     proc.arguments = rsyncArgs
-                    proc.standardOutput = FileHandle.nullDevice
+
+                    // Capture stdout for --stats output using concurrent drain pattern
+                    class OutputBuffer {
+                        private var data = Data()
+                        private let lock = NSLock()
+                        func append(_ chunk: Data) {
+                            lock.lock()
+                            data.append(chunk)
+                            lock.unlock()
+                        }
+                        func getString() -> String {
+                            lock.lock()
+                            let result = String(data: data, encoding: .utf8) ?? ""
+                            lock.unlock()
+                            return result
+                        }
+                    }
+                    let stdoutBuffer = OutputBuffer()
+                    let stdoutPipe = Pipe()
+                    proc.standardOutput = stdoutPipe
+
+                    let stdoutHandle = stdoutPipe.fileHandleForReading
+                    NotificationCenter.default.addObserver(
+                        forName: .NSFileHandleDataAvailable,
+                        object: stdoutHandle,
+                        queue: nil
+                    ) { [weak stdoutHandle] _ in
+                        guard let fh = stdoutHandle else { return }
+                        let chunk = fh.availableData
+                        if !chunk.isEmpty {
+                            stdoutBuffer.append(chunk)
+                            fh.waitForDataInBackgroundAndNotify()
+                        }
+                    }
+                    stdoutHandle.waitForDataInBackgroundAndNotify()
+
                     let errPipe = Pipe()
                     proc.standardError  = errPipe
 
                     proc.terminationHandler = { [weak self] p in
                         NSLog("[SyncTrace] 10 rsync terminated, exit=%d", p.terminationStatus)
-                        _ = errPipe.fileHandleForReading.readDataToEndOfFile() // drain pipe
+                        NotificationCenter.default.removeObserver(self as Any, name: .NSFileHandleDataAvailable, object: stdoutHandle)
+                        let statsOutput = stdoutBuffer.getString()
+                        _ = errPipe.fileHandleForReading.readDataToEndOfFile() // drain stderr
                         if p.terminationStatus != 0 {
                             NSLog("[Sync] exit %d", p.terminationStatus)
                         }
@@ -411,6 +448,22 @@ final class SyncEngine: ObservableObject {
                                     self.status = .error("Backup drive low on space")
                                     ConfigStore.shared.iconState = .error
                                     self.cleanupSignalFiles()  // FIX 1: clean up .sync_start on refusal
+
+                                    // Record refused transfer log entry
+                                    let duration = Int(Date().timeIntervalSince(self.syncStartTime))
+                                    let trigger = self.isAutoSync ? "auto" : (self.isPushSync ? "push" : "manual")
+                                    let entry = TransferLogEntry(
+                                        id: UUID(),
+                                        date: Date(),
+                                        trigger: trigger,
+                                        result: "refused",
+                                        fileCount: 0,
+                                        totalBytes: 0,
+                                        durationSeconds: duration,
+                                        destination: self.syncRemotePath,
+                                        usedFallback: self.usingFallback
+                                    )
+                                    ConfigStore.shared.appendTransferLogEntry(entry)
                                     return
                                 }
 
@@ -424,6 +477,24 @@ final class SyncEngine: ObservableObject {
                                         totalFiles: self.syncTotalFiles,
                                         totalBytes: self.expectedSize,
                                         duration:   duration)
+
+                                    // Record transfer log entry
+                                    let actualFileCount = Self.parseStatsFileCount(statsOutput)
+                                    let actualBytes = Self.parseStatsTotalBytes(statsOutput)
+                                    let trigger = self.isAutoSync ? "auto" : (self.isPushSync ? "push" : "manual")
+                                    let entry = TransferLogEntry(
+                                        id: UUID(),
+                                        date: Date(),
+                                        trigger: trigger,
+                                        result: self.usingFallback ? "fallback" : "success",
+                                        fileCount: actualFileCount,
+                                        totalBytes: actualBytes,
+                                        durationSeconds: duration,
+                                        destination: self.syncRemotePath,
+                                        usedFallback: self.usingFallback
+                                    )
+                                    ConfigStore.shared.appendTransferLogEntry(entry)
+
                                     // Clear any stale .sync_refused on success
                                     self.clearSyncRefused()
                                     // Clear fallback flag if we synced to the chosen path (drive is back)
@@ -439,6 +510,22 @@ final class SyncEngine: ObservableObject {
                                     self.cleanupSignalFiles()
                                     self.status = .error("Sync interrupted — files may be incomplete")
                                     ConfigStore.shared.iconState = .error
+
+                                    // Record failed transfer log entry
+                                    let duration = Int(Date().timeIntervalSince(self.syncStartTime))
+                                    let trigger = self.isAutoSync ? "auto" : (self.isPushSync ? "push" : "manual")
+                                    let entry = TransferLogEntry(
+                                        id: UUID(),
+                                        date: Date(),
+                                        trigger: trigger,
+                                        result: "failed",
+                                        fileCount: 0,
+                                        totalBytes: 0,
+                                        durationSeconds: duration,
+                                        destination: self.syncRemotePath,
+                                        usedFallback: self.usingFallback
+                                    )
+                                    ConfigStore.shared.appendTransferLogEntry(entry)
                                 }
                             }
                         }
@@ -477,6 +564,12 @@ final class SyncEngine: ObservableObject {
     }
 
     func cancel() {
+        let wasActive = status.isActive
+        let cancelTrigger = isAutoSync ? "auto" : (isPushSync ? "push" : "manual")
+        let cancelDest = syncRemotePath
+        let cancelFallback = usingFallback
+        let cancelDuration = Int(Date().timeIntervalSince(syncStartTime))
+
         task?.terminate()
         task = nil
         isAutoSync = false
@@ -488,6 +581,23 @@ final class SyncEngine: ObservableObject {
             self?.syncProgress = nil
             ConfigStore.shared.isSyncing = false
             ConfigStore.shared.iconState = ConfigStore.shared.config.isReadyToSync ? .idle : .notConfigured
+
+            // Record cancelled transfer log entry (only if sync was actually active)
+            if wasActive {
+                let entry = TransferLogEntry(
+                    id: UUID(),
+                    date: Date(),
+                    trigger: cancelTrigger,
+                    result: "cancelled",
+                    fileCount: 0,
+                    totalBytes: 0,
+                    durationSeconds: cancelDuration,
+                    destination: cancelDest,
+                    usedFallback: cancelFallback
+                )
+                ConfigStore.shared.appendTransferLogEntry(entry)
+            }
+
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
                 if self?.status == .cancelled { self?.status = .ready }
             }
@@ -765,6 +875,36 @@ final class SyncEngine: ObservableObject {
         if bytes < 1_048_576       { return String(format: "%.1f KB", Double(bytes) / 1_024) }
         if bytes < 1_073_741_824   { return String(format: "%.1f MB", Double(bytes) / 1_048_576) }
         return String(format: "%.1f GB", Double(bytes) / 1_073_741_824)
+    }
+
+    // MARK: - Stats output parsing (from --stats flag)
+
+    static func parseStatsFileCount(_ output: String) -> Int {
+        for line in output.components(separatedBy: .newlines) {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("Number of regular files transferred:") {
+                let numStr = t.dropFirst("Number of regular files transferred:".count)
+                    .trimmingCharacters(in: .whitespaces)
+                    .replacingOccurrences(of: ",", with: "")
+                    .components(separatedBy: CharacterSet.decimalDigits.inverted).first ?? ""
+                if let n = Int(numStr) { return n }
+            }
+        }
+        return 0
+    }
+
+    static func parseStatsTotalBytes(_ output: String) -> Int64 {
+        for line in output.components(separatedBy: .newlines) {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("Total transferred file size:") {
+                let numStr = t.dropFirst("Total transferred file size:".count)
+                    .trimmingCharacters(in: .whitespaces)
+                    .replacingOccurrences(of: ",", with: "")
+                    .components(separatedBy: CharacterSet.decimalDigits.inverted).first ?? ""
+                if let n = Int64(numStr) { return n }
+            }
+        }
+        return 0
     }
 
     // MARK: - SSH du polling for byte-accurate progress
@@ -1482,6 +1622,13 @@ struct MainView: View {
             .background(darkBg)
             .preferredColorScheme(.dark)
             .ignoresSafeArea()
+        } else if viewState == .history {
+            HistoryView(onBack: { viewState = .normal })
+                .environmentObject(store)
+                .frame(width: popoverWidth)
+                .background(darkBg)
+                .preferredColorScheme(.dark)
+                .ignoresSafeArea()
         } else {
         VStack(alignment: .leading, spacing: 0) {
 
@@ -1776,6 +1923,16 @@ struct MainView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Settings")
+
+                Button { viewState = .history } label: {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 14))
+                        .foregroundColor(Color(white: 0.6))
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("History")
 
                 Spacer()
 
@@ -2079,5 +2236,195 @@ struct InlineConfirm: View {
         }
         .padding(28)
         .frame(maxWidth: .infinity)
+    }
+}
+
+// MARK: - History view
+
+struct HistoryView: View {
+    @EnvironmentObject var store: ConfigStore
+    let onBack: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Button(action: onBack) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text("Back")
+                            .font(.system(size: 13))
+                    }
+                    .foregroundColor(.blue)
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                Text("History")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.white)
+
+                Spacer()
+
+                // Invisible spacer to balance the Back button
+                Text("Back")
+                    .font(.system(size: 13))
+                    .opacity(0)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+
+            Divider()
+
+            if store.transferLog.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "clock")
+                        .font(.system(size: 32))
+                        .foregroundColor(Color(white: 0.4))
+                    Text("No sync history yet")
+                        .font(.system(size: 13))
+                        .foregroundColor(Color(white: 0.5))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.vertical, 40)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(store.transferLog) { entry in
+                            HistoryRow(entry: entry)
+                            Divider()
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct HistoryRow: View {
+    let entry: TransferLogEntry
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            // Result icon
+            Image(systemName: resultIcon)
+                .font(.system(size: 14))
+                .foregroundColor(resultColor)
+                .frame(width: 20)
+
+            VStack(alignment: .leading, spacing: 3) {
+                // Time + trigger
+                HStack(spacing: 6) {
+                    Text(formattedTime)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundColor(.white)
+                    Text(triggerLabel)
+                        .font(.system(size: 10))
+                        .foregroundColor(Color(white: 0.5))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Color(white: 0.2))
+                        .cornerRadius(3)
+                }
+
+                // File count + bytes
+                HStack(spacing: 4) {
+                    Text(filesDisplay)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(Color(white: 0.7))
+                    if entry.durationSeconds > 0 {
+                        Text("·")
+                            .foregroundColor(Color(white: 0.4))
+                        Text(durationDisplay)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(Color(white: 0.5))
+                    }
+                }
+
+                // Destination
+                HStack(spacing: 4) {
+                    Text(truncatedDestination)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(Color(white: 0.45))
+                        .lineLimit(1)
+                    if entry.usedFallback {
+                        Text("(fallback)")
+                            .font(.system(size: 9))
+                            .foregroundColor(.orange)
+                    }
+                }
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    private var resultIcon: String {
+        switch entry.result {
+        case "success":   return "checkmark.circle.fill"
+        case "fallback":  return "exclamationmark.triangle.fill"
+        case "failed":    return "xmark.circle.fill"
+        case "refused":   return "nosign"
+        case "cancelled": return "stop.circle.fill"
+        default:          return "questionmark.circle"
+        }
+    }
+
+    private var resultColor: Color {
+        switch entry.result {
+        case "success":   return .green
+        case "fallback":  return .orange
+        case "failed":    return .red
+        case "refused":   return .red
+        case "cancelled": return Color(white: 0.5)
+        default:          return .gray
+        }
+    }
+
+    private var triggerLabel: String {
+        switch entry.trigger {
+        case "auto":   return "Auto"
+        case "push":   return "Push"
+        case "manual": return "Manual"
+        default:       return entry.trigger.capitalized
+        }
+    }
+
+    private var formattedTime: String {
+        let cal = Calendar.current
+        let fmt = DateFormatter()
+        if cal.isDateInToday(entry.date) {
+            fmt.dateStyle = .none
+            fmt.timeStyle = .short
+        } else {
+            fmt.dateStyle = .short
+            fmt.timeStyle = .short
+        }
+        return fmt.string(from: entry.date)
+    }
+
+    private var filesDisplay: String {
+        let files = entry.fileCount == 1 ? "1 file" : "\(entry.fileCount) files"
+        let bytes = SyncEngine.formatBytes(entry.totalBytes)
+        return "\(files) · \(bytes)"
+    }
+
+    private var durationDisplay: String {
+        if entry.durationSeconds < 60 {
+            return "\(entry.durationSeconds)s"
+        }
+        let mins = entry.durationSeconds / 60
+        let secs = entry.durationSeconds % 60
+        return "\(mins)m \(secs)s"
+    }
+
+    private var truncatedDestination: String {
+        let dest = entry.destination
+        if dest.count <= 25 { return dest }
+        return String(dest.prefix(10)) + "..." + String(dest.suffix(10))
     }
 }
