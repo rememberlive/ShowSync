@@ -675,10 +675,29 @@ struct SettingsView: View {
         let remotePath = store.config.backupDestination.isEmpty ? "~/Sync" : store.config.backupDestination
         let escaped = newName.replacingOccurrences(of: "'", with: "'\\''")
 
+        let destFile = "\(remotePath)/.sync_rename_request"
+        let safeDestFile: String
+        if destFile.hasPrefix("~/") {
+            let remainder = String(destFile.dropFirst(2))
+            let escapedRemainder = remainder
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+                .replacingOccurrences(of: "$", with: "\\$")
+                .replacingOccurrences(of: "`", with: "\\`")
+            safeDestFile = "\"$HOME/\(escapedRemainder)\""
+        } else {
+            let escapedPath = destFile
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+                .replacingOccurrences(of: "$", with: "\\$")
+                .replacingOccurrences(of: "`", with: "\\`")
+            safeDestFile = "\"\(escapedPath)\""
+        }
+
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         proc.arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3",
-                          "\(username)@\(ip)", "echo -n '\(escaped)' > \(remotePath)/.sync_rename_request"]
+                          "\(username)@\(ip)", "echo -n '\(escaped)' > \(safeDestFile)"]
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError = FileHandle.nullDevice
         proc.terminationHandler = { p in
@@ -1652,6 +1671,11 @@ struct SettingsView: View {
     }
 
     private func readManualModeFreeSpace(username: String, ip: String, remotePath: String) {
+        let escapedPath = remotePath
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "$", with: "\\$")
+            .replacingOccurrences(of: "`", with: "\\`")
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         proc.arguments = [
@@ -1659,7 +1683,7 @@ struct SettingsView: View {
             "-o", "ConnectTimeout=3",
             "-o", "StrictHostKeyChecking=no",
             "\(username)@\(ip)",
-            "df -k \"\(remotePath)\" 2>/dev/null | awk 'NR==2 {print $4}'"
+            "df -k \"\(escapedPath)\" 2>/dev/null | awk 'NR==2 {print $4}'"
         ]
         let pipe = Pipe()
         proc.standardOutput = pipe
