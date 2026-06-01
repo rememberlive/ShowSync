@@ -320,6 +320,40 @@ final class StorageMonitor: ObservableObject {
 
 enum ReceiveState { case idle, receiving, done }
 
+enum BackupVerifyStatus: Equatable {
+    case idle
+    case requested       // Request sent to Main
+    case verifying       // Main is running verify
+    case verified        // All files match
+    case differs(Int)    // N files differ
+    case failed(String)  // Error message
+    case manualHint      // Manual mode: waiting for Main popover to open
+
+    var label: String {
+        switch self {
+        case .idle:           return ""
+        case .requested:      return "Requesting verify..."
+        case .verifying:      return "Main is verifying..."
+        case .verified:       return "Verified — all files match"
+        case .differs(let n): return "\(n) file\(n == 1 ? "" : "s") differ — re-sync recommended"
+        case .failed(let m):  return m
+        case .manualHint:     return "Open Main's Sync window for verify to run"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .idle:       return .gray
+        case .requested:  return .yellow
+        case .verifying:  return .yellow
+        case .verified:   return .green
+        case .differs:    return .orange
+        case .failed:     return .red
+        case .manualHint: return .yellow
+        }
+    }
+}
+
 final class ReceiveMonitor: ObservableObject {
     static let shared = ReceiveMonitor()
 
@@ -327,6 +361,7 @@ final class ReceiveMonitor: ObservableObject {
     @Published var receivePercent: Int    = -1    // -1 = unknown; 0–100 during transfer
     @Published var receiveDetails: String = ""    // "4 files · 620 MB in 0:42"
     @Published var usingFallback: Bool    = false // True when custom folder missing, using ~/Sync
+    @Published var verifyStatus: BackupVerifyStatus = .idle  // Backup-initiated verify status
     // `lastReceivedTime` now lives on ConfigStore.config so it survives relaunch.
 
     /// The ACTUAL destination path being used right now (fallback ~/Sync or user's chosen folder)
@@ -411,7 +446,7 @@ final class ReceiveMonitor: ObservableObject {
     func clearStaleSignalFiles() {
         let base = URL(fileURLWithPath: effectiveDestination)
         let fm = FileManager.default
-        let signalFiles = [".sync_start", ".sync_progress", ".sync_complete", ".sync_refused"]
+        let signalFiles = [".sync_start", ".sync_progress", ".sync_complete", ".sync_refused", ".verify_request", ".verify_result"]
         for filename in signalFiles {
             let path = base.appendingPathComponent(filename)
             if fm.fileExists(atPath: path.path) {
@@ -551,6 +586,28 @@ final class ReceiveMonitor: ObservableObject {
                 return
             }
 
+            // Check for verify result from Main
+            let verifyResultPath = base.appendingPathComponent(".verify_result")
+            if fm.fileExists(atPath: verifyResultPath.path) {
+                let content = (try? String(contentsOf: verifyResultPath, encoding: .utf8))?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                try? fm.removeItem(at: verifyResultPath)
+                let status = Self.parseVerifyResult(content)
+                Task { @MainActor [weak self] in
+                    self?.isChecking = false
+                    guard let self else { return }
+                    self.verifyStatus = status
+                    // Clear after 10 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+                        guard let self else { return }
+                        if case .verified = self.verifyStatus { self.verifyStatus = .idle }
+                        if case .differs = self.verifyStatus { self.verifyStatus = .idle }
+                        if case .failed = self.verifyStatus { self.verifyStatus = .idle }
+                    }
+                }
+                return
+            }
+
             if fm.fileExists(atPath: progressPath.path) {
                 let content = (try? String(contentsOf: progressPath, encoding: .utf8))?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -656,6 +713,25 @@ final class ReceiveMonitor: ObservableObject {
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let pct  = (json["percent"] as? NSNumber)?.intValue else { return -1 }
         return max(0, min(100, pct))
+    }
+
+    private static func parseVerifyResult(_ content: String) -> BackupVerifyStatus {
+        guard let data = content.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let result = json["result"] as? String else {
+            return .failed("Verify failed — invalid response")
+        }
+        if result == "ok" {
+            return .verified
+        } else if result.hasPrefix("differs:") {
+            let countStr = result.dropFirst("differs:".count)
+            if let count = Int(countStr) {
+                return .differs(count)
+            }
+            return .differs(0)
+        } else {
+            return .failed("Verify failed — couldn't reach Main")
+        }
     }
 
     static func formatBytes(_ bytes: Int64) -> String {
@@ -857,6 +933,29 @@ struct BackupView: View {
 
             Divider()
 
+            // Verify section
+            VStack(alignment: .leading, spacing: 8) {
+                if receiveMonitor.verifyStatus == .idle {
+                    Button {
+                        requestVerify()
+                    } label: {
+                        Text("Verify Backup")
+                            .font(.system(size: 13, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Ask Main to verify all files match")
+                } else {
+                    Text(receiveMonitor.verifyStatus.label)
+                        .font(.system(size: 12))
+                        .foregroundColor(receiveMonitor.verifyStatus.color)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+
+            Divider()
+
             // About
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
@@ -995,6 +1094,50 @@ struct BackupView: View {
         f.dateStyle = .none
         f.timeStyle = .medium
         return f.string(from: date)
+    }
+
+    private func requestVerify() {
+        let nonce = UUID().uuidString.prefix(8).lowercased()
+        receiveMonitor.verifyStatus = .requested
+
+        if store.config.discoveryMode == "automatic" {
+            // AUTO mode: Update Bonjour TXT record with verify request nonce
+            BonjourAdvertiser.shared.verifyRequestNonce = String(nonce)
+            BonjourAdvertiser.shared.updateTXTRecord()
+
+            // Set 90s timeout for response
+            DispatchQueue.main.asyncAfter(deadline: .now() + 90) { [weak receiveMonitor] in
+                guard let rm = receiveMonitor, rm.verifyStatus == .requested else { return }
+                rm.verifyStatus = .failed("Verify timed out — Main may not be reachable")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak receiveMonitor] in
+                    if receiveMonitor?.verifyStatus == .failed("Verify timed out — Main may not be reachable") {
+                        receiveMonitor?.verifyStatus = .idle
+                    }
+                }
+            }
+        } else {
+            // MANUAL mode: Write .verify_request file and show hint
+            let destPath = receiveMonitor.effectiveDestination
+            let requestPath = URL(fileURLWithPath: destPath).appendingPathComponent(".verify_request")
+            let content = "{\"nonce\":\"\(nonce)\",\"ts\":\(Int(Date().timeIntervalSince1970))}"
+            try? content.write(to: requestPath, atomically: true, encoding: .utf8)
+
+            // Show manual mode hint
+            receiveMonitor.verifyStatus = .manualHint
+
+            // Set 90s timeout
+            DispatchQueue.main.asyncAfter(deadline: .now() + 90) { [weak receiveMonitor] in
+                guard let rm = receiveMonitor else { return }
+                if rm.verifyStatus == .manualHint || rm.verifyStatus == .requested {
+                    rm.verifyStatus = .failed("Verify timed out — open Main's Sync window first")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak receiveMonitor] in
+                        if case .failed = receiveMonitor?.verifyStatus {
+                            receiveMonitor?.verifyStatus = .idle
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private func appVersion() -> String {

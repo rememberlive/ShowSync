@@ -29,6 +29,9 @@ final class BonjourAdvertiser: NSObject, ObservableObject {
     @Published var state: AdvertiserState = .idle
     @Published var confirmedName: String = ""
 
+    // Backup-initiated verify: nonce (timestamp) to request verify from Main
+    @Published var verifyRequestNonce: String = ""
+
     private var service: NetService?
     private var bonjourRunLoop: RunLoop?
     private let runLoopReady = DispatchSemaphore(value: 0)
@@ -88,7 +91,8 @@ final class BonjourAdvertiser: NSObject, ObservableObject {
         let txtData = NetService.data(fromTXTRecord: [
             "dest": intendedDest.data(using: .utf8) ?? Data(),           // For display (may be unavailable)
             "effectiveDest": effectiveDest.data(using: .utf8) ?? Data(), // For sync + free space
-            "free": String(freeBytes).data(using: .utf8) ?? Data()
+            "free": String(freeBytes).data(using: .utf8) ?? Data(),
+            "verifyReq": verifyRequestNonce.data(using: .utf8) ?? Data() // Backup-initiated verify request
         ])
         svc.setTXTRecord(txtData)
         // Schedule on the background thread's runloop, not main
@@ -126,10 +130,11 @@ final class BonjourAdvertiser: NSObject, ObservableObject {
         let txtData = NetService.data(fromTXTRecord: [
             "dest": intendedDest.data(using: .utf8) ?? Data(),
             "effectiveDest": effectiveDest.data(using: .utf8) ?? Data(),
-            "free": String(freeBytes).data(using: .utf8) ?? Data()
+            "free": String(freeBytes).data(using: .utf8) ?? Data(),
+            "verifyReq": verifyRequestNonce.data(using: .utf8) ?? Data()
         ])
         svc.setTXTRecord(txtData)
-        NSLog("[Bonjour] TXT record updated in place: dest=%@, effective=%@", intendedDest, effectiveDest)
+        NSLog("[Bonjour] TXT record updated in place: dest=%@, effective=%@, verifyReq=%@", intendedDest, effectiveDest, verifyRequestNonce)
     }
 
     @objc private func stopPublishing() {
@@ -228,6 +233,9 @@ final class BonjourBrowser: NSObject, ObservableObject {
 
     @Published var services: [DiscoveredBackup] = []
     @Published var state: BrowserState = .idle
+
+    // Backup-initiated verify: dedupe so we run once per nonce
+    private var lastHandledVerifyNonce: String = ""
 
     private let browser = NetServiceBrowser()
     private var resolving: [NetService] = []   // strong refs while resolution is in-flight
@@ -474,8 +482,27 @@ extension BonjourBrowser: NetServiceDelegate {
             freeBytes = val
         }
 
+        // Check for Backup-initiated verify request
+        var verifyReq = ""
+        if let verifyData = dict["verifyReq"], let str = String(data: verifyData, encoding: .utf8) {
+            verifyReq = str
+        }
+
         Task { @MainActor [weak self] in
             guard let self else { return }
+
+            // Handle Backup-initiated verify: trigger if new nonce from currently connected Backup
+            let config = ConfigStore.shared.config
+            if !verifyReq.isEmpty && verifyReq != self.lastHandledVerifyNonce {
+                // Find the service to check if it's our connected Backup
+                if let service = self.services.first(where: { $0.id == name }),
+                   config.destinationIP == service.resolvedIP {
+                    self.lastHandledVerifyNonce = verifyReq
+                    NSLog("[Bonjour] Received verify request from Backup: nonce=%@", verifyReq)
+                    SyncEngine.shared.triggerRemoteVerify()
+                }
+            }
+
             // Update the service entry in our array
             if let idx = self.services.firstIndex(where: { $0.id == name }) {
                 let old = self.services[idx]

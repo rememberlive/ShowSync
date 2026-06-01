@@ -129,6 +129,7 @@ final class SyncEngine: ObservableObject {
     // Verify Now - separate from sync
     @Published var verifyStatus: VerifyStatus = .idle
     private var verifyTask: Process?
+    private var isRemoteVerify: Bool = false  // True when triggered by Backup via Bonjour
 
     private init() {}
 
@@ -582,17 +583,27 @@ final class SyncEngine: ObservableObject {
                     guard let self else { return }
                     self.verifyTask = nil
 
+                    var resultCode: String = "error"
                     if p.terminationStatus == 0 {
                         // Success: count files that would transfer (= differ)
                         let differCount = self.countDifferingFiles(output)
                         if differCount == 0 {
                             self.verifyStatus = .verified
+                            resultCode = "ok"
                         } else {
                             self.verifyStatus = .differs(differCount)
+                            resultCode = "differs:\(differCount)"
                         }
                     } else {
                         // SSH/connection failure
                         self.verifyStatus = .failed("Verify failed — couldn't reach Backup")
+                        resultCode = "error"
+                    }
+
+                    // Write result to Backup if this was a remote verify request
+                    if self.isRemoteVerify {
+                        self.writeVerifyResult(resultCode)
+                        self.isRemoteVerify = false
                     }
 
                     // Clear status after 10 seconds
@@ -622,6 +633,14 @@ final class SyncEngine: ObservableObject {
         verifyTask?.terminate()
         verifyTask = nil
         verifyStatus = .idle
+        isRemoteVerify = false
+    }
+
+    // Called by BonjourBrowser when Backup requests a verify via TXT record
+    func triggerRemoteVerify() {
+        guard !isRemoteVerify else { return }  // Already handling a remote verify
+        isRemoteVerify = true
+        verifyNow(config: ConfigStore.shared.config)
     }
 
     private func countDifferingFiles(_ output: String) -> Int {
@@ -858,6 +877,29 @@ final class SyncEngine: ObservableObject {
     private func cleanupSignalFiles() {
         let escaped = Self.shellEscapeForDoubleQuotes(syncRemotePath)
         sshWrite("rm -f \"\(escaped)/.sync_start\" \"\(escaped)/.sync_progress\" \"\(escaped)/.sync_complete\"")
+    }
+
+    // Write verify result to Backup (for remote-initiated verify)
+    private func writeVerifyResult(_ result: String) {
+        let config = ConfigStore.shared.config
+        guard !config.username.isEmpty, !config.destinationIP.isEmpty else { return }
+        let remotePath = usingFallback ? "~/Sync" : (config.backupDestination.isEmpty ? "~/Sync" : config.backupDestination)
+        let escaped = Self.shellEscapeForDoubleQuotes(remotePath)
+        let timestamp = Int(Date().timeIntervalSince1970)
+        let cmd = "echo '{\"result\":\"\(result)\",\"ts\":\(timestamp)}' > \"\(escaped)/.verify_result\"; rm -f \"\(escaped)/.verify_request\""
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        var sshArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=2", "-o", "StrictHostKeyChecking=no"]
+        if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
+           !config.preferredInterface.isEmpty {
+            sshArgs.insert(contentsOf: ["-b", bindIP], at: 0)
+        }
+        sshArgs.append(contentsOf: ["\(config.username)@\(config.destinationIP)", cmd])
+        proc.arguments = sshArgs
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError  = FileHandle.nullDevice
+        DispatchQueue.global(qos: .utility).async { try? proc.run() }
     }
 
     private func sshWrite(_ command: String) {
@@ -1245,6 +1287,7 @@ final class SSHChecker: ObservableObject {
     private var process: Process?
     private var checkID = 0
     private var timer:   Timer?
+    private var lastHandledVerifyNonce: String = ""  // Dedupe for manual mode verify requests
 
     func startChecking(username: String, ip: String) {
         guard !username.isEmpty, !ip.isEmpty else { stopChecking(); return }
@@ -1277,8 +1320,8 @@ final class SSHChecker: ObservableObject {
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
 
         if isManualMode {
-            // Manual mode: read config + free space in one call (also proves reachability)
-            let cmd = "cat \"$HOME/Library/Application Support/Sync/config_backup.json\" 2>/dev/null || echo '{}'; echo '---DF---'; df -k ~ 2>/dev/null | awk 'NR==2 {print $4}'"
+            // Manual mode: read config + free space + check for verify request in one call
+            let cmd = "cat \"$HOME/Library/Application Support/Sync/config_backup.json\" 2>/dev/null || echo '{}'; echo '---DF---'; df -k ~ 2>/dev/null | awk 'NR==2 {print $4}'; echo '---VERIFY---'; cat ~/Sync/.verify_request 2>/dev/null || echo ''"
             var manualArgs = ["-o", "ConnectTimeout=2", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no"]
             if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
                !ConfigStore.shared.config.preferredInterface.isEmpty {
@@ -1319,10 +1362,26 @@ final class SSHChecker: ObservableObject {
                     }
                     // On parse failure: keep last-known values (no else branch needed)
                     // Parse free space (only update if parse succeeds)
-                    if parts.count > 1,
-                       let kbStr = parts[1].trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: .newlines).first,
-                       let kb = Int64(kbStr) {
-                        SyncEngine.shared.manualModeFreeSpace = kb * 1024
+                    if parts.count > 1 {
+                        let dfAndVerify = parts[1].components(separatedBy: "---VERIFY---")
+                        if let kbStr = dfAndVerify[0].trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: .newlines).first,
+                           let kb = Int64(kbStr) {
+                            SyncEngine.shared.manualModeFreeSpace = kb * 1024
+                        }
+                        // Parse verify request (manual mode only)
+                        if dfAndVerify.count > 1 {
+                            let verifyContent = dfAndVerify[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !verifyContent.isEmpty,
+                               let verifyData = verifyContent.data(using: .utf8),
+                               let verifyJson = try? JSONSerialization.jsonObject(with: verifyData) as? [String: Any],
+                               let nonce = verifyJson["nonce"] as? String, !nonce.isEmpty,
+                               nonce != self.lastHandledVerifyNonce {
+                                // Found a new verify request - trigger remote verify
+                                self.lastHandledVerifyNonce = nonce
+                                NSLog("[SSHChecker] Manual mode verify request: nonce=%@", nonce)
+                                SyncEngine.shared.triggerRemoteVerify()
+                            }
+                        }
                     }
                 }
             }
