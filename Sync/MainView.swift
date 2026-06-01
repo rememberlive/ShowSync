@@ -153,25 +153,58 @@ final class SyncEngine: ObservableObject {
         prepProc.standardError  = prepPipe
         task = prepProc
 
-        // Drain pipe concurrently to prevent buffer deadlock with large file lists
-        var outputData = Data()
-        let outputLock = NSLock()
-        prepPipe.fileHandleForReading.readabilityHandler = { handle in
-            let chunk = handle.availableData
-            if !chunk.isEmpty {
-                outputLock.lock()
-                outputData.append(chunk)
-                outputLock.unlock()
+        // Class wrapper to ensure proper sharing between closures
+        class OutputBuffer {
+            var data = Data()
+            let lock = NSLock()
+            func append(_ chunk: Data) {
+                lock.lock()
+                data.append(chunk)
+                lock.unlock()
+            }
+            func finalize(_ remaining: Data) -> String {
+                lock.lock()
+                data.append(remaining)
+                let result = String(data: data, encoding: .utf8) ?? ""
+                lock.unlock()
+                return result
             }
         }
+        let outputBuffer = OutputBuffer()
+
+        // Drain pipe concurrently on background queue to prevent buffer deadlock
+        let readQueue = DispatchQueue(label: "sync.dryrun.pipe", qos: .userInitiated)
+        let fileHandle = prepPipe.fileHandleForReading
+        readQueue.async {
+            while true {
+                let chunk = fileHandle.availableData
+                if chunk.isEmpty { break }
+                outputBuffer.append(chunk)
+            }
+            NSLog("[SyncTrace] 2e pipe drain complete")
+        }
+
+        // Timeout: if dry-run takes >30s, kill it and proceed without stats
+        var dryRunCompleted = false
+        let dryRunLock = NSLock()
+        let timeoutItem = DispatchWorkItem { [weak prepProc] in
+            dryRunLock.lock()
+            let alreadyDone = dryRunCompleted
+            dryRunLock.unlock()
+            if !alreadyDone, let p = prepProc, p.isRunning {
+                NSLog("[SyncTrace] 2f dry-run TIMEOUT (30s), killing process")
+                p.terminate()
+            }
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: timeoutItem)
 
         prepProc.terminationHandler = { [weak self] p in
+            timeoutItem.cancel()
+            dryRunLock.lock()
+            dryRunCompleted = true
+            dryRunLock.unlock()
             NSLog("[SyncTrace] 3 dry-run terminated, exit=%d", p.terminationStatus)
-            prepPipe.fileHandleForReading.readabilityHandler = nil
-            outputLock.lock()
-            outputData.append(prepPipe.fileHandleForReading.readDataToEndOfFile())
-            let output = String(data: outputData, encoding: .utf8) ?? ""
-            outputLock.unlock()
+            let output = outputBuffer.finalize(fileHandle.readDataToEndOfFile())
             // Only log on non-zero exit; suppress full output (may contain paths).
             if p.terminationStatus != 0 {
                 NSLog("[Prepare] exit=%d", p.terminationStatus)
@@ -182,41 +215,50 @@ final class SyncEngine: ObservableObject {
                     return
                 }
 
-                if p.terminationStatus != 0 {
+                // On timeout (exit -1 from terminate()), proceed with unknown totals
+                let wasTimeout = p.terminationStatus == -1 || p.terminationStatus == 15
+                if p.terminationStatus != 0 && !wasTimeout {
                     self.status = .error("Couldn't prepare the sync — check your connection")
                     ConfigStore.shared.isSyncing = false
                     ConfigStore.shared.iconState = .error
                     return
                 }
 
-                let fileCount  = Self.parseDryRunFileCount(output)
-                let totalBytes = Self.parseTotalSize(output) ?? 0
-                NSLog("[Prepare] fileCount=%d totalBytes=%lld", fileCount, totalBytes)
+                let fileCount  = wasTimeout ? 0 : Self.parseDryRunFileCount(output)
+                let totalBytes = wasTimeout ? Int64(0) : (Self.parseTotalSize(output) ?? 0)
+                NSLog("[Prepare] fileCount=%d totalBytes=%lld wasTimeout=%d", fileCount, totalBytes, wasTimeout ? 1 : 0)
 
                 if config.dryRunEnabled && !self.isAutoSync {
                     // Preview mode: show file list, no transfer
                     self.status = .ready
                     ConfigStore.shared.isSyncing = false
                     ConfigStore.shared.iconState = ConfigStore.shared.config.isReadyToSync ? .idle : .notConfigured
-                    let (previewFiles, _) = Self.parseDryRunOutput(output)
-                    if fileCount > 0 && previewFiles.isEmpty {
-                        // GNU rsync: file list parser doesn't apply, but count is known
-                        let note = totalBytes > 0 ? "\nTotal size: \(SyncEngine.formatBytes(totalBytes))" : ""
+                    if wasTimeout {
                         self.dryRunResult = DryRunResult(
-                            title: "Check Files Complete",
-                            body: "\(fileCount) file\(fileCount == 1 ? "" : "s") will be transferred\(note)"
+                            title: "Check Files Timeout",
+                            body: "The file check took too long. Try syncing directly."
                         )
                     } else {
-                        let (title, body) = Self.formatDryRunMessage(
-                            files: previewFiles,
-                            transferBytes: totalBytes > 0 ? totalBytes : nil
-                        )
-                        self.dryRunResult = DryRunResult(title: title, body: body)
+                        let (previewFiles, _) = Self.parseDryRunOutput(output)
+                        if fileCount > 0 && previewFiles.isEmpty {
+                            // GNU rsync: file list parser doesn't apply, but count is known
+                            let note = totalBytes > 0 ? "\nTotal size: \(SyncEngine.formatBytes(totalBytes))" : ""
+                            self.dryRunResult = DryRunResult(
+                                title: "Check Files Complete",
+                                body: "\(fileCount) file\(fileCount == 1 ? "" : "s") will be transferred\(note)"
+                            )
+                        } else {
+                            let (title, body) = Self.formatDryRunMessage(
+                                files: previewFiles,
+                                transferBytes: totalBytes > 0 ? totalBytes : nil
+                            )
+                            self.dryRunResult = DryRunResult(title: title, body: body)
+                        }
                     }
                     return
                 }
 
-                // Phase 2: real transfer — totals are accurate from dry run
+                // Phase 2: real transfer — totals are accurate from dry run (or 0 on timeout)
                 self.syncTotalFiles = fileCount
                 self.expectedSize   = totalBytes
                 self.syncStartTime  = Date()
@@ -258,6 +300,7 @@ final class SyncEngine: ObservableObject {
                 try prepProc.run()
                 NSLog("[SyncTrace] 2c dry-run process started (run() returned)")
             } catch {
+                timeoutItem.cancel()
                 NSLog("[SyncTrace] 2d dry-run launch FAILED: %@", error.localizedDescription)
                 NSLog("[Prepare] rsync launch failed: %@", error.localizedDescription)
                 Task { @MainActor [weak self] in
