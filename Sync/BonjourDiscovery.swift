@@ -639,6 +639,7 @@ extension BonjourBrowser: NetServiceDelegate {
         var ptr = Optional(first)
         while let current = ptr {
             let ifa = current.pointee
+            guard ifa.ifa_addr != nil else { ptr = ifa.ifa_next; continue }
             if ifa.ifa_addr.pointee.sa_family == UInt8(AF_INET),
                String(cString: ifa.ifa_name) == interfaceName {
                 var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
@@ -678,6 +679,7 @@ extension BonjourBrowser: NetServiceDelegate {
         var ptr = Optional(first)
         while let current = ptr {
             let ifa = current.pointee
+            guard ifa.ifa_addr != nil else { ptr = ifa.ifa_next; continue }
             if ifa.ifa_addr.pointee.sa_family == UInt8(AF_INET),
                String(cString: ifa.ifa_name) == interfaceName,
                let netmaskPtr = ifa.ifa_netmask {
