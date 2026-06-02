@@ -361,10 +361,8 @@ struct SettingsView: View {
             }
         }
         .onChange(of: store.config.preferredInterface) { _ in
-            // Re-browse to refresh reachability flags based on new interface's subnet
             if isMain && isAutomatic {
-                // TEMP DIAGNOSTIC - disabled to test rename hang
-                // BonjourBrowser.shared.restart()
+                BonjourBrowser.shared.restart()
             }
         }
         .onChange(of: store.config.appPresence) { _ in
