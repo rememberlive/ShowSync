@@ -62,7 +62,17 @@
       "Bash(rm -rf ~/Desktop/SyncTest)",
       "Bash(mkdir -p ~/Desktop/SyncTest)",
       "Bash(cp -R /tmp/SyncArchive.xcarchive/Products/Applications/Sync.app ~/Desktop/SyncTest/)",
-      "Read(//Users/remember/Desktop/**)"
+      "Read(//Users/remember/Desktop/**)",
+      "Bash(/opt/homebrew/bin/rsync --help)",
+      "Bash(/usr/bin/rsync --help)",
+      "Bash(/usr/bin/rsync -av --backup --backup-dir=test_versions --dry-run /tmp/ /tmp/test_dest/)",
+      "Bash(/usr/bin/rsync -av --backup --backup-dir=.versions --dry-run /tmp/backup_test_src/ /tmp/backup_test_dest/)",
+      "Bash(/usr/bin/rsync -av --backup --backup-dir=.versions /tmp/backup_test_src/ /tmp/backup_test_dest/)",
+      "Bash(/usr/bin/rsync -av --backup --backup-dir=.versions --suffix=_2026-06-02_08-25 /tmp/backup_test_src/ /tmp/backup_test_dest/)",
+      "Bash(/usr/bin/rsync -av --backup --backup-dir=.versions --suffix=_2026-06-02_08-30 /tmp/backup_test_src/ /tmp/backup_test_dest/)",
+      "Bash(rm -rf /tmp/ver_test_*)",
+      "Bash(/usr/bin/rsync -av --backup --backup-dir=.sync_versions/2026-06-02_14-30-15 /tmp/ver_test_src/ /tmp/ver_test_dest/)",
+      "Bash(/usr/bin/rsync -av --backup --backup-dir=.sync_versions/2026-06-02_18-00-00 /tmp/ver_test_src/ /tmp/ver_test_dest/)"
     ]
   }
 }
