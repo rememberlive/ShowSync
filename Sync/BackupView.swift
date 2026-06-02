@@ -253,8 +253,15 @@ final class StorageMonitor: ObservableObject {
 
     private func updateStorage() {
         let destPath = ReceiveMonitor.shared.effectiveDestination
-        let attrs = try? FileManager.default.attributesOfFileSystem(forPath: destPath)
-        let free = attrs?[.systemFreeSize] as? Int64 ?? 0
+        let url = URL(fileURLWithPath: destPath)
+        let free: Int64
+        if let values = try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
+           let importantFree = values.volumeAvailableCapacityForImportantUsage, importantFree > 0 {
+            free = importantFree
+        } else {
+            let attrs = try? FileManager.default.attributesOfFileSystem(forPath: destPath)
+            free = attrs?[.systemFreeSize] as? Int64 ?? 0
+        }
         let gb = Double(free) / 1_073_741_824
         if gb >= 1.0 {
             storageString = String(format: "%.1f GB free", gb)
