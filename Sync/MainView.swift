@@ -148,6 +148,7 @@ final class SyncEngine: ObservableObject {
     // Phase 2 starts the real transfer once totals are known (skipped in preview mode).
     func sync(config: Config, isAuto: Bool = false, isPush: Bool = false) {
         guard config.isReadyToSync else { return }
+        guard !status.isActive else { return }
         // Sync supersedes verify - cancel any in-flight verify before starting
         if verifyStatus == .verifying { cancelVerify() }
         isAutoSync         = isAuto
