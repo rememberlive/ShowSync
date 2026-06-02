@@ -510,8 +510,13 @@ final class SyncEngine: ObservableObject {
                                     )
                                     ConfigStore.shared.appendTransferLogEntry(entry)
 
-                                    // Prune old version directories (fire-and-forget)
+                                    // Version history: reorganize to file-first structure, then prune (fire-and-forget)
                                     if config.versionHistoryEnabled {
+                                        self.reorganizeVersions(
+                                            username: config.username,
+                                            ip: config.destinationIP,
+                                            remotePath: self.syncRemotePath
+                                        )
                                         self.pruneVersions(
                                             username: config.username,
                                             ip: config.destinationIP,
@@ -1307,14 +1312,62 @@ final class SyncEngine: ObservableObject {
 
     // MARK: - Version history
 
-    private func pruneVersions(username: String, ip: String, remotePath: String, maxCount: Int) {
-        let N = min(max(maxCount, 3), 20)
+    private func reorganizeVersions(username: String, ip: String, remotePath: String) {
         let escaped = Self.shellEscapeForDoubleQuotes(remotePath)
-        let cmd = "cd \"\(escaped)/Sync_versions\" 2>/dev/null && ls -1d ????-??-??_??-??-?? 2>/dev/null | sort -r | tail -n +\(N + 1) | while IFS= read -r d; do [ -d \"./$d\" ] && rm -rf \"./$d\"; done"
+        let cmd = """
+cd "\(escaped)/Sync_versions" 2>/dev/null || exit 0; \
+for tsdir in $(ls -1d ????-??-??_??-??-?? 2>/dev/null); do \
+find "./$tsdir" -type f -print0 | while IFS= read -r -d '' src; do \
+relpath="${src#./$tsdir/}"; \
+mkdir -p "./$relpath"; \
+mv "$src" "./$relpath/$tsdir"; \
+done; \
+find "./$tsdir" -type d -empty -delete 2>/dev/null; \
+rmdir "./$tsdir" 2>/dev/null; \
+done
+"""
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        var sshArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no"]
+        var sshArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=no"]
+        if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
+           !ConfigStore.shared.config.preferredInterface.isEmpty {
+            sshArgs.insert(contentsOf: ["-b", bindIP], at: 0)
+        }
+        sshArgs.append(contentsOf: ["\(username)@\(ip)", cmd])
+        proc.arguments = sshArgs
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        proc.terminationHandler = { p in
+            NSLog("[VersionReorg] exit=%d", p.terminationStatus)
+        }
+        DispatchQueue.global(qos: .utility).async {
+            do {
+                try proc.run()
+            } catch {
+                NSLog("[VersionReorg] launch failed: %@", error.localizedDescription)
+            }
+        }
+    }
+
+    private func pruneVersions(username: String, ip: String, remotePath: String, maxCount: Int) {
+        let N = min(max(maxCount, 3), 20)
+        let escaped = Self.shellEscapeForDoubleQuotes(remotePath)
+        let cmd = """
+cd "\(escaped)/Sync_versions" 2>/dev/null || exit 0; \
+find . -type f -name '????-??-??_??-??-??' -print0 | \
+while IFS= read -r -d '' f; do printf '%s\\0' "$(dirname "$f")"; done | \
+sort -zu | \
+while IFS= read -r -d '' dir; do \
+ls -1 "$dir"/????-??-??_??-??-?? 2>/dev/null | sort -r | tail -n +\(N + 1) | \
+while IFS= read -r ts; do rm -f "$dir/$ts"; done; \
+done; \
+find . -mindepth 1 -type d -empty -delete 2>/dev/null
+"""
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        var sshArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=no"]
         if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
            !ConfigStore.shared.config.preferredInterface.isEmpty {
             sshArgs.insert(contentsOf: ["-b", bindIP], at: 0)
