@@ -1436,16 +1436,16 @@ final class SyncEngine: ObservableObject {
     private func pruneVersions(username: String, ip: String, remotePath: String, maxCount: Int) {
         let N = min(max(maxCount, 3), 20)
         let escaped = Self.shellEscapeForDoubleQuotes(remotePath)
+        // BSD-safe prune: newline-based (no awk RS="\0" which BSD awk doesn't support)
         let cmd = """
 cd "\(escaped)" 2>/dev/null || exit 0; \
-find . -name '*~sync-v~????-??-??_??-??-??*' \\( -type f -o -type d \\) -print0 | \
-while IFS= read -r -d '' v; do \
+find . \\( -type f -o -type d \\) -name '*~sync-v~????-??-??_??-??-??*' | \
+while IFS= read -r v; do \
 original=$(echo "$v" | sed 's/~sync-v~[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}_[0-9]\\{2\\}-[0-9]\\{2\\}-[0-9]\\{2\\}//'); \
-printf '%s\\t%s\\0' "$original" "$v"; \
-done | \
-sort -z -t $'\\t' -k1,1 -k2,2r | \
-awk -F'\\t' -v N=\(N) 'BEGIN{RS="\\0";ORS="\\0"}{if($1!=prev){c=0;prev=$1}c++;if(c>N)print $2}' | \
-xargs -0 -r rm -rf
+printf '%s\\t%s\\n' "$original" "$v"; \
+done | sort -t '\t' -k1,1 -k2,2r | \
+awk -F'\\t' -v N=\(N) '{if($1!=prev){c=0;prev=$1}c++;if(c>N)print $2}' | \
+while IFS= read -r f; do rm -rf "$f"; done
 """
 
         let proc = Process()
