@@ -519,6 +519,7 @@ final class ReceiveMonitor: ObservableObject {
         guard !isChecking else { return }
         isChecking = true
         let destPath = effectiveDestination  // Capture before background dispatch
+        let minFreeGB = ConfigStore.shared.config.minFreeSpaceGB  // Capture on main before dispatch
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let base         = URL(fileURLWithPath: destPath)
             let completePath = base.appendingPathComponent(".sync_complete")
@@ -530,8 +531,7 @@ final class ReceiveMonitor: ObservableObject {
             // Clear low-space error when space recovers (honest self-clear on every poll cycle)
             // Only clear if .sync_refused exists (we wrote it) AND space is now OK
             let refusedPath = base.appendingPathComponent(".sync_refused")
-            let thresholdGB = ConfigStore.shared.config.minFreeSpaceGB
-            let minFreeBytes: Int64 = Int64(thresholdGB) * 1024 * 1024 * 1024
+            let minFreeBytes: Int64 = Int64(minFreeGB) * 1024 * 1024 * 1024
             if fm.fileExists(atPath: refusedPath.path),
                let freeBytes = BonjourAdvertiser.getFreeSpace(path: base.path),
                freeBytes >= minFreeBytes {
@@ -630,8 +630,7 @@ final class ReceiveMonitor: ObservableObject {
             if fm.fileExists(atPath: startPath.path) {
                 // Minimum free space check — refuse ONLY on confirmed real value under threshold
                 // nil = unknown = allow sync to proceed (never refuse on unknown)
-                let gateThresholdGB = ConfigStore.shared.config.minFreeSpaceGB
-                let minFreeBytes: Int64 = Int64(gateThresholdGB) * 1024 * 1024 * 1024
+                let minFreeBytes: Int64 = Int64(minFreeGB) * 1024 * 1024 * 1024
                 if let freeBytes = BonjourAdvertiser.getFreeSpace(path: base.path),
                    freeBytes < minFreeBytes {
                     let refusedPath = base.appendingPathComponent(".sync_refused")
