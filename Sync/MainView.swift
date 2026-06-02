@@ -1308,6 +1308,61 @@ final class SyncEngine: ObservableObject {
 
     // MARK: - Version history (inline marker-based)
 
+    // ISOLATION: Ensures completion fires exactly once and allows timeout termination of stuck processes
+    private final class VersioningGuard {
+        private let lock = NSLock()
+        private var completed = false
+        private var currentProcess: Process?
+        private let completion: () -> Void
+
+        var isCompleted: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return completed
+        }
+
+        init(completion: @escaping () -> Void) {
+            self.completion = completion
+        }
+
+        func setProcess(_ proc: Process) {
+            lock.lock()
+            currentProcess = proc
+            lock.unlock()
+        }
+
+        func complete() {
+            lock.lock()
+            guard !completed else {
+                lock.unlock()
+                return
+            }
+            completed = true
+            currentProcess = nil
+            lock.unlock()
+            DispatchQueue.main.async { self.completion() }
+        }
+
+        func timeoutFired(reason: String) {
+            lock.lock()
+            guard !completed else {
+                lock.unlock()
+                return
+            }
+            completed = true
+            let proc = currentProcess
+            currentProcess = nil
+            lock.unlock()
+
+            NSLog("[Version] Timeout (%@), abandoning versioning - backup will proceed", reason)
+            if let proc = proc, proc.isRunning {
+                proc.terminate()
+                NSLog("[Version] Terminated stuck process")
+            }
+            DispatchQueue.main.async { self.completion() }
+        }
+    }
+
     private func createInlineVersions(config: Config, source: String, rsyncPath: String, completion: @escaping () -> Void) {
         let timestamp: String = {
             let fmt = DateFormatter()
@@ -1316,6 +1371,14 @@ final class SyncEngine: ObservableObject {
         }()
 
         let dest = "\(config.username)@\(config.destinationIP):\(syncRemotePath)/"
+
+        // ISOLATION: completion-once guard and process tracking for timeout termination
+        let guard_ = VersioningGuard(completion: completion)
+
+        // ISOLATION: Master 60s timeout - backup ALWAYS proceeds
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 60) {
+            guard_.timeoutFired(reason: "master 60s")
+        }
 
         NSLog("[Version] Running dry-run to identify changed files")
         let dryRunProc = Process()
@@ -1334,16 +1397,19 @@ final class SyncEngine: ObservableObject {
 
         dryRunProc.terminationHandler = { [weak self] p in
             guard let self else {
-                DispatchQueue.main.async { completion() }
+                guard_.complete()
                 return
             }
+
+            // ISOLATION: Check if already timed out
+            if guard_.isCompleted { return }
 
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             let output = String(data: data, encoding: .utf8) ?? ""
 
             if p.terminationStatus != 0 {
                 NSLog("[Version] Dry-run failed (exit %d), proceeding without versioning", p.terminationStatus)
-                DispatchQueue.main.async { completion() }
+                guard_.complete()
                 return
             }
 
@@ -1351,7 +1417,7 @@ final class SyncEngine: ObservableObject {
             NSLog("[Version] %d files will change", files.count)
 
             if files.isEmpty {
-                DispatchQueue.main.async { completion() }
+                guard_.complete()
                 return
             }
 
@@ -1361,8 +1427,16 @@ final class SyncEngine: ObservableObject {
                 username: config.username,
                 ip: config.destinationIP,
                 remotePath: self.syncRemotePath,
-                completion: completion
+                guard_: guard_
             )
+        }
+
+        guard_.setProcess(dryRunProc)
+
+        // ISOLATION: Individual 30s timeout for dry-run
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 30) { [weak dryRunProc] in
+            guard let proc = dryRunProc, proc.isRunning else { return }
+            guard_.timeoutFired(reason: "dry-run 30s")
         }
 
         DispatchQueue.global(qos: .userInitiated).async {
@@ -1370,12 +1444,18 @@ final class SyncEngine: ObservableObject {
                 try dryRunProc.run()
             } catch {
                 NSLog("[Version] Dry-run launch failed: %@", error.localizedDescription)
-                DispatchQueue.main.async { completion() }
+                guard_.complete()
             }
         }
     }
 
-    private func copyFilesToVersions(files: [String], timestamp: String, username: String, ip: String, remotePath: String, completion: @escaping () -> Void) {
+    private func copyFilesToVersions(files: [String], timestamp: String, username: String, ip: String, remotePath: String, guard_: VersioningGuard) {
+        // ISOLATION: Check if already timed out before starting cp
+        if guard_.isCompleted {
+            NSLog("[Version] Skipping cp - already timed out")
+            return
+        }
+
         let escaped = Self.shellEscapeForDoubleQuotes(remotePath)
 
         var copyCommands: [String] = []
@@ -1420,7 +1500,15 @@ final class SyncEngine: ObservableObject {
 
         proc.terminationHandler = { p in
             NSLog("[Version] Copy versions exit=%d", p.terminationStatus)
-            DispatchQueue.main.async { completion() }
+            guard_.complete()
+        }
+
+        guard_.setProcess(proc)
+
+        // ISOLATION: Individual 45s timeout for cp
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 45) { [weak proc] in
+            guard let proc = proc, proc.isRunning else { return }
+            guard_.timeoutFired(reason: "cp 45s")
         }
 
         DispatchQueue.global(qos: .userInitiated).async {
@@ -1428,7 +1516,7 @@ final class SyncEngine: ObservableObject {
                 try proc.run()
             } catch {
                 NSLog("[Version] Copy versions launch failed: %@", error.localizedDescription)
-                DispatchQueue.main.async { completion() }
+                guard_.complete()
             }
         }
     }
@@ -1462,6 +1550,14 @@ while IFS= read -r f; do rm -rf "$f"; done
         proc.terminationHandler = { p in
             NSLog("[VersionPrune] exit=%d", p.terminationStatus)
         }
+
+        // ISOLATION: 30s timeout for prune (fire-and-forget, backup already done)
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 30) { [weak proc] in
+            guard let proc = proc, proc.isRunning else { return }
+            NSLog("[VersionPrune] Timeout 30s, terminating stuck prune")
+            proc.terminate()
+        }
+
         DispatchQueue.global(qos: .utility).async {
             do {
                 try proc.run()
