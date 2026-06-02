@@ -388,9 +388,9 @@ final class SyncEngine: ObservableObject {
                     NSLog("[SyncTrace] 9 launchRsync closure executing")
                     let proc = Process()
                     proc.executableURL = URL(fileURLWithPath: rsyncPath)
-                    var rsyncArgs = ["-av", "--stats", "--exclude=.sync_versions"]
+                    var rsyncArgs = ["-av", "--stats", "--exclude=Sync_versions"]
                     if config.versionHistoryEnabled {
-                        rsyncArgs.append(contentsOf: ["--backup", "--backup-dir=.sync_versions/\(versionTimestamp)"])
+                        rsyncArgs.append(contentsOf: ["--backup", "--backup-dir=Sync_versions/\(versionTimestamp)"])
                     }
                     if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
                        !ConfigStore.shared.config.preferredInterface.isEmpty {
@@ -633,7 +633,7 @@ final class SyncEngine: ObservableObject {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: rsyncPath)
 
-        var args = ["-avc", "--dry-run", "--exclude=.sync_versions"]
+        var args = ["-avc", "--dry-run", "--exclude=Sync_versions"]
         if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
            !config.preferredInterface.isEmpty {
             args.insert(contentsOf: ["-e", "ssh -b \(bindIP)"], at: 0)
@@ -1308,9 +1308,9 @@ final class SyncEngine: ObservableObject {
     // MARK: - Version history
 
     private func pruneVersions(username: String, ip: String, remotePath: String, maxCount: Int) {
-        let N = min(max(maxCount, 1), 20)
+        let N = min(max(maxCount, 3), 20)
         let escaped = Self.shellEscapeForDoubleQuotes(remotePath)
-        let cmd = "cd \"\(escaped)/.sync_versions\" 2>/dev/null && ls -1d ????-??-??_??-??-?? 2>/dev/null | sort -r | tail -n +\(N + 1) | while IFS= read -r d; do [ -d \"./$d\" ] && rm -rf \"./$d\"; done"
+        let cmd = "cd \"\(escaped)/Sync_versions\" 2>/dev/null && ls -1d ????-??-??_??-??-?? 2>/dev/null | sort -r | tail -n +\(N + 1) | while IFS= read -r d; do [ -d \"./$d\" ] && rm -rf \"./$d\"; done"
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")

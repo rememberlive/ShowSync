@@ -50,7 +50,7 @@ struct Config {
     var pushSyncEnabled: Bool = false
     var pushSyncDebounce: Int = 10
     var versionHistoryEnabled: Bool = false
-    var maxVersionCount: Int = 10
+    var maxVersionCount: Int = 3
 
     // Discovery (per-role on disk; one runtime field reflects the active role)
     var discoveryMode: String = "automatic"   // "automatic" | "manual"
@@ -105,7 +105,7 @@ private struct MainConfig: Codable {
     var pushSyncEnabled: Bool = false
     var pushSyncDebounce: Int = 10
     var versionHistoryEnabled: Bool = false
-    var maxVersionCount: Int = 10
+    var maxVersionCount: Int = 3
     var discoveryMode: String = "automatic"
     var backupHostname: String = ""
     var lastBackupDiscoveryName: String = ""
@@ -423,9 +423,9 @@ final class ConfigStore: ObservableObject {
         // Clamp pushSyncDebounce: 5-300 seconds
         c.pushSyncDebounce              = max(5, min(300, m.pushSyncDebounce))
         c.versionHistoryEnabled         = m.versionHistoryEnabled
-        // Clamp maxVersionCount: 1-20, migrate 0 (old unlimited) or >20 to 20
+        // Clamp maxVersionCount: 3-20, migrate 0 (old unlimited) or <3 to 3, >20 to 20
         let verCount = m.maxVersionCount
-        c.maxVersionCount               = max(1, min(20, verCount == 0 ? 20 : verCount))
+        c.maxVersionCount               = max(3, min(20, verCount == 0 ? 3 : verCount))
         c.discoveryMode                 = m.discoveryMode.isEmpty ? "automatic" : m.discoveryMode
         c.backupHostname                = m.backupHostname
         c.lastBackupDiscoveryName       = m.lastBackupDiscoveryName

@@ -1319,7 +1319,7 @@ struct SettingsView: View {
                         .foregroundColor(labelColor)
                     Spacer()
                     Picker("", selection: $store.config.maxVersionCount) {
-                        Text("1").tag(1)
+                        Text("3").tag(3)
                         Text("5").tag(5)
                         Text("10").tag(10)
                         Text("15").tag(15)
