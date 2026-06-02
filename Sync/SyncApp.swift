@@ -373,6 +373,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // clean up state that persists on disk after the process is gone — the Backup signal
     // files in ~/Sync are the only such state.
     func applicationWillTerminate(_ notification: Notification) {
+        ConfigStore.shared.flushPendingSave()
         GlobalHotkey.shared.unregister()
         if ConfigStore.shared.config.role == "backup" {
             cleanupStaleSignalFiles()

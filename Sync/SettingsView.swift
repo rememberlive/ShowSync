@@ -608,16 +608,19 @@ struct SettingsView: View {
         BonjourAdvertiser.shared.stopAndClearState()
         BonjourBrowser.shared.stop()
 
-        // 3. Delete entire App Support/Sync directory
+        // 3. Cancel pending config save (prevents writing after wipe)
+        ConfigStore.shared.cancelPendingSave()
+
+        // 4. Delete entire App Support/Sync directory
         let fm = FileManager.default
         let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let syncDir = appSupport.appendingPathComponent("Sync", isDirectory: true)
         try? fm.removeItem(at: syncDir)
 
-        // 4. Clear UserDefaults key
+        // 5. Clear UserDefaults key
         UserDefaults.standard.removeObject(forKey: "syncRole")
 
-        // 5. Relaunch app
+        // 6. Relaunch app
         relaunchApp()
     }
 

@@ -157,7 +157,7 @@ final class ConfigStore: ObservableObject {
     static let shared = ConfigStore()
 
     @Published var config: Config {
-        didSet { save() }
+        didSet { scheduleSave() }
     }
 
     // Transient — not persisted. Set by SyncEngine during active rsync.
@@ -182,6 +182,27 @@ final class ConfigStore: ObservableObject {
     private let backupConfigURL: URL
     private let sharedConfigURL: URL
     private let transferLogURL: URL
+
+    private var saveWorkItem: DispatchWorkItem?
+    private let saveDebounceInterval: TimeInterval = 0.1
+
+    private func scheduleSave() {
+        saveWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.save() }
+        saveWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + saveDebounceInterval, execute: item)
+    }
+
+    func flushPendingSave() {
+        saveWorkItem?.cancel()
+        saveWorkItem = nil
+        save()
+    }
+
+    func cancelPendingSave() {
+        saveWorkItem?.cancel()
+        saveWorkItem = nil
+    }
 
     private init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -219,7 +240,7 @@ final class ConfigStore: ObservableObject {
     // Saves the current role's settings, then loads the new role's settings.
     // Callers must not set config.role directly — always go through this method.
     func setRole(_ role: String) {
-        save()   // flush current role before switching
+        flushPendingSave()   // flush current role before switching
 
         var newConfig = role == "backup"
             ? Self.readBackupConfig(from: backupConfigURL)
@@ -242,7 +263,7 @@ final class ConfigStore: ObservableObject {
 
     /// Force a save of the current config (e.g., when effectivePath changes but config fields don't).
     func forceSave() {
-        save()
+        flushPendingSave()
     }
 
     private func save() {
