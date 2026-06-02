@@ -89,10 +89,14 @@ final class BonjourAdvertiser: NSObject, ObservableObject {
         let effectiveDest = ReceiveMonitor.shared.effectiveDestination   // Where files actually go
         let freeBytes = Self.getFreeSpace(path: effectiveDest) ?? 0      // Free space on effective path
         var txtDict: [String: Data] = [
-            "dest": intendedDest.data(using: .utf8) ?? Data(),           // For display (may be unavailable)
-            "effectiveDest": effectiveDest.data(using: .utf8) ?? Data(), // For sync + free space
             "free": String(freeBytes).data(using: .utf8) ?? Data()
         ]
+        if !intendedDest.isEmpty {
+            txtDict["dest"] = intendedDest.data(using: .utf8) ?? Data()
+        }
+        if !effectiveDest.isEmpty {
+            txtDict["effectiveDest"] = effectiveDest.data(using: .utf8) ?? Data()
+        }
         if !verifyRequestNonce.isEmpty {
             txtDict["verifyReq"] = verifyRequestNonce.data(using: .utf8) ?? Data()
         }
@@ -131,10 +135,14 @@ final class BonjourAdvertiser: NSObject, ObservableObject {
         let effectiveDest = ReceiveMonitor.shared.effectiveDestination
         let freeBytes = Self.getFreeSpace(path: effectiveDest) ?? 0
         var txtDict: [String: Data] = [
-            "dest": intendedDest.data(using: .utf8) ?? Data(),
-            "effectiveDest": effectiveDest.data(using: .utf8) ?? Data(),
             "free": String(freeBytes).data(using: .utf8) ?? Data()
         ]
+        if !intendedDest.isEmpty {
+            txtDict["dest"] = intendedDest.data(using: .utf8) ?? Data()
+        }
+        if !effectiveDest.isEmpty {
+            txtDict["effectiveDest"] = effectiveDest.data(using: .utf8) ?? Data()
+        }
         if !verifyRequestNonce.isEmpty {
             txtDict["verifyReq"] = verifyRequestNonce.data(using: .utf8) ?? Data()
         }
