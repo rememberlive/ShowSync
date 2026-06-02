@@ -1061,10 +1061,6 @@ struct BackupView: View {
 
     // MARK: - Row helpers
 
-    private func shortenPath(_ path: String) -> String {
-        path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
-    }
-
     private var bonjourDotColor: Color {
         switch advertiser.state {
         case .idle:        return Color(white: 0.55)
@@ -1093,13 +1089,6 @@ struct BackupView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
-    }
-
-    private func formatTime(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.dateStyle = .none
-        f.timeStyle = .medium
-        return f.string(from: date)
     }
 
     private func requestVerify() {
@@ -1146,9 +1135,4 @@ struct BackupView: View {
         }
     }
 
-    private func appVersion() -> String {
-        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
-        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
-        return "\(v) (\(b))"
-    }
 }

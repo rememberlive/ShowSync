@@ -636,22 +636,12 @@ struct SettingsView: View {
         }
     }
 
-    private func shortenPath(_ path: String) -> String {
-        path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
-    }
-
     private func formatBytes(_ bytes: Int64) -> String {
         if bytes <= 0 { return "?" }
         let gb = Double(bytes) / 1_073_741_824
         if gb >= 100 { return String(format: "%.0f GB", gb) }
         if gb >= 10  { return String(format: "%.1f GB", gb) }
         return String(format: "%.2f GB", gb)
-    }
-
-    private func appVersion() -> String {
-        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
-        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
-        return "\(v) (\(b))"
     }
 
     // MARK: - Remote rename helpers

@@ -2321,13 +2321,6 @@ struct MainView: View {
         }
     }
 
-    private func formatTime(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.dateStyle = .none
-        f.timeStyle = .medium
-        return f.string(from: date)
-    }
-
     // MARK: - Push Sync
 
     // Start Push Sync file watcher if enabled and configured
@@ -2346,11 +2339,6 @@ struct MainView: View {
         fsEventsWatcher.stop()
     }
 
-    private func appVersion() -> String {
-        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
-        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
-        return "\(v) (\(b))"
-    }
 }
 
 // MARK: - Inline confirmation
