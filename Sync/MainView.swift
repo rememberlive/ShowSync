@@ -2150,15 +2150,6 @@ struct MainView: View {
                 }
             }
         }
-        .onChange(of: store.config.autoSyncEnabled) { enabled in
-            if enabled { engine.startAutoSync() } else { engine.stopAutoSync() }
-        }
-        .onChange(of: store.config.autoSyncInterval) { newInterval in
-            if store.config.autoSyncEnabled {
-                let delay: TimeInterval = newInterval == 0 ? 30 : TimeInterval(newInterval * 60)
-                engine.startAutoSync(delay: delay)
-            }
-        }
         .onChange(of: store.config.pushSyncEnabled) { enabled in
             if enabled {
                 startPushSyncIfNeeded()
