@@ -195,6 +195,7 @@ final class SyncEngine: ObservableObject {
                     NSLog("[SyncTrace] 5 write-test callback but self is nil")
                     return
                 }
+                guard self.status == .preparing else { return }
                 NSLog("[SyncTrace] 5 write-test result=%d (0=writable, 1=unwritable, 2=testFailed)", result == .writable ? 0 : (result == .unwritable ? 1 : 2))
                 switch result {
                 case .writable:

@@ -58,7 +58,11 @@
       "Bash(/opt/homebrew/bin/rsync --version)",
       "Bash(/usr/local/bin/rsync --version)",
       "Bash(/usr/bin/rsync -av --stats /tmp/rsync_test_src/ /tmp/rsync_test_dst/)",
-      "Bash(git restore *)"
+      "Bash(git restore *)",
+      "Bash(rm -rf ~/Desktop/SyncTest)",
+      "Bash(mkdir -p ~/Desktop/SyncTest)",
+      "Bash(cp -R /tmp/SyncArchive.xcarchive/Products/Applications/Sync.app ~/Desktop/SyncTest/)",
+      "Read(//Users/remember/Desktop/**)"
     ]
   }
 }
