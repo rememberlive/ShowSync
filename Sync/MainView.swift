@@ -377,12 +377,21 @@ final class SyncEngine: ObservableObject {
 
         NSLog("[SyncTrace] 8 about to launch rsync, source='%@', dest='%@'", source, dest)
 
+                let versionTimestamp: String = {
+                    let fmt = DateFormatter()
+                    fmt.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+                    return fmt.string(from: Date())
+                }()
+
                 let launchRsync = { [weak self] in
                     guard let self else { return }
                     NSLog("[SyncTrace] 9 launchRsync closure executing")
                     let proc = Process()
                     proc.executableURL = URL(fileURLWithPath: rsyncPath)
-                    var rsyncArgs = ["-av", "--stats"]
+                    var rsyncArgs = ["-av", "--stats", "--exclude=.sync_versions"]
+                    if config.versionHistoryEnabled {
+                        rsyncArgs.append(contentsOf: ["--backup", "--backup-dir=.sync_versions/\(versionTimestamp)"])
+                    }
                     if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
                        !ConfigStore.shared.config.preferredInterface.isEmpty {
                         rsyncArgs.insert(contentsOf: ["-e", "ssh -b \(bindIP)"], at: 0)
@@ -501,6 +510,16 @@ final class SyncEngine: ObservableObject {
                                     )
                                     ConfigStore.shared.appendTransferLogEntry(entry)
 
+                                    // Prune old version directories (fire-and-forget)
+                                    if config.versionHistoryEnabled {
+                                        self.pruneVersions(
+                                            username: config.username,
+                                            ip: config.destinationIP,
+                                            remotePath: self.syncRemotePath,
+                                            maxCount: config.maxVersionCount
+                                        )
+                                    }
+
                                     // Clear any stale .sync_refused on success
                                     self.clearSyncRefused()
                                     // Clear fallback flag if we synced to the chosen path (drive is back)
@@ -550,22 +569,7 @@ final class SyncEngine: ObservableObject {
                     }
                 }
 
-        if config.versionHistoryEnabled && fileCount > 0 {
-            let changedFiles = Self.parseChangedFiles(dryRunOutput)
-            if !changedFiles.isEmpty {
-                runVersioning(
-                    files: changedFiles,
-                    username: config.username,
-                    ip: config.destinationIP,
-                    maxVersionCount: config.maxVersionCount,
-                    completion: launchRsync
-                )
-            } else {
-                launchRsync()
-            }
-        } else {
-            launchRsync()
-        }
+        launchRsync()
     }
 
     func cancel() {
@@ -629,7 +633,7 @@ final class SyncEngine: ObservableObject {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: rsyncPath)
 
-        var args = ["-avc", "--dry-run"]
+        var args = ["-avc", "--dry-run", "--exclude=.sync_versions"]
         if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
            !config.preferredInterface.isEmpty {
             args.insert(contentsOf: ["-e", "ssh -b \(bindIP)"], at: 0)
@@ -1303,129 +1307,32 @@ final class SyncEngine: ObservableObject {
 
     // MARK: - Version history
 
-    private func runVersioning(
-        files: [String],
-        username: String,
-        ip: String,
-        maxVersionCount: Int,
-        completion: @escaping () -> Void
-    ) {
-        let fmt = DateFormatter()
-        fmt.dateFormat = "yyyy-MM-dd_HH-mm"
-        let timestamp = fmt.string(from: Date())
-        let group = DispatchGroup()
-        for relativePath in files {
-            let cmd = Self.versioningCommand(
-                relativePath: relativePath,
-                timestamp: timestamp,
-                maxVersionCount: maxVersionCount,
-                remotePath: syncRemotePath
-            )
-            group.enter()
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-            var versionArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no"]
-            if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
-               !ConfigStore.shared.config.preferredInterface.isEmpty {
-                versionArgs.insert(contentsOf: ["-b", bindIP], at: 0)
-            }
-            versionArgs.append(contentsOf: ["\(username)@\(ip)", cmd])
-            proc.arguments = versionArgs
-            proc.standardOutput = FileHandle.nullDevice
-            proc.standardError  = FileHandle.nullDevice
-            proc.terminationHandler = { p in
-                NSLog("[Version] exit=%d", p.terminationStatus)
-                group.leave()
-            }
-            DispatchQueue.global(qos: .utility).async {
-                do { try proc.run() } catch {
-                    NSLog("[Version] launch failed: %@", error.localizedDescription)
-                    group.leave()
-                }
+    private func pruneVersions(username: String, ip: String, remotePath: String, maxCount: Int) {
+        let N = min(max(maxCount, 1), 20)
+        let escaped = Self.shellEscapeForDoubleQuotes(remotePath)
+        let cmd = "cd \"\(escaped)/.sync_versions\" 2>/dev/null && ls -1d ????-??-??_??-??-?? 2>/dev/null | sort -r | tail -n +\(N + 1) | while IFS= read -r d; do [ -d \"./$d\" ] && rm -rf \"./$d\"; done"
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        var sshArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no"]
+        if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
+           !ConfigStore.shared.config.preferredInterface.isEmpty {
+            sshArgs.insert(contentsOf: ["-b", bindIP], at: 0)
+        }
+        sshArgs.append(contentsOf: ["\(username)@\(ip)", cmd])
+        proc.arguments = sshArgs
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        proc.terminationHandler = { p in
+            NSLog("[VersionPrune] exit=%d", p.terminationStatus)
+        }
+        DispatchQueue.global(qos: .utility).async {
+            do {
+                try proc.run()
+            } catch {
+                NSLog("[VersionPrune] launch failed: %@", error.localizedDescription)
             }
         }
-        group.notify(queue: .main) { completion() }
-    }
-
-    // Wrap s in single quotes and escape any embedded single quotes using the '\'' idiom.
-    // Safe for all POSIX shell metacharacters. Never used on glob wildcards — those stay unquoted.
-    private static func shellEscape(_ s: String) -> String {
-        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
-    private static func versioningCommand(
-        relativePath: String,
-        timestamp: String,
-        maxVersionCount: Int,
-        remotePath: String
-    ) -> String {
-        let filename: String
-        let dirPart: String
-        if let slashIdx = relativePath.lastIndex(of: "/") {
-            filename = String(relativePath[relativePath.index(after: slashIdx)...])
-            dirPart  = String(relativePath[..<slashIdx])
-        } else {
-            filename = relativePath
-            dirPart  = ""
-        }
-        let ext  = URL(fileURLWithPath: filename).pathExtension
-        let base = ext.isEmpty ? filename : String(filename.dropLast(ext.count + 1))
-
-        // Remote path prefix is kept unquoted so tilde expands; only the variable parts are quoted.
-        // Adjacent quoted/unquoted segments concatenate in shell, so glob wildcards still expand.
-        let fullPath = "\(remotePath)/\(shellEscape(relativePath))"
-        let syncDir  = dirPart.isEmpty ? remotePath : "\(remotePath)/\(shellEscape(dirPart))"
-
-        let versionedName: String
-        let glob: String
-        if ext.isEmpty {
-            versionedName = "\(shellEscape(base))_\(timestamp)"
-            glob          = "\(shellEscape(base))_????-??-??_??-??"
-        } else {
-            versionedName = "\(shellEscape(base))_\(timestamp).\(shellEscape(ext))"
-            glob          = "\(shellEscape(base))_????-??-??_??-??.\(shellEscape(ext))"
-        }
-
-        var cmd = "if [ -f \(fullPath) ]; then mv \(fullPath) \(syncDir)/\(versionedName)"
-        if maxVersionCount > 0 {
-            cmd += "; extra=$(ls \(syncDir)/\(glob) 2>/dev/null | sort | wc -l | tr -d ' ')"
-            cmd += "; if [ \"$extra\" -gt \(maxVersionCount) ]; then"
-            cmd += " ls \(syncDir)/\(glob) 2>/dev/null | sort"
-            cmd += " | head -n $(($extra - \(maxVersionCount))) | tr '\\n' '\\0' | xargs -0 rm -f; fi"
-        }
-        cmd += "; fi"
-        return cmd
-    }
-
-    private static func parseChangedFiles(_ output: String) -> [String] {
-        let lines = output.components(separatedBy: .newlines)
-        // GNU rsync (Homebrew): files listed after "sending incremental file list"
-        if lines.contains(where: { $0.trimmingCharacters(in: .whitespaces) == "sending incremental file list" }) {
-            var collecting = false
-            var files: [String] = []
-            for line in lines {
-                let t = line.trimmingCharacters(in: .whitespaces)
-                if t == "sending incremental file list" { collecting = true; continue }
-                if collecting {
-                    guard !t.isEmpty else { break }
-                    if !t.hasSuffix("/") && t != "./" { files.append(t) }
-                }
-            }
-            return files
-        }
-        // openrsync (Apple /usr/bin/rsync): files listed after "Transfer starting:"
-        var collecting = false
-        var files: [String] = []
-        for line in lines {
-            let t = line.trimmingCharacters(in: .whitespaces)
-            if t.hasPrefix("Transfer starting:") { collecting = true; continue }
-            if collecting && t.isEmpty { break }
-            if collecting && !t.isEmpty && t != "./" && !t.hasSuffix("/")
-                && !t.contains(": ") && !t.hasSuffix(" B") {
-                files.append(t)
-            }
-        }
-        return files
     }
 
 }

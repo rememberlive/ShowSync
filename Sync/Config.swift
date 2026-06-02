@@ -423,9 +423,9 @@ final class ConfigStore: ObservableObject {
         // Clamp pushSyncDebounce: 5-300 seconds
         c.pushSyncDebounce              = max(5, min(300, m.pushSyncDebounce))
         c.versionHistoryEnabled         = m.versionHistoryEnabled
-        // Clamp maxVersionCount: 0 is special (unlimited), otherwise 1-100
+        // Clamp maxVersionCount: 1-20, migrate 0 (old unlimited) or >20 to 20
         let verCount = m.maxVersionCount
-        c.maxVersionCount               = (verCount == 0) ? 0 : max(1, min(100, verCount))
+        c.maxVersionCount               = max(1, min(20, verCount == 0 ? 20 : verCount))
         c.discoveryMode                 = m.discoveryMode.isEmpty ? "automatic" : m.discoveryMode
         c.backupHostname                = m.backupHostname
         c.lastBackupDiscoveryName       = m.lastBackupDiscoveryName
