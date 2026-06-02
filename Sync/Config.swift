@@ -416,12 +416,16 @@ final class ConfigStore: ObservableObject {
         let autoInt = m.autoSyncInterval
         c.autoSyncInterval = (autoInt == 0) ? 0 : max(1, min(360, autoInt))
         c.nextAutoSyncDate              = m.nextAutoSyncDate
-        c.nextAutoSyncScheduledInterval = m.nextAutoSyncScheduledInterval
+        // Clamp nextAutoSyncScheduledInterval: same as autoSyncInterval (0 or 1-360)
+        let schedInt = m.nextAutoSyncScheduledInterval
+        c.nextAutoSyncScheduledInterval = (schedInt == 0) ? 0 : max(1, min(360, schedInt))
         c.pushSyncEnabled               = m.pushSyncEnabled
         // Clamp pushSyncDebounce: 5-300 seconds
         c.pushSyncDebounce              = max(5, min(300, m.pushSyncDebounce))
         c.versionHistoryEnabled         = m.versionHistoryEnabled
-        c.maxVersionCount               = m.maxVersionCount
+        // Clamp maxVersionCount: 0 is special (unlimited), otherwise 1-100
+        let verCount = m.maxVersionCount
+        c.maxVersionCount               = (verCount == 0) ? 0 : max(1, min(100, verCount))
         c.discoveryMode                 = m.discoveryMode.isEmpty ? "automatic" : m.discoveryMode
         c.backupHostname                = m.backupHostname
         c.lastBackupDiscoveryName       = m.lastBackupDiscoveryName

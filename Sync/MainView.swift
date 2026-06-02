@@ -1980,7 +1980,6 @@ struct MainView: View {
                     }
                 }
             }
-            NSLog("[DEBUG] Source folder path at app launch: %@", store.config.sourceFolder)
             sshChecker.startChecking(username: store.config.username, ip: store.config.destinationIP)
             if store.config.autoSyncEnabled { engine.startAutoSync() }
             startPushSyncIfNeeded()
