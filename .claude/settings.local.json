@@ -57,7 +57,8 @@
       "Bash(/usr/bin/rsync --version)",
       "Bash(/opt/homebrew/bin/rsync --version)",
       "Bash(/usr/local/bin/rsync --version)",
-      "Bash(/usr/bin/rsync -av --stats /tmp/rsync_test_src/ /tmp/rsync_test_dst/)"
+      "Bash(/usr/bin/rsync -av --stats /tmp/rsync_test_src/ /tmp/rsync_test_dst/)",
+      "Bash(git restore *)"
     ]
   }
 }
