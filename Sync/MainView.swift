@@ -377,21 +377,12 @@ final class SyncEngine: ObservableObject {
 
         NSLog("[SyncTrace] 8 about to launch rsync, source='%@', dest='%@'", source, dest)
 
-                let versionTimestamp: String = {
-                    let fmt = DateFormatter()
-                    fmt.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-                    return fmt.string(from: Date())
-                }()
-
                 let launchRsync = { [weak self] in
                     guard let self else { return }
                     NSLog("[SyncTrace] 9 launchRsync closure executing")
                     let proc = Process()
                     proc.executableURL = URL(fileURLWithPath: rsyncPath)
-                    var rsyncArgs = ["-av", "--stats", "--exclude=Sync_versions"]
-                    if config.versionHistoryEnabled {
-                        rsyncArgs.append(contentsOf: ["--backup", "--backup-dir=Sync_versions/\(versionTimestamp)"])
-                    }
+                    var rsyncArgs = ["-av", "--stats", "--exclude=*~sync-v~*"]
                     if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
                        !ConfigStore.shared.config.preferredInterface.isEmpty {
                         rsyncArgs.insert(contentsOf: ["-e", "ssh -b \(bindIP)"], at: 0)
@@ -510,13 +501,8 @@ final class SyncEngine: ObservableObject {
                                     )
                                     ConfigStore.shared.appendTransferLogEntry(entry)
 
-                                    // Version history: reorganize to file-first structure, then prune (fire-and-forget)
+                                    // Prune old versions (fire-and-forget)
                                     if config.versionHistoryEnabled {
-                                        self.reorganizeVersions(
-                                            username: config.username,
-                                            ip: config.destinationIP,
-                                            remotePath: self.syncRemotePath
-                                        )
                                         self.pruneVersions(
                                             username: config.username,
                                             ip: config.destinationIP,
@@ -574,7 +560,17 @@ final class SyncEngine: ObservableObject {
                     }
                 }
 
-        launchRsync()
+        // Create inline versions before sync (if enabled), then launch rsync
+        if config.versionHistoryEnabled {
+            createInlineVersions(
+                config: config,
+                source: source,
+                rsyncPath: rsyncPath,
+                completion: launchRsync
+            )
+        } else {
+            launchRsync()
+        }
     }
 
     func cancel() {
@@ -638,7 +634,7 @@ final class SyncEngine: ObservableObject {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: rsyncPath)
 
-        var args = ["-avc", "--dry-run", "--exclude=Sync_versions"]
+        var args = ["-avc", "--dry-run", "--exclude=*~sync-v~*"]
         if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
            !config.preferredInterface.isEmpty {
             args.insert(contentsOf: ["-e", "ssh -b \(bindIP)"], at: 0)
@@ -1310,26 +1306,109 @@ final class SyncEngine: ObservableObject {
         return false
     }
 
-    // MARK: - Version history
+    // MARK: - Version history (inline marker-based)
 
-    private func reorganizeVersions(username: String, ip: String, remotePath: String) {
+    private func createInlineVersions(config: Config, source: String, rsyncPath: String, completion: @escaping () -> Void) {
+        let timestamp: String = {
+            let fmt = DateFormatter()
+            fmt.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+            return fmt.string(from: Date())
+        }()
+
+        let dest = "\(config.username)@\(config.destinationIP):\(syncRemotePath)/"
+
+        NSLog("[Version] Running dry-run to identify changed files")
+        let dryRunProc = Process()
+        dryRunProc.executableURL = URL(fileURLWithPath: rsyncPath)
+        var dryRunArgs = ["-av", "--dry-run", "--out-format=%n", "--exclude=*~sync-v~*"]
+        if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
+           !config.preferredInterface.isEmpty {
+            dryRunArgs.insert(contentsOf: ["-e", "ssh -b \(bindIP)"], at: 0)
+        }
+        dryRunArgs.append(contentsOf: [source, dest])
+        dryRunProc.arguments = dryRunArgs
+
+        let pipe = Pipe()
+        dryRunProc.standardOutput = pipe
+        dryRunProc.standardError = FileHandle.nullDevice
+
+        dryRunProc.terminationHandler = { [weak self] p in
+            guard let self else {
+                DispatchQueue.main.async { completion() }
+                return
+            }
+
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8) ?? ""
+
+            if p.terminationStatus != 0 {
+                NSLog("[Version] Dry-run failed (exit %d), proceeding without versioning", p.terminationStatus)
+                DispatchQueue.main.async { completion() }
+                return
+            }
+
+            let files = output.components(separatedBy: .newlines).filter { !$0.isEmpty && !$0.hasSuffix("/") }
+            NSLog("[Version] %d files will change", files.count)
+
+            if files.isEmpty {
+                DispatchQueue.main.async { completion() }
+                return
+            }
+
+            self.copyFilesToVersions(
+                files: files,
+                timestamp: timestamp,
+                username: config.username,
+                ip: config.destinationIP,
+                remotePath: self.syncRemotePath,
+                completion: completion
+            )
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try dryRunProc.run()
+            } catch {
+                NSLog("[Version] Dry-run launch failed: %@", error.localizedDescription)
+                DispatchQueue.main.async { completion() }
+            }
+        }
+    }
+
+    private func copyFilesToVersions(files: [String], timestamp: String, username: String, ip: String, remotePath: String, completion: @escaping () -> Void) {
         let escaped = Self.shellEscapeForDoubleQuotes(remotePath)
-        let cmd = """
-cd "\(escaped)/Sync_versions" 2>/dev/null || exit 0; \
-for tsdir in $(ls -1d ????-??-??_??-??-?? 2>/dev/null); do \
-find "./$tsdir" -type f -print0 | while IFS= read -r -d '' src; do \
-relpath="${src#./$tsdir/}"; \
-mkdir -p "./$relpath"; \
-mv "$src" "./$relpath/$tsdir"; \
-done; \
-find "./$tsdir" -type d -empty -delete 2>/dev/null; \
-rmdir "./$tsdir" 2>/dev/null; \
-done
-"""
+
+        var copyCommands: [String] = []
+        for file in files {
+            let escapedFile = Self.shellEscapeForDoubleQuotes(file)
+
+            let base: String
+            let ext: String
+            if let dotIndex = file.lastIndex(of: "."), dotIndex != file.startIndex {
+                base = String(file[..<dotIndex])
+                ext = String(file[dotIndex...])
+            } else {
+                base = file
+                ext = ""
+            }
+            let escapedBase = Self.shellEscapeForDoubleQuotes(base)
+
+            let versionName: String
+            if ext.isEmpty {
+                versionName = "\(escapedBase)~sync-v~\(timestamp)"
+            } else {
+                versionName = "\(escapedBase)~sync-v~\(timestamp)\(Self.shellEscapeForDoubleQuotes(ext))"
+            }
+
+            copyCommands.append("[ -e \"\(escaped)/\(escapedFile)\" ] && cp -R \"\(escaped)/\(escapedFile)\" \"\(escaped)/\(versionName)\"")
+        }
+
+        let cmd = copyCommands.joined(separator: "; ")
+        NSLog("[Version] Creating %d inline versions", copyCommands.count)
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        var sshArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=no"]
+        var sshArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=30", "-o", "StrictHostKeyChecking=no"]
         if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
            !ConfigStore.shared.config.preferredInterface.isEmpty {
             sshArgs.insert(contentsOf: ["-b", bindIP], at: 0)
@@ -1338,14 +1417,18 @@ done
         proc.arguments = sshArgs
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError = FileHandle.nullDevice
+
         proc.terminationHandler = { p in
-            NSLog("[VersionReorg] exit=%d", p.terminationStatus)
+            NSLog("[Version] Copy versions exit=%d", p.terminationStatus)
+            DispatchQueue.main.async { completion() }
         }
-        DispatchQueue.global(qos: .utility).async {
+
+        DispatchQueue.global(qos: .userInitiated).async {
             do {
                 try proc.run()
             } catch {
-                NSLog("[VersionReorg] launch failed: %@", error.localizedDescription)
+                NSLog("[Version] Copy versions launch failed: %@", error.localizedDescription)
+                DispatchQueue.main.async { completion() }
             }
         }
     }
@@ -1354,15 +1437,15 @@ done
         let N = min(max(maxCount, 3), 20)
         let escaped = Self.shellEscapeForDoubleQuotes(remotePath)
         let cmd = """
-cd "\(escaped)/Sync_versions" 2>/dev/null || exit 0; \
-find . -type f -name '????-??-??_??-??-??' -print0 | \
-while IFS= read -r -d '' f; do printf '%s\\0' "$(dirname "$f")"; done | \
-sort -zu | \
-while IFS= read -r -d '' dir; do \
-ls -1 "$dir"/????-??-??_??-??-?? 2>/dev/null | sort -r | tail -n +\(N + 1) | \
-while IFS= read -r ts; do rm -f "$dir/$ts"; done; \
-done; \
-find . -mindepth 1 -type d -empty -delete 2>/dev/null
+cd "\(escaped)" 2>/dev/null || exit 0; \
+find . -name '*~sync-v~????-??-??_??-??-??*' \\( -type f -o -type d \\) -print0 | \
+while IFS= read -r -d '' v; do \
+original=$(echo "$v" | sed 's/~sync-v~[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}_[0-9]\\{2\\}-[0-9]\\{2\\}-[0-9]\\{2\\}//'); \
+printf '%s\\t%s\\0' "$original" "$v"; \
+done | \
+sort -z -t $'\\t' -k1,1 -k2,2r | \
+awk -F'\\t' -v N=\(N) 'BEGIN{RS="\\0";ORS="\\0"}{if($1!=prev){c=0;prev=$1}c++;if(c>N)print $2}' | \
+xargs -0 -r rm -rf
 """
 
         let proc = Process()
