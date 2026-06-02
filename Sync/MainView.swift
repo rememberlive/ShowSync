@@ -1585,6 +1585,7 @@ struct MainView: View {
     @StateObject private var sshChecker = SSHChecker()
     @ObservedObject private var networkMonitor = NetworkMonitor.shared
     @ObservedObject private var fsEventsWatcher = FSEventsWatcher.shared
+    @ObservedObject private var bonjourBrowser = BonjourBrowser.shared
     @State private var viewState: MainViewState = .normal
     @State private var clockTick  = Date()
     @State private var clockTimer: Timer? = nil
@@ -1764,6 +1765,13 @@ struct MainView: View {
                                 .foregroundColor(.white)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
+                        }
+                        if let connectedBackup = bonjourBrowser.services.first(where: { $0.resolvedIP == store.config.destinationIP }),
+                           connectedBackup.freeSpaceBytes > 0 {
+                            let isLow = connectedBackup.freeSpaceBytes < Int64(store.config.minFreeSpaceGB) * 1024 * 1024 * 1024
+                            Text("\(SyncEngine.formatBytes(connectedBackup.freeSpaceBytes)) free")
+                                .font(.system(size: 10))
+                                .foregroundColor(isLow ? .orange : Color(white: 0.45))
                         }
                     }
 
