@@ -281,6 +281,7 @@ final class BonjourBrowser: NSObject, ObservableObject {
     }
 
     @objc private func setupBrowser() {
+        browser.remove(from: RunLoop.main, forMode: .common)
         if let runLoop = bonjourRunLoop {
             browser.schedule(in: runLoop, forMode: .common)
         }

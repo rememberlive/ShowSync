@@ -50,11 +50,11 @@
                   endingLineNumber = "373">
                </Location>
                <Location
-                  uuid = "531CA0BD-879C-4E92-A9B9-6B473A5C27C4 - a462bedba0131bd7"
+                  uuid = "531CA0BD-879C-4E92-A9B9-6B473A5C27C4 - b22385ebd31bf9d6"
                   shouldBeEnabled = "Yes"
                   ignoreCount = "0"
                   continueAfterRunningActions = "No"
-                  symbolName = "closure #2 (__C.NSNetService) -&gt; Swift.Bool in Sync.BonjourBrowser.netServiceBrowser(_: __C.NSNetServiceBrowser, didRemove: __C.NSNetService, moreComing: Swift.Bool) -&gt; ()"
+                  symbolName = "closure #1 (__C.NSNetService) -&gt; Swift.Bool in Sync.BonjourBrowser.netServiceBrowser(_: __C.NSNetServiceBrowser, didRemove: __C.NSNetService, moreComing: Swift.Bool) -&gt; ()"
                   moduleName = "Sync.debug.dylib"
                   usesParentBreakpointCondition = "Yes"
                   urlString = "file:///Users/remember/Documents/LiveAudioApps/Sync/Sync/BonjourDiscovery.swift"
