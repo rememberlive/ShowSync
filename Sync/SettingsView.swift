@@ -13,6 +13,7 @@ struct SettingsView: View {
     @ObservedObject private var advertiser  = BonjourAdvertiser.shared
     @ObservedObject private var engine = SyncEngine.shared
     @ObservedObject private var interfaceManager = NetworkInterfaceManager.shared
+    @ObservedObject private var pairingService = BonjourPairingService.shared
     // Spec §5: callback to return to main dropdown view
     var onBack: () -> Void = {}
 
@@ -1063,6 +1064,19 @@ struct SettingsView: View {
                         .foregroundColor(sshStatusDotColor)
                 }
 
+                // Layer 2b: Show this Mac's fingerprint for verification during pairing
+                if let fp = getSSHFingerprint() {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("This Mac's Fingerprint")
+                            .font(.system(size: 10))
+                            .foregroundColor(sectionHeaderColor)
+                        Text(fp)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(labelColor)
+                            .textSelection(.enabled)
+                    }
+                }
+
                 switch sshConnectionState {
                 case .checking:
                     Button("Checking...") {}
@@ -1079,19 +1093,102 @@ struct SettingsView: View {
                     .font(.system(size: 12))
                     .frame(maxWidth: .infinity)
                 case .notConnected, .failed:
-                    Button("Set Up Secure Connection") {
-                        NSApp.keyWindow?.close()
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                            AppDelegate.shared?.startSSHKeySetup()
+                    // Layer 2b: Show pairing state if active
+                    if case .advertising = pairingService.state {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("Pairing...")
+                                .font(.system(size: 12))
+                                .foregroundColor(labelColor)
                         }
+                        Button("Cancel") {
+                            pairingService.cancelPairing()
+                        }
+                        .buttonStyle(.bordered)
+                        .font(.system(size: 12))
+                        .frame(maxWidth: .infinity)
+                    } else if case .paired(let name) = pairingService.state {
+                        Text("Paired with \(name)")
+                            .font(.system(size: 12))
+                            .foregroundColor(.green)
+                    } else if case .declined = pairingService.state {
+                        Text("Pairing declined by Backup")
+                            .font(.system(size: 12))
+                            .foregroundColor(.orange)
+                        pairingButtons
+                    } else if case .timeout = pairingService.state {
+                        Text("Pairing timed out")
+                            .font(.system(size: 12))
+                            .foregroundColor(.orange)
+                        pairingButtons
+                    } else if case .failed(let reason) = pairingService.state {
+                        Text(reason)
+                            .font(.system(size: 11))
+                            .foregroundColor(.red)
+                        pairingButtons
+                    } else {
+                        pairingButtons
                     }
-                    .buttonStyle(.borderedProminent)
-                    .font(.system(size: 12))
-                    .frame(maxWidth: .infinity)
                 }
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 12)
+        }
+    }
+
+    // Layer 2b: Pairing buttons (Pair Automatically + Set Up Manually)
+    @ViewBuilder private var pairingButtons: some View {
+        // Get selected Backup's deviceId from TXT record (if available)
+        let selectedBackupId: String? = {
+            guard !store.config.destinationIP.isEmpty else { return nil }
+            // Find the backup service matching our destination IP
+            if let backup = bonjourBrowser.services.first(where: { $0.resolvedIP == store.config.destinationIP }),
+               !backup.backupDeviceId.isEmpty {
+                return backup.backupDeviceId
+            }
+            return nil
+        }()
+
+        VStack(spacing: 8) {
+            // Primary: Pair Automatically (only if we have a targetable Backup)
+            if let backupId = selectedBackupId {
+                Button("Pair Automatically") {
+                    pairingService.startPairing(targetBackupId: backupId) { success, error in
+                        if success {
+                            // Refresh SSH connection status
+                            runLiveSSHTest()
+                        } else if let error {
+                            NSLog("[Sync] Pairing failed: %@", error)
+                        }
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .font(.system(size: 12))
+                .frame(maxWidth: .infinity)
+            }
+
+            // Secondary: Manual setup (password wizard)
+            if selectedBackupId != nil {
+                Button("Set Up Manually") {
+                    NSApp.keyWindow?.close()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        AppDelegate.shared?.startSSHKeySetup()
+                    }
+                }
+                .buttonStyle(.bordered)
+                .font(.system(size: 12))
+                .frame(maxWidth: .infinity)
+            } else {
+                Button("Set Up Secure Connection") {
+                    NSApp.keyWindow?.close()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        AppDelegate.shared?.startSSHKeySetup()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .font(.system(size: 12))
+                .frame(maxWidth: .infinity)
+            }
         }
     }
 

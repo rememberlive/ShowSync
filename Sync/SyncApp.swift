@@ -158,8 +158,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let cfg = ConfigStore.shared.config
         if cfg.role == "backup" && cfg.discoveryMode == "automatic" {
             BonjourAdvertiser.shared.start()
+            // Layer 2b: Also start listening for pairing requests
+            BonjourPairingService.shared.startListening()
         } else {
             BonjourAdvertiser.shared.stop()
+            BonjourPairingService.shared.stopListening()
         }
     }
 

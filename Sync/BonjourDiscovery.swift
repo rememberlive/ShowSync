@@ -1,6 +1,7 @@
 import Foundation
 import Darwin
 import Network
+import AppKit
 
 // Pure-Apple Bonjour discovery for the Sync app.
 //
@@ -10,10 +11,15 @@ import Network
 //   • BonjourBrowser — Main-role browser; lives inside SettingsView for the
 //     duration the Discovery section is visible, per the project's
 //     "zero CPU at idle" rule. NetServiceBrowser.stop() releases all callbacks.
+//
+// Layer 2b: BonjourPairingService — temporary _syncpair._tcp for passwordless pairing.
+//   Dedicated thread + runloop, independent of discovery. Main advertises pairing request,
+//   Backup browses + shows confirm dialog. Clean teardown on all paths.
 
 // MARK: - Shared service type
 
 private let serviceType = "_rememberlivesync._tcp"
+private let pairingServiceType = "_syncpair._tcp"
 
 // MARK: - Advertiser (Backup)
 
@@ -31,6 +37,13 @@ final class BonjourAdvertiser: NSObject, ObservableObject {
 
     // Backup-initiated verify: nonce (timestamp) to request verify from Main
     @Published var verifyRequestNonce: String = ""
+
+    // Pairing ack/nack (Layer 2b) — transient fields, cleared after 5s
+    var pairAckDeviceId: String = ""
+    var pairAckNonce: String = ""
+    var pairNackDeviceId: String = ""
+    var pairNackNonce: String = ""
+    private var ackClearWorkItem: DispatchWorkItem?
 
     private var service: NetService?
     private var bonjourRunLoop: RunLoop?
@@ -100,6 +113,21 @@ final class BonjourAdvertiser: NSObject, ObservableObject {
         if !verifyRequestNonce.isEmpty {
             txtDict["verifyReq"] = verifyRequestNonce.data(using: .utf8) ?? Data()
         }
+        // Layer 2b: Include identity for pairing
+        let identity = ConfigStore.shared.identity
+        txtDict["backupId"] = identity.deviceId.data(using: .utf8) ?? Data()
+        if let fp = getSSHFingerprint() {
+            txtDict["backupFP"] = fp.data(using: .utf8) ?? Data()
+        }
+        // Transient pairing ack/nack
+        if !pairAckDeviceId.isEmpty {
+            txtDict["pairAck"] = pairAckDeviceId.data(using: .utf8) ?? Data()
+            txtDict["pairAckNonce"] = pairAckNonce.data(using: .utf8) ?? Data()
+        }
+        if !pairNackDeviceId.isEmpty {
+            txtDict["pairNack"] = pairNackDeviceId.data(using: .utf8) ?? Data()
+            txtDict["pairNackNonce"] = pairNackNonce.data(using: .utf8) ?? Data()
+        }
         let txtData = NetService.data(fromTXTRecord: txtDict)
         svc.setTXTRecord(txtData)
         // Schedule on the background thread's runloop, not main
@@ -146,9 +174,62 @@ final class BonjourAdvertiser: NSObject, ObservableObject {
         if !verifyRequestNonce.isEmpty {
             txtDict["verifyReq"] = verifyRequestNonce.data(using: .utf8) ?? Data()
         }
+        // Layer 2b: Include identity for pairing
+        let identity = ConfigStore.shared.identity
+        txtDict["backupId"] = identity.deviceId.data(using: .utf8) ?? Data()
+        if let fp = getSSHFingerprint() {
+            txtDict["backupFP"] = fp.data(using: .utf8) ?? Data()
+        }
+        // Transient pairing ack/nack
+        if !pairAckDeviceId.isEmpty {
+            txtDict["pairAck"] = pairAckDeviceId.data(using: .utf8) ?? Data()
+            txtDict["pairAckNonce"] = pairAckNonce.data(using: .utf8) ?? Data()
+        }
+        if !pairNackDeviceId.isEmpty {
+            txtDict["pairNack"] = pairNackDeviceId.data(using: .utf8) ?? Data()
+            txtDict["pairNackNonce"] = pairNackNonce.data(using: .utf8) ?? Data()
+        }
         let txtData = NetService.data(fromTXTRecord: txtDict)
         svc.setTXTRecord(txtData)
         NSLog("[Bonjour] TXT record updated in place: dest=%@, effective=%@, verifyReq=%@", intendedDest, effectiveDest, verifyRequestNonce)
+    }
+
+    // MARK: - Pairing Ack/Nack (Layer 2b)
+
+    /// Set pairing ack (trust granted) and update TXT. Clears after 5s.
+    func setPairAck(forDeviceId deviceId: String, nonce: String) {
+        ackClearWorkItem?.cancel()
+        pairAckDeviceId = deviceId
+        pairAckNonce = nonce
+        pairNackDeviceId = ""
+        pairNackNonce = ""
+        updateTXTRecord()
+        // Auto-clear after 5 seconds
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.pairAckDeviceId = ""
+            self?.pairAckNonce = ""
+            self?.updateTXTRecord()
+        }
+        ackClearWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: workItem)
+    }
+
+    /// Set pairing nack (trust declined) and update TXT. Clears after 5s.
+    func setPairNack(forDeviceId deviceId: String, nonce: String) {
+        ackClearWorkItem?.cancel()
+        pairNackDeviceId = deviceId
+        pairNackNonce = nonce
+        pairAckDeviceId = ""
+        pairAckNonce = ""
+        updateTXTRecord()
+        // Auto-clear after 5 seconds
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.pairNackDeviceId = ""
+            self?.pairNackNonce = ""
+            self?.updateTXTRecord()
+        }
+        ackClearWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: workItem)
     }
 
     @objc private func stopPublishing() {
@@ -231,6 +312,9 @@ struct DiscoveredBackup: Identifiable, Equatable {
     let effectiveDestinationPath: String  // Where files actually go (~/Sync when drive unavailable)
     let freeSpaceBytes: Int64         // Backup's free space on effective path (0 if unknown)
     var isReachableOnSelectedInterface: Bool = true  // False if Backup is on a different subnet than user's selected interface
+    // Layer 2b: Identity for pairing
+    var backupDeviceId: String = ""   // Backup's unique device ID (from TXT)
+    var backupFingerprint: String = ""  // Backup's SSH fingerprint (from TXT)
 
     var isUsingFallback: Bool {
         !effectiveDestinationPath.isEmpty && effectiveDestinationPath != destinationPath
@@ -251,6 +335,10 @@ final class BonjourBrowser: NSObject, ObservableObject {
 
     // Backup-initiated verify: dedupe so we run once per nonce
     private var lastHandledVerifyNonce: String = ""
+
+    // Layer 2b: Pairing ack/nack callback
+    var pairingAckCallback: ((String, String) -> Void)?   // (deviceId, nonce)
+    var pairingNackCallback: ((String, String) -> Void)?  // (deviceId, nonce)
 
     private let browser = NetServiceBrowser()
     private var resolving: [NetService] = []   // strong refs while resolution is in-flight
@@ -406,6 +494,8 @@ extension BonjourBrowser: NetServiceDelegate {
         var destPath = "~/Sync"           // User's intended destination
         var effectivePath = "~/Sync"      // Where files actually go
         var freeBytes: Int64 = 0
+        var backupId = ""                 // Layer 2b: device identity
+        var backupFP = ""                 // Layer 2b: SSH fingerprint
         if let txtData = sender.txtRecordData(), Self.isValidTXTFormat(txtData) {
             let dict = NetService.dictionary(fromTXTRecord: txtData)
             if let destData = dict["dest"], let str = String(data: destData, encoding: .utf8), !str.isEmpty {
@@ -418,6 +508,13 @@ extension BonjourBrowser: NetServiceDelegate {
             }
             if let freeData = dict["free"], let str = String(data: freeData, encoding: .utf8), let val = Int64(str) {
                 freeBytes = val
+            }
+            // Layer 2b: Parse identity fields
+            if let idData = dict["backupId"], let str = String(data: idData, encoding: .utf8) {
+                backupId = str
+            }
+            if let fpData = dict["backupFP"], let str = String(data: fpData, encoding: .utf8) {
+                backupFP = str
             }
         }
 
@@ -471,7 +568,7 @@ extension BonjourBrowser: NetServiceDelegate {
         Task { @MainActor [weak self] in
             guard let self else { return }
             self.services.removeAll { $0.id == name }
-            self.services.append(DiscoveredBackup(id: name, hostname: host, resolvedIP: resolvedIP, destinationPath: destPath, effectiveDestinationPath: effectivePath, freeSpaceBytes: freeBytes, isReachableOnSelectedInterface: isReachable))
+            self.services.append(DiscoveredBackup(id: name, hostname: host, resolvedIP: resolvedIP, destinationPath: destPath, effectiveDestinationPath: effectivePath, freeSpaceBytes: freeBytes, isReachableOnSelectedInterface: isReachable, backupDeviceId: backupId, backupFingerprint: backupFP))
             self.services.sort { $0.hostname.localizedCaseInsensitiveCompare($1.hostname) == .orderedAscending }
 
             // Auto-reconnect: match by name (primary) or IP (fallback for renamed Backup)
@@ -522,6 +619,8 @@ extension BonjourBrowser: NetServiceDelegate {
         var destPath = "~/Sync"
         var effectivePath = "~/Sync"
         var freeBytes: Int64 = 0
+        var backupId = ""
+        var backupFP = ""
         let dict = NetService.dictionary(fromTXTRecord: data)
         if let destData = dict["dest"], let str = String(data: destData, encoding: .utf8), !str.isEmpty {
             destPath = str
@@ -534,6 +633,13 @@ extension BonjourBrowser: NetServiceDelegate {
         if let freeData = dict["free"], let str = String(data: freeData, encoding: .utf8), let val = Int64(str) {
             freeBytes = val
         }
+        // Layer 2b: Parse identity fields
+        if let idData = dict["backupId"], let str = String(data: idData, encoding: .utf8) {
+            backupId = str
+        }
+        if let fpData = dict["backupFP"], let str = String(data: fpData, encoding: .utf8) {
+            backupFP = str
+        }
 
         // Check for Backup-initiated verify request
         var verifyReq = ""
@@ -541,8 +647,34 @@ extension BonjourBrowser: NetServiceDelegate {
             verifyReq = str
         }
 
+        // Layer 2b: Check for pairing ack/nack
+        var pairAck = ""
+        var pairAckNonce = ""
+        var pairNack = ""
+        var pairNackNonce = ""
+        if let ackData = dict["pairAck"], let str = String(data: ackData, encoding: .utf8) {
+            pairAck = str
+        }
+        if let ackNonceData = dict["pairAckNonce"], let str = String(data: ackNonceData, encoding: .utf8) {
+            pairAckNonce = str
+        }
+        if let nackData = dict["pairNack"], let str = String(data: nackData, encoding: .utf8) {
+            pairNack = str
+        }
+        if let nackNonceData = dict["pairNackNonce"], let str = String(data: nackNonceData, encoding: .utf8) {
+            pairNackNonce = str
+        }
+
         Task { @MainActor [weak self] in
             guard let self else { return }
+
+            // Layer 2b: Fire pairing ack/nack callbacks
+            if !pairAck.isEmpty && !pairAckNonce.isEmpty {
+                self.pairingAckCallback?(pairAck, pairAckNonce)
+            }
+            if !pairNack.isEmpty && !pairNackNonce.isEmpty {
+                self.pairingNackCallback?(pairNack, pairNackNonce)
+            }
 
             // Handle Backup-initiated verify: trigger if new nonce from currently connected Backup
             // GUARD: skip verify if Backup is unreachable on selected interface
@@ -568,7 +700,9 @@ extension BonjourBrowser: NetServiceDelegate {
                     destinationPath: destPath,
                     effectiveDestinationPath: effectivePath,
                     freeSpaceBytes: freeBytes,
-                    isReachableOnSelectedInterface: old.isReachableOnSelectedInterface
+                    isReachableOnSelectedInterface: old.isReachableOnSelectedInterface,
+                    backupDeviceId: backupId,
+                    backupFingerprint: backupFP
                 )
                 NSLog("[Bonjour] TXT update for %@: dest=%@, effective=%@", name, destPath, effectivePath)
 
@@ -711,5 +845,420 @@ extension BonjourBrowser: NetServiceDelegate {
             offset += length
         }
         return offset == data.count
+    }
+}
+
+// MARK: - BonjourPairingService (Layer 2b)
+// Dedicated service for passwordless pairing. Main advertises _syncpair._tcp with pubkey,
+// Backup browses, shows confirm dialog, writes key to authorized_keys.
+// Independent thread + runloop for isolation. Clean teardown on all paths.
+
+enum PairingState: Equatable {
+    case idle
+    case advertising(targetBackupId: String)
+    case browsing
+    case waitingForConfirm(peerName: String)
+    case paired(peerName: String)
+    case declined(peerName: String)
+    case timeout
+    case failed(reason: String)
+}
+
+final class BonjourPairingService: NSObject, ObservableObject {
+    static let shared = BonjourPairingService()
+
+    @Published var state: PairingState = .idle
+
+    // Re-entrancy guard: prevent overlapping pairing attempts
+    private var isPairingInProgress = false
+
+    // Dedicated thread for pairing operations (isolated from discovery)
+    private var pairingRunLoop: RunLoop?
+    private let runLoopReady = DispatchSemaphore(value: 0)
+    private var isRunLoopReady = false
+
+    private lazy var pairingThread: Thread = {
+        let thread = Thread { [weak self] in
+            self?.pairingRunLoop = RunLoop.current
+            self?.runLoopReady.signal()
+            self?.isRunLoopReady = true
+            RunLoop.current.add(NSMachPort(), forMode: .default)
+            RunLoop.current.run()
+        }
+        thread.name = "com.rememberlive.sync.pairing"
+        thread.qualityOfService = .utility
+        thread.start()
+        return thread
+    }()
+
+    // Main-role: advertiser for pairing requests
+    private var advertiserService: NetService?
+    private var currentNonce: String = ""
+    private var targetBackupId: String = ""
+    private var pairingCompletion: ((Bool, String?) -> Void)?
+    private var timeoutWorkItem: DispatchWorkItem?
+
+    // Backup-role: browser for incoming pairing requests
+    private var pairingBrowser: NetServiceBrowser?
+    private var resolvingServices: [NetService] = []
+    private var handledNonces: Set<String> = []  // Dedupe: don't re-prompt for same request
+
+    private override init() {
+        super.init()
+        _ = pairingThread  // Start thread eagerly
+    }
+
+    // MARK: - Main-role: Initiate pairing
+
+    /// Start pairing with a specific Backup (by deviceId).
+    /// - Parameters:
+    ///   - targetBackupId: The deviceId of the Backup to pair with
+    ///   - completion: Called with (success, errorMessage?)
+    func startPairing(targetBackupId: String, completion: @escaping (Bool, String?) -> Void) {
+        guard !isPairingInProgress else {
+            completion(false, "Pairing already in progress")
+            return
+        }
+        isPairingInProgress = true
+        self.targetBackupId = targetBackupId
+        self.pairingCompletion = completion
+        self.currentNonce = UUID().uuidString
+
+        DispatchQueue.main.async { [weak self] in
+            self?.state = .advertising(targetBackupId: targetBackupId)
+        }
+
+        // Ensure runloop is ready before advertising
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            if !self.isRunLoopReady { self.runLoopReady.wait() }
+            self.perform(#selector(self.startAdvertisingPairing), on: self.pairingThread, with: nil, waitUntilDone: false)
+        }
+
+        // 45-second hard timeout
+        let timeout = DispatchWorkItem { [weak self] in
+            guard let self, self.isPairingInProgress else { return }
+            NSLog("[Pairing] Timeout - no response from Backup")
+            self.cancelPairing(reason: .timeout)
+        }
+        timeoutWorkItem = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 45, execute: timeout)
+
+        // Listen for ack/nack from BonjourBrowser
+        BonjourBrowser.shared.pairingAckCallback = { [weak self] deviceId, nonce in
+            self?.handleAck(fromDeviceId: deviceId, nonce: nonce)
+        }
+        BonjourBrowser.shared.pairingNackCallback = { [weak self] deviceId, nonce in
+            self?.handleNack(fromDeviceId: deviceId, nonce: nonce)
+        }
+    }
+
+    @objc private func startAdvertisingPairing() {
+        let identity = ConfigStore.shared.identity
+        let pubKeyPath = (NSHomeDirectory() as NSString).appendingPathComponent(".ssh/id_ed25519.pub")
+        guard let pubKey = try? String(contentsOfFile: pubKeyPath, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !pubKey.isEmpty else {
+            DispatchQueue.main.async { [weak self] in
+                self?.finishPairing(success: false, error: "No SSH key found. Generate one first.")
+            }
+            return
+        }
+
+        guard let fingerprint = getSSHFingerprint() else {
+            DispatchQueue.main.async { [weak self] in
+                self?.finishPairing(success: false, error: "Could not get key fingerprint")
+            }
+            return
+        }
+
+        // Advertise _syncpair._tcp with: mainId, mainName, mainPubKey, mainFP, targetBackupId, nonce
+        let svc = NetService(domain: "", type: pairingServiceType, name: identity.deviceName, port: 0)
+        svc.delegate = self
+        let txtDict: [String: Data] = [
+            "mainId": identity.deviceId.data(using: .utf8) ?? Data(),
+            "mainName": identity.deviceName.data(using: .utf8) ?? Data(),
+            "mainPubKey": pubKey.data(using: .utf8) ?? Data(),
+            "mainFP": fingerprint.data(using: .utf8) ?? Data(),
+            "targetBackupId": targetBackupId.data(using: .utf8) ?? Data(),
+            "nonce": currentNonce.data(using: .utf8) ?? Data()
+        ]
+        svc.setTXTRecord(NetService.data(fromTXTRecord: txtDict))
+
+        if let runLoop = pairingRunLoop {
+            svc.schedule(in: runLoop, forMode: .common)
+        }
+        svc.publish()
+        advertiserService = svc
+        NSLog("[Pairing] Main advertising _syncpair._tcp for Backup %@", targetBackupId)
+    }
+
+    private func handleAck(fromDeviceId deviceId: String, nonce: String) {
+        guard isPairingInProgress,
+              deviceId == ConfigStore.shared.identity.deviceId,
+              nonce == currentNonce else { return }
+
+        NSLog("[Pairing] Received ACK from Backup")
+
+        // Find the Backup's info from browser
+        if let backup = BonjourBrowser.shared.services.first(where: { _ in true }) {
+            // Record the pairing on Main side
+            // Note: We need the Backup's fingerprint - it's in their TXT record
+            // For now, mark paired without pinning (Layer 3 will add host-key pinning)
+            ConfigStore.shared.markPeerAsPairedOnMain(
+                peerDeviceId: targetBackupId,
+                peerName: backup.hostname,
+                peerFingerprint: ""  // Layer 3: will add host-key from known_hosts
+            )
+        }
+
+        finishPairing(success: true, error: nil)
+    }
+
+    private func handleNack(fromDeviceId deviceId: String, nonce: String) {
+        guard isPairingInProgress,
+              deviceId == ConfigStore.shared.identity.deviceId,
+              nonce == currentNonce else { return }
+
+        NSLog("[Pairing] Received NACK from Backup - pairing declined")
+        cancelPairing(reason: .declined(peerName: "Backup"))
+    }
+
+    func cancelPairing() {
+        cancelPairing(reason: .idle)
+    }
+
+    private func cancelPairing(reason: PairingState) {
+        timeoutWorkItem?.cancel()
+        timeoutWorkItem = nil
+        BonjourBrowser.shared.pairingAckCallback = nil
+        BonjourBrowser.shared.pairingNackCallback = nil
+
+        perform(#selector(stopAdvertisingPairing), on: pairingThread, with: nil, waitUntilDone: false)
+
+        let errorMsg: String?
+        switch reason {
+        case .timeout: errorMsg = "Pairing timed out - no response from Backup"
+        case .declined: errorMsg = "Backup declined the pairing request"
+        case .failed(let msg): errorMsg = msg
+        default: errorMsg = nil
+        }
+
+        isPairingInProgress = false
+        DispatchQueue.main.async { [weak self] in
+            self?.state = reason
+            self?.pairingCompletion?(false, errorMsg)
+            self?.pairingCompletion = nil
+        }
+    }
+
+    private func finishPairing(success: Bool, error: String?) {
+        timeoutWorkItem?.cancel()
+        timeoutWorkItem = nil
+        BonjourBrowser.shared.pairingAckCallback = nil
+        BonjourBrowser.shared.pairingNackCallback = nil
+
+        perform(#selector(stopAdvertisingPairing), on: pairingThread, with: nil, waitUntilDone: false)
+
+        isPairingInProgress = false
+        DispatchQueue.main.async { [weak self] in
+            if success {
+                self?.state = .paired(peerName: self?.targetBackupId ?? "Backup")
+            } else {
+                self?.state = .failed(reason: error ?? "Unknown error")
+            }
+            self?.pairingCompletion?(success, error)
+            self?.pairingCompletion = nil
+        }
+    }
+
+    @objc private func stopAdvertisingPairing() {
+        if let svc = advertiserService {
+            svc.stop()
+            if let runLoop = pairingRunLoop {
+                svc.remove(from: runLoop, forMode: .common)
+            }
+            svc.delegate = nil
+        }
+        advertiserService = nil
+        NSLog("[Pairing] Stopped advertising _syncpair._tcp")
+    }
+
+    // MARK: - Backup-role: Listen for pairing requests
+
+    /// Start listening for pairing requests (Backup role)
+    func startListening() {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            if !self.isRunLoopReady { self.runLoopReady.wait() }
+            self.perform(#selector(self.startBrowsingPairing), on: self.pairingThread, with: nil, waitUntilDone: false)
+        }
+    }
+
+    /// Stop listening for pairing requests
+    func stopListening() {
+        perform(#selector(stopBrowsingPairing), on: pairingThread, with: nil, waitUntilDone: false)
+    }
+
+    @objc private func startBrowsingPairing() {
+        let browser = NetServiceBrowser()
+        browser.delegate = self
+        if let runLoop = pairingRunLoop {
+            browser.schedule(in: runLoop, forMode: .common)
+        }
+        browser.searchForServices(ofType: pairingServiceType, inDomain: "")
+        pairingBrowser = browser
+        DispatchQueue.main.async { [weak self] in
+            self?.state = .browsing
+        }
+        NSLog("[Pairing] Backup started browsing for _syncpair._tcp")
+    }
+
+    @objc private func stopBrowsingPairing() {
+        if let browser = pairingBrowser {
+            browser.stop()
+            if let runLoop = pairingRunLoop {
+                browser.remove(from: runLoop, forMode: .common)
+            }
+            browser.delegate = nil
+        }
+        pairingBrowser = nil
+        // Clean up any resolving services
+        for svc in resolvingServices {
+            svc.stop()
+            if let runLoop = pairingRunLoop {
+                svc.remove(from: runLoop, forMode: .common)
+            }
+            svc.delegate = nil
+        }
+        resolvingServices = []
+        DispatchQueue.main.async { [weak self] in
+            self?.state = .idle
+        }
+        NSLog("[Pairing] Backup stopped browsing for _syncpair._tcp")
+    }
+}
+
+// MARK: - BonjourPairingService NetService Delegates
+
+extension BonjourPairingService: NetServiceDelegate {
+    func netServiceDidPublish(_ sender: NetService) {
+        NSLog("[Pairing] Successfully published _syncpair._tcp as '%@'", sender.name)
+    }
+
+    func netService(_ sender: NetService, didNotPublish errorDict: [String: NSNumber]) {
+        let code = errorDict[NetService.errorCode]?.intValue ?? -1
+        NSLog("[Pairing] Failed to publish _syncpair._tcp: code=%d", code)
+        DispatchQueue.main.async { [weak self] in
+            self?.finishPairing(success: false, error: "Failed to advertise pairing request")
+        }
+    }
+
+    func netServiceDidResolveAddress(_ sender: NetService) {
+        // Backup received a pairing request - parse TXT and show confirm
+        guard let txtData = sender.txtRecordData() else {
+            NSLog("[Pairing] Resolved service but no TXT data")
+            return
+        }
+
+        let dict = NetService.dictionary(fromTXTRecord: txtData)
+        guard let mainIdData = dict["mainId"], let mainId = String(data: mainIdData, encoding: .utf8),
+              let mainNameData = dict["mainName"], let mainName = String(data: mainNameData, encoding: .utf8),
+              let mainPubKeyData = dict["mainPubKey"], let mainPubKey = String(data: mainPubKeyData, encoding: .utf8),
+              let mainFPData = dict["mainFP"], let mainFP = String(data: mainFPData, encoding: .utf8),
+              let targetIdData = dict["targetBackupId"], let targetId = String(data: targetIdData, encoding: .utf8),
+              let nonceData = dict["nonce"], let nonce = String(data: nonceData, encoding: .utf8) else {
+            NSLog("[Pairing] Missing required TXT fields in pairing request")
+            return
+        }
+
+        // Check if this is addressed to us
+        let myId = ConfigStore.shared.identity.deviceId
+        guard targetId == myId else {
+            NSLog("[Pairing] Pairing request not for us (target=%@, we are=%@)", targetId, myId)
+            return
+        }
+
+        // Dedupe: don't re-prompt for the same nonce
+        guard !handledNonces.contains(nonce) else {
+            NSLog("[Pairing] Already handled nonce %@, ignoring", nonce)
+            return
+        }
+        handledNonces.insert(nonce)
+
+        NSLog("[Pairing] Received pairing request from '%@' (%@) with fingerprint %@", mainName, mainId, mainFP)
+
+        DispatchQueue.main.async { [weak self] in
+            self?.state = .waitingForConfirm(peerName: mainName)
+        }
+
+        // Show confirm dialog (on main thread via AppDelegate)
+        if let appDelegate = NSApp.delegate as? AppDelegate {
+            appDelegate.showPairingConfirmDialog(peerName: mainName, peerFingerprint: mainFP) { [weak self] (result: PairingConfirmResult) in
+                guard let self else { return }
+                switch result {
+                case .trust:
+                    NSLog("[Pairing] User TRUSTED '%@'", mainName)
+                    // Write key to authorized_keys
+                    let success = ConfigStore.shared.markPeerAsTrustedOnBackup(
+                        peerDeviceId: mainId,
+                        peerName: mainName,
+                        peerPublicKey: mainPubKey,
+                        peerFingerprint: mainFP
+                    )
+                    if success {
+                        // Send ack via BonjourAdvertiser TXT record
+                        BonjourAdvertiser.shared.setPairAck(forDeviceId: mainId, nonce: nonce)
+                        DispatchQueue.main.async {
+                            self.state = .paired(peerName: mainName)
+                        }
+                    } else {
+                        NSLog("[Pairing] Failed to write key to authorized_keys")
+                        DispatchQueue.main.async {
+                            self.state = .failed(reason: "Failed to save key")
+                        }
+                    }
+                case .decline:
+                    NSLog("[Pairing] User DECLINED '%@'", mainName)
+                    // Send nack via BonjourAdvertiser TXT record
+                    BonjourAdvertiser.shared.setPairNack(forDeviceId: mainId, nonce: nonce)
+                    DispatchQueue.main.async {
+                        self.state = .declined(peerName: mainName)
+                    }
+                }
+            }
+        }
+    }
+
+    func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
+        let code = errorDict[NetService.errorCode]?.intValue ?? -1
+        NSLog("[Pairing] Failed to resolve pairing service: code=%d", code)
+        resolvingServices.removeAll { $0 === sender }
+    }
+}
+
+extension BonjourPairingService: NetServiceBrowserDelegate {
+    func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
+        NSLog("[Pairing] Found pairing service: %@", service.name)
+        service.delegate = self
+        if let runLoop = pairingRunLoop {
+            service.schedule(in: runLoop, forMode: .common)
+        }
+        resolvingServices.append(service)
+        service.resolve(withTimeout: 5.0)
+    }
+
+    func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
+        service.stop()
+        if let runLoop = pairingRunLoop {
+            service.remove(from: runLoop, forMode: .common)
+        }
+        service.delegate = nil
+        resolvingServices.removeAll { $0 === service }
+    }
+
+    func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String: NSNumber]) {
+        let code = errorDict[NetService.errorCode]?.intValue ?? -1
+        NSLog("[Pairing] Browse failed: code=%d", code)
     }
 }
