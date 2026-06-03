@@ -453,7 +453,7 @@ final class ReceiveMonitor: ObservableObject {
     func clearStaleSignalFiles() {
         let base = URL(fileURLWithPath: effectiveDestination)
         let fm = FileManager.default
-        let signalFiles = [".sync_start", ".sync_progress", ".sync_complete", ".sync_refused", ".verify_request", ".verify_result"]
+        let signalFiles = [SignalFile.start, SignalFile.progress, SignalFile.complete, SignalFile.refused, SignalFile.verifyRequest, SignalFile.verifyResult]
         for filename in signalFiles {
             let path = base.appendingPathComponent(filename)
             if fm.fileExists(atPath: path.path) {
@@ -529,15 +529,15 @@ final class ReceiveMonitor: ObservableObject {
         let minFreeGB = ConfigStore.shared.config.minFreeSpaceGB  // Capture on main before dispatch
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let base         = URL(fileURLWithPath: destPath)
-            let completePath = base.appendingPathComponent(".sync_complete")
-            let progressPath = base.appendingPathComponent(".sync_progress")
-            let startPath    = base.appendingPathComponent(".sync_start")
-            let renamePath   = base.appendingPathComponent(".sync_rename_request")
+            let completePath = base.appendingPathComponent(SignalFile.complete)
+            let progressPath = base.appendingPathComponent(SignalFile.progress)
+            let startPath    = base.appendingPathComponent(SignalFile.start)
+            let renamePath   = base.appendingPathComponent(SignalFile.renameRequest)
             let fm           = FileManager.default
 
             // Clear low-space error when space recovers (honest self-clear on every poll cycle)
             // Only clear if .sync_refused exists (we wrote it) AND space is now OK
-            let refusedPath = base.appendingPathComponent(".sync_refused")
+            let refusedPath = base.appendingPathComponent(SignalFile.refused)
             let minFreeBytes: Int64 = Int64(minFreeGB) * 1024 * 1024 * 1024
             if fm.fileExists(atPath: refusedPath.path),
                let freeBytes = BonjourAdvertiser.getFreeSpace(path: base.path),
@@ -594,7 +594,7 @@ final class ReceiveMonitor: ObservableObject {
             }
 
             // Check for verify result from Main
-            let verifyResultPath = base.appendingPathComponent(".verify_result")
+            let verifyResultPath = base.appendingPathComponent(SignalFile.verifyResult)
             if fm.fileExists(atPath: verifyResultPath.path) {
                 let content = (try? String(contentsOf: verifyResultPath, encoding: .utf8))?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -640,7 +640,7 @@ final class ReceiveMonitor: ObservableObject {
                 let minFreeBytes: Int64 = Int64(minFreeGB) * 1024 * 1024 * 1024
                 if let freeBytes = BonjourAdvertiser.getFreeSpace(path: base.path),
                    freeBytes < minFreeBytes {
-                    let refusedPath = base.appendingPathComponent(".sync_refused")
+                    let refusedPath = base.appendingPathComponent(SignalFile.refused)
                     try? "low_space".write(to: refusedPath, atomically: true, encoding: .utf8)
                     Task { @MainActor [weak self] in
                         self?.isChecking = false
@@ -1113,7 +1113,7 @@ struct BackupView: View {
         } else {
             // MANUAL mode: Write .verify_request file and show hint
             let destPath = receiveMonitor.effectiveDestination
-            let requestPath = URL(fileURLWithPath: destPath).appendingPathComponent(".verify_request")
+            let requestPath = URL(fileURLWithPath: destPath).appendingPathComponent(SignalFile.verifyRequest)
             let content = "{\"nonce\":\"\(nonce)\",\"ts\":\(Int(Date().timeIntervalSince1970))}"
             try? content.write(to: requestPath, atomically: true, encoding: .utf8)
 

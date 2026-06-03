@@ -667,7 +667,7 @@ struct SettingsView: View {
         let remotePath = store.config.backupDestination.isEmpty ? "~/Sync" : store.config.backupDestination
         let escaped = newName.replacingOccurrences(of: "'", with: "'\\''")
 
-        let destFile = "\(remotePath)/.sync_rename_request"
+        let destFile = "\(remotePath)/\(SignalFile.renameRequest)"
         let safeDestFile: String
         if destFile.hasPrefix("~/") {
             let remainder = String(destFile.dropFirst(2))

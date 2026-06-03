@@ -1024,22 +1024,22 @@ final class SyncEngine: ObservableObject {
 
     private func writeSyncStart(totalBytes: Int64, totalFiles: Int) {
         let escaped = Self.shellEscapeForDoubleQuotes(syncRemotePath)
-        sshWrite("echo '{\"totalBytes\":\(totalBytes),\"totalFiles\":\(totalFiles)}' > \"\(escaped)/.sync_start\"")
+        sshWrite("echo '{\"totalBytes\":\(totalBytes),\"totalFiles\":\(totalFiles)}' > \"\(escaped)/\(SignalFile.start)\"")
     }
 
     private func writeSyncProgress(percent: Int) {
         let escaped = Self.shellEscapeForDoubleQuotes(syncRemotePath)
-        sshWrite("echo '{\"percent\":\(percent)}' > \"\(escaped)/.sync_progress\"")
+        sshWrite("echo '{\"percent\":\(percent)}' > \"\(escaped)/\(SignalFile.progress)\"")
     }
 
     private func writeSyncComplete(totalFiles: Int, totalBytes: Int64, duration: Int) {
         let escaped = Self.shellEscapeForDoubleQuotes(syncRemotePath)
-        sshWrite("echo '{\"totalFiles\":\(totalFiles),\"totalBytes\":\(totalBytes),\"duration\":\(duration)}' > \"\(escaped)/.sync_complete\"; rm -f \"\(escaped)/.sync_start\" \"\(escaped)/.sync_progress\"")
+        sshWrite("echo '{\"totalFiles\":\(totalFiles),\"totalBytes\":\(totalBytes),\"duration\":\(duration)}' > \"\(escaped)/\(SignalFile.complete)\"; rm -f \"\(escaped)/\(SignalFile.start)\" \"\(escaped)/\(SignalFile.progress)\"")
     }
 
     private func cleanupSignalFiles() {
         let escaped = Self.shellEscapeForDoubleQuotes(syncRemotePath)
-        sshWrite("rm -f \"\(escaped)/.sync_start\" \"\(escaped)/.sync_progress\" \"\(escaped)/.sync_complete\"")
+        sshWrite("rm -f \"\(escaped)/\(SignalFile.start)\" \"\(escaped)/\(SignalFile.progress)\" \"\(escaped)/\(SignalFile.complete)\"")
     }
 
     // Write verify result to Backup (for remote-initiated verify)
@@ -1049,7 +1049,7 @@ final class SyncEngine: ObservableObject {
         let remotePath = usingFallback ? "~/Sync" : (config.backupDestination.isEmpty ? "~/Sync" : config.backupDestination)
         let escaped = Self.shellEscapeForDoubleQuotes(remotePath)
         let timestamp = Int(Date().timeIntervalSince1970)
-        let cmd = "echo '{\"result\":\"\(result)\",\"ts\":\(timestamp)}' > \"\(escaped)/.verify_result\"; rm -f \"\(escaped)/.verify_request\""
+        let cmd = "echo '{\"result\":\"\(result)\",\"ts\":\(timestamp)}' > \"\(escaped)/\(SignalFile.verifyResult)\"; rm -f \"\(escaped)/\(SignalFile.verifyRequest)\""
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
@@ -1176,7 +1176,7 @@ final class SyncEngine: ObservableObject {
         completion: @escaping (Bool) -> Void
     ) {
         let escaped = Self.shellEscapeForDoubleQuotes(remotePath)
-        let refusedPath = "\(escaped)/.sync_refused"
+        let refusedPath = "\(escaped)/\(SignalFile.refused)"
         let cmd = "test -f \"\(refusedPath)\" && echo YES || echo NO"
 
         let proc = Process()
@@ -1212,7 +1212,7 @@ final class SyncEngine: ObservableObject {
 
     private func clearSyncRefused() {
         let escaped = Self.shellEscapeForDoubleQuotes(syncRemotePath)
-        sshWrite("rm -f \"\(escaped)/.sync_refused\"")
+        sshWrite("rm -f \"\(escaped)/\(SignalFile.refused)\"")
     }
 
     // MARK: - Auto sync
@@ -1618,7 +1618,7 @@ final class SSHChecker: ObservableObject {
 
         if isManualMode {
             // Manual mode: read config + free space + check for verify request in one call
-            let cmd = "cat \"$HOME/Library/Application Support/Sync/config_backup.json\" 2>/dev/null || echo '{}'; echo '---DF---'; df -k ~ 2>/dev/null | awk 'NR==2 {print $4}'; echo '---VERIFY---'; cat ~/Sync/.verify_request 2>/dev/null || echo ''"
+            let cmd = "cat \"$HOME/Library/Application Support/Sync/config_backup.json\" 2>/dev/null || echo '{}'; echo '---DF---'; df -k ~ 2>/dev/null | awk 'NR==2 {print $4}'; echo '---VERIFY---'; cat ~/Sync/\(SignalFile.verifyRequest) 2>/dev/null || echo ''"
             var manualArgs = ["-o", "ConnectTimeout=2", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no"]
             if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
                !ConfigStore.shared.config.preferredInterface.isEmpty {

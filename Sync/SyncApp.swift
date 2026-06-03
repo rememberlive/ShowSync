@@ -175,7 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func cleanupStaleSignalFiles() {
         let base = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Sync")
-        for name in [".sync_start", ".sync_progress", ".sync_complete"] {
+        for name in [SignalFile.start, SignalFile.progress, SignalFile.complete] {
             try? FileManager.default.removeItem(at: base.appendingPathComponent(name))
         }
     }

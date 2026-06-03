@@ -16,3 +16,13 @@ func formatTime(_ date: Date) -> String {
     f.timeStyle = .medium
     return f.string(from: date)
 }
+
+enum SignalFile {
+    static let start = ".sync_start"
+    static let progress = ".sync_progress"
+    static let complete = ".sync_complete"
+    static let refused = ".sync_refused"
+    static let renameRequest = ".sync_rename_request"
+    static let verifyRequest = ".verify_request"
+    static let verifyResult = ".verify_result"
+}
