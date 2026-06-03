@@ -79,7 +79,8 @@
       "Bash(touch \"file~sync-v~2026-06-01_10-00-00.txt\" \"file~sync-v~2026-06-01_12-00-00.txt\" \"file~sync-v~2026-06-02_08-00-00.txt\" \"file~sync-v~2026-06-02_10-00-00.txt\" \"subdir/other~sync-v~2026-06-01_09-00-00.txt\" \"subdir/other~sync-v~2026-06-02_09-00-00.txt\")",
       "Bash(rm -rf /tmp/sync-version-test)",
       "Bash(mkdir -p /tmp/sync-version-test/subdir)",
-      "Bash(awk 'BEGIN{RS=\"\\\\0\"}{print NR \": \" $0}')"
+      "Bash(awk 'BEGIN{RS=\"\\\\0\"}{print NR \": \" $0}')",
+      "Bash(ssh-keygen -lf ~/.ssh/id_ed25519.pub)"
     ]
   }
 }
