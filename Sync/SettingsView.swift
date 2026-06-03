@@ -672,7 +672,7 @@ struct SettingsView: View {
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        proc.arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3",
+        proc.arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no",
                           "\(username)@\(ip)", "echo -n '\(escaped)' > \(safeDestFile)"]
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError = FileHandle.nullDevice
