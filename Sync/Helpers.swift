@@ -124,3 +124,121 @@ func getSSHFingerprint() -> String? {
 
     return fingerprint
 }
+
+// MARK: - Authorized Keys Management (Layer 2a)
+
+/// Appends a public key to ~/.ssh/authorized_keys safely.
+/// Creates ~/.ssh (0700) and authorized_keys (0600) if missing.
+/// IDEMPOTENT: if pubkey already present, returns true without appending.
+/// APPEND-ONLY: never truncates or overwrites existing keys.
+/// Returns false on any failure (caller should fall back to password wizard).
+func appendPublicKeyToAuthorizedKeys(_ pubkey: String, comment: String) -> Bool {
+    let fm = FileManager.default
+    let home = NSHomeDirectory()
+    let sshDir = (home as NSString).appendingPathComponent(".ssh")
+    let authKeysPath = (sshDir as NSString).appendingPathComponent("authorized_keys")
+
+    // 1. Create ~/.ssh if missing (0700)
+    if !fm.fileExists(atPath: sshDir) {
+        do {
+            try fm.createDirectory(atPath: sshDir, withIntermediateDirectories: true, attributes: nil)
+            try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: sshDir)
+        } catch {
+            NSLog("[Sync] Failed to create ~/.ssh: %@", error.localizedDescription)
+            return false
+        }
+    }
+
+    // 2. Trim and guard empty pubkey
+    let trimmedKey = pubkey.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedKey.isEmpty else {
+        NSLog("[Sync] Empty pubkey provided, aborting append")
+        return false
+    }
+
+    // 3. Build the full line with comment
+    let keyLine = "\(trimmedKey) \(comment)"
+
+    // 4. Check if key already exists (IDEMPOTENT)
+    if fm.fileExists(atPath: authKeysPath) {
+        do {
+            let existing = try String(contentsOfFile: authKeysPath, encoding: .utf8)
+            if existing.contains(trimmedKey) {
+                NSLog("[Sync] Key already in authorized_keys, skipping append")
+                return true
+            }
+        } catch {
+            NSLog("[Sync] Could not read authorized_keys: %@", error.localizedDescription)
+            return false
+        }
+    }
+
+    // 5. APPEND via read -> append -> atomic write
+    if fm.fileExists(atPath: authKeysPath) {
+        do {
+            var contents = try String(contentsOfFile: authKeysPath, encoding: .utf8)
+            if !contents.isEmpty && !contents.hasSuffix("\n") {
+                contents += "\n"
+            }
+            contents += keyLine + "\n"
+            try contents.write(toFile: authKeysPath, atomically: true, encoding: .utf8)
+            try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: authKeysPath)
+        } catch {
+            NSLog("[Sync] Failed to append to authorized_keys: %@", error.localizedDescription)
+            return false
+        }
+    } else {
+        do {
+            try (keyLine + "\n").write(toFile: authKeysPath, atomically: true, encoding: .utf8)
+            try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: authKeysPath)
+        } catch {
+            NSLog("[Sync] Failed to create authorized_keys: %@", error.localizedDescription)
+            return false
+        }
+    }
+
+    NSLog("[Sync] Successfully appended key to authorized_keys")
+    return true
+}
+
+/// Removes a public key from ~/.ssh/authorized_keys safely.
+/// Filters out lines containing the exact key bytes, preserves all others.
+/// Returns true if removed or wasn't present; false on file error.
+func removePublicKeyFromAuthorizedKeys(_ pubkey: String) -> Bool {
+    let fm = FileManager.default
+    let home = NSHomeDirectory()
+    let authKeysPath = ((home as NSString).appendingPathComponent(".ssh") as NSString)
+        .appendingPathComponent("authorized_keys")
+
+    guard fm.fileExists(atPath: authKeysPath) else {
+        return true
+    }
+
+    let trimmedKey = pubkey.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedKey.isEmpty else {
+        return true
+    }
+
+    do {
+        let contents = try String(contentsOfFile: authKeysPath, encoding: .utf8)
+        let lines = contents.components(separatedBy: "\n")
+        let filteredLines = lines.filter { line in
+            !line.contains(trimmedKey)
+        }
+
+        if filteredLines.count == lines.count {
+            NSLog("[Sync] Key not found in authorized_keys, nothing to remove")
+            return true
+        }
+
+        let newContents = filteredLines.joined(separator: "\n")
+        try newContents.write(toFile: authKeysPath, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: authKeysPath)
+
+        NSLog("[Sync] Removed key from authorized_keys")
+        return true
+    } catch {
+        NSLog("[Sync] Failed to modify authorized_keys: %@", error.localizedDescription)
+        return false
+    }
+}

@@ -1,5 +1,12 @@
 import AppKit
 
+// MARK: - Pairing Confirm Result (Layer 2a)
+
+enum PairingConfirmResult {
+    case trust
+    case decline
+}
+
 // MARK: - AppDelegate extension
 
 extension AppDelegate {
@@ -207,5 +214,35 @@ extension AppDelegate {
         }
     }
 
+    // MARK: - Pairing Confirm Dialog (Layer 2a)
 
+    /// Shows the "Trust this Mac" confirmation dialog for incoming pairing requests.
+    /// Called on BACKUP when a Main requests pairing via Bonjour.
+    /// - Parameters:
+    ///   - peerName: The name of the Main Mac requesting pairing
+    ///   - peerFingerprint: The SHA256 fingerprint of the Main's public key
+    ///   - completion: Called with the user's choice (.trust or .decline)
+    func showPairingConfirmDialog(peerName: String, peerFingerprint: String,
+                                   completion: @escaping (PairingConfirmResult) -> Void) {
+        DispatchQueue.main.async { [weak self] in
+            self?.popover.performClose(nil)
+            NSApp.activate(ignoringOtherApps: true)
+
+            let alert = NSAlert()
+            alert.messageText = "Pairing Request"
+            alert.informativeText = """
+                "\(peerName)" wants to sync files to this Mac.
+
+                Fingerprint:
+                \(peerFingerprint)
+
+                Verify this fingerprint matches the Main Mac's Settings to ensure a secure connection.
+                """
+            alert.addButton(withTitle: "Trust")
+            alert.addButton(withTitle: "Decline")
+
+            let response = alert.runModal()
+            completion(response == .alertFirstButtonReturn ? .trust : .decline)
+        }
+    }
 }

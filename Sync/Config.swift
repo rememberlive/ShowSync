@@ -458,6 +458,117 @@ final class ConfigStore: ObservableObject {
         }
     }
 
+    // MARK: - Pairing Functions (Layer 2a)
+
+    /// Called on BACKUP when user confirms pairing. Writes pubkey to authorized_keys + records trust.
+    /// - Returns: true if successful, false if authorized_keys write failed (caller should fall back to wizard)
+    func markPeerAsTrustedOnBackup(peerDeviceId: String, peerName: String,
+                                    peerPublicKey: String, peerFingerprint: String) -> Bool {
+        let comment = "Sync-Main-\(peerName.replacingOccurrences(of: " ", with: "-"))"
+        guard appendPublicKeyToAuthorizedKeys(peerPublicKey, comment: comment) else {
+            return false
+        }
+
+        let peer = TrustedPeer(
+            id: UUID(),
+            peerDeviceId: peerDeviceId,
+            peerName: peerName,
+            peerPublicKey: peerPublicKey,
+            peerFingerprint: peerFingerprint,
+            role: .main,
+            direction: .inbound,
+            pairedAt: Date(),
+            lastSeen: nil,
+            pinnedHostKey: nil
+        )
+        trustedPeers.append(peer)
+        saveTrustedPeers()
+
+        let event = TrustEvent(
+            id: UUID(),
+            timestamp: Date(),
+            eventType: .paired,
+            peerDeviceId: peerDeviceId,
+            peerName: peerName,
+            peerFingerprint: peerFingerprint,
+            details: "Accepted pairing request"
+        )
+        appendTrustEvent(event)
+
+        NSLog("[Sync] Marked peer as trusted on Backup: %@ (%@)", peerName, peerDeviceId)
+        return true
+    }
+
+    /// Called on MAIN when pairing is acknowledged by Backup. Records trust + enables connection.
+    func markPeerAsPairedOnMain(peerDeviceId: String, peerName: String, peerFingerprint: String) {
+        let peer = TrustedPeer(
+            id: UUID(),
+            peerDeviceId: peerDeviceId,
+            peerName: peerName,
+            peerPublicKey: "",
+            peerFingerprint: peerFingerprint,
+            role: .backup,
+            direction: .outbound,
+            pairedAt: Date(),
+            lastSeen: nil,
+            pinnedHostKey: nil
+        )
+        trustedPeers.append(peer)
+        saveTrustedPeers()
+
+        let event = TrustEvent(
+            id: UUID(),
+            timestamp: Date(),
+            eventType: .paired,
+            peerDeviceId: peerDeviceId,
+            peerName: peerName,
+            peerFingerprint: peerFingerprint,
+            details: "Pairing acknowledged by Backup"
+        )
+        appendTrustEvent(event)
+
+        config.sshKeysConfigured = true
+        config.sshKeyConfiguredForIP = config.destinationIP
+        config.sshKeyConfiguredForUsername = config.username
+
+        NSLog("[Sync] Marked peer as paired on Main: %@ (%@)", peerName, peerDeviceId)
+    }
+
+    /// Removes a peer from the trusted list and (on Backup) from authorized_keys.
+    /// - Parameter peerId: The UUID of the TrustedPeer entry to remove
+    /// - Returns: true if successful
+    func unpairPeer(peerId: UUID) -> Bool {
+        guard let index = trustedPeers.firstIndex(where: { $0.id == peerId }) else {
+            NSLog("[Sync] Peer not found for unpair: %@", peerId.uuidString)
+            return false
+        }
+
+        let peer = trustedPeers[index]
+
+        if peer.role == .main && !peer.peerPublicKey.isEmpty {
+            if !removePublicKeyFromAuthorizedKeys(peer.peerPublicKey) {
+                NSLog("[Sync] Warning: Could not remove key from authorized_keys")
+            }
+        }
+
+        trustedPeers.remove(at: index)
+        saveTrustedPeers()
+
+        let event = TrustEvent(
+            id: UUID(),
+            timestamp: Date(),
+            eventType: .unpaired,
+            peerDeviceId: peer.peerDeviceId,
+            peerName: peer.peerName,
+            peerFingerprint: peer.peerFingerprint,
+            details: "Manually unpaired"
+        )
+        appendTrustEvent(event)
+
+        NSLog("[Sync] Unpaired peer: %@ (%@)", peer.peerName, peer.peerDeviceId)
+        return true
+    }
+
     // MARK: - Shared Config
 
     private static func readSharedConfig(from url: URL) -> SharedConfig {
