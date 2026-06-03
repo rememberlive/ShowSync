@@ -80,7 +80,10 @@
       "Bash(rm -rf /tmp/sync-version-test)",
       "Bash(mkdir -p /tmp/sync-version-test/subdir)",
       "Bash(awk 'BEGIN{RS=\"\\\\0\"}{print NR \": \" $0}')",
-      "Bash(ssh-keygen -lf ~/.ssh/id_ed25519.pub)"
+      "Bash(ssh-keygen -lf ~/.ssh/id_ed25519.pub)",
+      "Bash(pkill -9 -f \"Sync.app/Contents/MacOS/Sync\")",
+      "Bash(killall -9 Sync)",
+      "Bash(pkill -9 Sync)"
     ]
   }
 }

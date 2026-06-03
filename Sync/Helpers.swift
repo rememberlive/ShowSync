@@ -40,3 +40,87 @@ enum SignalFile {
     static let verifyRequest = ".verify_request"
     static let verifyResult = ".verify_result"
 }
+
+// MARK: - Trust Foundation Types (Layer 1)
+
+struct DeviceIdentity: Codable {
+    let deviceId: String
+    var deviceName: String
+    let createdAt: Date
+}
+
+struct TrustedPeer: Codable, Identifiable {
+    let id: UUID
+    let peerDeviceId: String
+    let peerName: String
+    let peerPublicKey: String
+    let peerFingerprint: String
+    let role: PeerRole
+    let direction: TrustDirection
+    let pairedAt: Date
+    var lastSeen: Date?
+    var pinnedHostKey: String?
+}
+
+enum PeerRole: String, Codable {
+    case backup
+    case main
+    case relay
+}
+
+enum TrustDirection: String, Codable {
+    case outbound
+    case inbound
+    case both
+}
+
+struct TrustEvent: Codable, Identifiable {
+    let id: UUID
+    let timestamp: Date
+    let eventType: TrustEventType
+    let peerDeviceId: String
+    let peerName: String
+    let peerFingerprint: String
+    let details: String?
+}
+
+enum TrustEventType: String, Codable {
+    case paired
+    case unpaired
+    case keyChanged
+    case connectionRefused
+    case pairingDeclined
+}
+
+func getSSHFingerprint() -> String? {
+    let pubKeyPath = (NSHomeDirectory() as NSString).appendingPathComponent(".ssh/id_ed25519.pub")
+    guard FileManager.default.fileExists(atPath: pubKeyPath) else { return nil }
+
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh-keygen")
+    proc.arguments = ["-lf", pubKeyPath]
+
+    let pipe = Pipe()
+    proc.standardOutput = pipe
+    proc.standardError = FileHandle.nullDevice
+
+    do {
+        try proc.run()
+        proc.waitUntilExit()
+    } catch {
+        return nil
+    }
+
+    guard proc.terminationStatus == 0 else { return nil }
+
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    guard let output = String(data: data, encoding: .utf8) else { return nil }
+
+    let components = output.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: " ")
+    guard components.count >= 2 else { return nil }
+
+    let fingerprint = String(components[1])
+    guard fingerprint.hasPrefix("SHA256:") else { return nil }
+
+    return fingerprint
+}

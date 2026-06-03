@@ -177,11 +177,19 @@ final class ConfigStore: ObservableObject {
     // Transfer log — persisted to transfer_log.json, capped at 100 entries
     @Published var transferLog: [TransferLogEntry] = []
 
+    // Trust foundation (Layer 1) — persisted separately from debounced config save
+    @Published var identity: DeviceIdentity = DeviceIdentity(deviceId: "", deviceName: "", createdAt: Date())
+    @Published var trustedPeers: [TrustedPeer] = []
+    @Published var trustLog: [TrustEvent] = []
+
     private let roleURL: URL
     private let mainConfigURL: URL
     private let backupConfigURL: URL
     private let sharedConfigURL: URL
     private let transferLogURL: URL
+    private let identityURL: URL
+    private let trustedPeersURL: URL
+    private let trustLogURL: URL
 
     private var saveWorkItem: DispatchWorkItem?
     private let saveDebounceInterval: TimeInterval = 0.1
@@ -214,6 +222,9 @@ final class ConfigStore: ObservableObject {
         backupConfigURL = dir.appendingPathComponent("config_backup.json")
         sharedConfigURL = dir.appendingPathComponent("config_shared.json")
         transferLogURL  = dir.appendingPathComponent("transfer_log.json")
+        identityURL     = dir.appendingPathComponent("identity.json")
+        trustedPeersURL = dir.appendingPathComponent("trusted_peers.json")
+        trustLogURL     = dir.appendingPathComponent("trust_log.json")
 
         // One-time migration from the legacy monolithic config.json
         Self.migrateIfNeeded(dir: dir, roleURL: roleURL,
@@ -235,6 +246,11 @@ final class ConfigStore: ObservableObject {
 
         // Load transfer log (corruption-safe: bad/missing file -> empty array)
         transferLog = Self.loadTransferLog(from: transferLogURL)
+
+        // Load trust foundation (Layer 1) — corruption-safe
+        identity = Self.loadOrCreateIdentity(from: identityURL)
+        trustedPeers = Self.loadTrustedPeers(from: trustedPeersURL)
+        trustLog = Self.loadTrustLog(from: trustLogURL)
     }
 
     // Saves the current role's settings, then loads the new role's settings.
@@ -364,6 +380,82 @@ final class ConfigStore: ObservableObject {
             return []
         }
         return log
+    }
+
+    // MARK: - Trust Foundation (Layer 1)
+
+    private static func loadOrCreateIdentity(from url: URL) -> DeviceIdentity {
+        if let data = try? Data(contentsOf: url),
+           let ident = try? JSONDecoder().decode(DeviceIdentity.self, from: data) {
+            return ident
+        }
+        let rawHostname = ProcessInfo.processInfo.hostName
+        let deviceName = rawHostname
+            .replacingOccurrences(of: ".local.", with: "")
+            .replacingOccurrences(of: ".local", with: "")
+        let newIdentity = DeviceIdentity(
+            deviceId: UUID().uuidString,
+            deviceName: deviceName,
+            createdAt: Date()
+        )
+        if let data = try? JSONEncoder().encode(newIdentity) {
+            try? data.write(to: url, options: .atomic)
+        }
+        NSLog("[Sync] Created new device identity: %@", newIdentity.deviceId)
+        return newIdentity
+    }
+
+    private static func loadTrustedPeers(from url: URL) -> [TrustedPeer] {
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        guard let peers = try? JSONDecoder().decode([TrustedPeer].self, from: data) else {
+            NSLog("[Sync] trusted_peers.json corrupted, starting fresh")
+            return []
+        }
+        return peers
+    }
+
+    private static func loadTrustLog(from url: URL) -> [TrustEvent] {
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        guard let log = try? JSONDecoder().decode([TrustEvent].self, from: data) else {
+            NSLog("[Sync] trust_log.json corrupted, starting fresh")
+            return []
+        }
+        return log
+    }
+
+    func saveIdentity() {
+        do {
+            let data = try JSONEncoder().encode(identity)
+            try data.write(to: identityURL, options: .atomic)
+        } catch {
+            NSLog("[Sync] identity.json save failed: %@", error.localizedDescription)
+        }
+    }
+
+    func saveTrustedPeers() {
+        do {
+            let data = try JSONEncoder().encode(trustedPeers)
+            try data.write(to: trustedPeersURL, options: .atomic)
+        } catch {
+            NSLog("[Sync] trusted_peers.json save failed: %@", error.localizedDescription)
+        }
+    }
+
+    func appendTrustEvent(_ event: TrustEvent) {
+        var log = trustLog
+        log.insert(event, at: 0)
+        if log.count > 100 { log = Array(log.prefix(100)) }
+        trustLog = log
+        saveTrustLog()
+    }
+
+    private func saveTrustLog() {
+        do {
+            let data = try JSONEncoder().encode(trustLog)
+            try data.write(to: trustLogURL, options: .atomic)
+        } catch {
+            NSLog("[Sync] trust_log.json save failed: %@", error.localizedDescription)
+        }
     }
 
     // MARK: - Shared Config
