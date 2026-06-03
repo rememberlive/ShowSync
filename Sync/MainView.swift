@@ -959,7 +959,7 @@ final class SyncEngine: ObservableObject {
     private func runDu(username: String, ip: String, completion: @escaping (Int64) -> Void) {
         guard !duInFlight else { return }
         duInFlight = true
-        let escaped = Self.shellEscapeForDoubleQuotes(syncRemotePath)
+        let escaped = shellEscapeForDoubleQuotes(syncRemotePath)
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         var duArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no"]
@@ -1016,22 +1016,22 @@ final class SyncEngine: ObservableObject {
     }
 
     private func writeSyncStart(totalBytes: Int64, totalFiles: Int) {
-        let escaped = Self.shellEscapeForDoubleQuotes(syncRemotePath)
+        let escaped = shellEscapeForDoubleQuotes(syncRemotePath)
         sshWrite("echo '{\"totalBytes\":\(totalBytes),\"totalFiles\":\(totalFiles)}' > \"\(escaped)/\(SignalFile.start)\"")
     }
 
     private func writeSyncProgress(percent: Int) {
-        let escaped = Self.shellEscapeForDoubleQuotes(syncRemotePath)
+        let escaped = shellEscapeForDoubleQuotes(syncRemotePath)
         sshWrite("echo '{\"percent\":\(percent)}' > \"\(escaped)/\(SignalFile.progress)\"")
     }
 
     private func writeSyncComplete(totalFiles: Int, totalBytes: Int64, duration: Int) {
-        let escaped = Self.shellEscapeForDoubleQuotes(syncRemotePath)
+        let escaped = shellEscapeForDoubleQuotes(syncRemotePath)
         sshWrite("echo '{\"totalFiles\":\(totalFiles),\"totalBytes\":\(totalBytes),\"duration\":\(duration)}' > \"\(escaped)/\(SignalFile.complete)\"; rm -f \"\(escaped)/\(SignalFile.start)\" \"\(escaped)/\(SignalFile.progress)\"")
     }
 
     private func cleanupSignalFiles() {
-        let escaped = Self.shellEscapeForDoubleQuotes(syncRemotePath)
+        let escaped = shellEscapeForDoubleQuotes(syncRemotePath)
         sshWrite("rm -f \"\(escaped)/\(SignalFile.start)\" \"\(escaped)/\(SignalFile.progress)\" \"\(escaped)/\(SignalFile.complete)\"")
     }
 
@@ -1040,7 +1040,7 @@ final class SyncEngine: ObservableObject {
         let config = ConfigStore.shared.config
         guard !config.username.isEmpty, !config.destinationIP.isEmpty else { return }
         let remotePath = usingFallback ? "~/Sync" : (config.backupDestination.isEmpty ? "~/Sync" : config.backupDestination)
-        let escaped = Self.shellEscapeForDoubleQuotes(remotePath)
+        let escaped = shellEscapeForDoubleQuotes(remotePath)
         let timestamp = Int(Date().timeIntervalSince1970)
         let cmd = "echo '{\"result\":\"\(result)\",\"ts\":\(timestamp)}' > \"\(escaped)/\(SignalFile.verifyResult)\"; rm -f \"\(escaped)/\(SignalFile.verifyRequest)\""
 
@@ -1074,15 +1074,6 @@ final class SyncEngine: ObservableObject {
         DispatchQueue.global(qos: .utility).async { try? proc.run() }
     }
 
-    // MARK: - Shell path escaping (double-quoted, allows ~ expansion)
-
-    private static func shellEscapeForDoubleQuotes(_ path: String) -> String {
-        path.replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-            .replacingOccurrences(of: "$", with: "\\$")
-            .replacingOccurrences(of: "`", with: "\\`")
-    }
-
     // MARK: - Sync-time write-test with fallback
 
     enum WriteTestResult {
@@ -1097,7 +1088,7 @@ final class SyncEngine: ObservableObject {
         remotePath: String,
         completion: @escaping (WriteTestResult, String) -> Void
     ) {
-        let escaped = Self.shellEscapeForDoubleQuotes(remotePath)
+        let escaped = shellEscapeForDoubleQuotes(remotePath)
         let testFile = "\(escaped)/.sync_writetest_\(Int.random(in: 1000...9999))"
         let cmd = "touch \"\(testFile)\" && rm -f \"\(testFile)\" && echo OK || echo FAIL"
 
@@ -1168,7 +1159,7 @@ final class SyncEngine: ObservableObject {
         remotePath: String,
         completion: @escaping (Bool) -> Void
     ) {
-        let escaped = Self.shellEscapeForDoubleQuotes(remotePath)
+        let escaped = shellEscapeForDoubleQuotes(remotePath)
         let refusedPath = "\(escaped)/\(SignalFile.refused)"
         let cmd = "test -f \"\(refusedPath)\" && echo YES || echo NO"
 
@@ -1204,7 +1195,7 @@ final class SyncEngine: ObservableObject {
     }
 
     private func clearSyncRefused() {
-        let escaped = Self.shellEscapeForDoubleQuotes(syncRemotePath)
+        let escaped = shellEscapeForDoubleQuotes(syncRemotePath)
         sshWrite("rm -f \"\(escaped)/\(SignalFile.refused)\"")
     }
 
@@ -1449,11 +1440,11 @@ final class SyncEngine: ObservableObject {
             return
         }
 
-        let escaped = Self.shellEscapeForDoubleQuotes(remotePath)
+        let escaped = shellEscapeForDoubleQuotes(remotePath)
 
         var copyCommands: [String] = []
         for file in files {
-            let escapedFile = Self.shellEscapeForDoubleQuotes(file)
+            let escapedFile = shellEscapeForDoubleQuotes(file)
 
             let base: String
             let ext: String
@@ -1464,13 +1455,13 @@ final class SyncEngine: ObservableObject {
                 base = file
                 ext = ""
             }
-            let escapedBase = Self.shellEscapeForDoubleQuotes(base)
+            let escapedBase = shellEscapeForDoubleQuotes(base)
 
             let versionName: String
             if ext.isEmpty {
                 versionName = "\(escapedBase)~sync-v~\(timestamp)"
             } else {
-                versionName = "\(escapedBase)~sync-v~\(timestamp)\(Self.shellEscapeForDoubleQuotes(ext))"
+                versionName = "\(escapedBase)~sync-v~\(timestamp)\(shellEscapeForDoubleQuotes(ext))"
             }
 
             copyCommands.append("[ -e \"\(escaped)/\(escapedFile)\" ] && cp -R \"\(escaped)/\(escapedFile)\" \"\(escaped)/\(versionName)\"")
@@ -1516,7 +1507,7 @@ final class SyncEngine: ObservableObject {
 
     private func pruneVersions(username: String, ip: String, remotePath: String, maxCount: Int) {
         let N = min(max(maxCount, 3), 20)
-        let escaped = Self.shellEscapeForDoubleQuotes(remotePath)
+        let escaped = shellEscapeForDoubleQuotes(remotePath)
         // BSD-safe prune: newline-based (no awk RS="\0" which BSD awk doesn't support)
         let cmd = """
 cd "\(escaped)" 2>/dev/null || exit 0; \

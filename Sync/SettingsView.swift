@@ -663,18 +663,10 @@ struct SettingsView: View {
         let safeDestFile: String
         if destFile.hasPrefix("~/") {
             let remainder = String(destFile.dropFirst(2))
-            let escapedRemainder = remainder
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "\"", with: "\\\"")
-                .replacingOccurrences(of: "$", with: "\\$")
-                .replacingOccurrences(of: "`", with: "\\`")
+            let escapedRemainder = shellEscapeForDoubleQuotes(remainder)
             safeDestFile = "\"$HOME/\(escapedRemainder)\""
         } else {
-            let escapedPath = destFile
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "\"", with: "\\\"")
-                .replacingOccurrences(of: "$", with: "\\$")
-                .replacingOccurrences(of: "`", with: "\\`")
+            let escapedPath = shellEscapeForDoubleQuotes(destFile)
             safeDestFile = "\"\(escapedPath)\""
         }
 
@@ -1655,11 +1647,7 @@ struct SettingsView: View {
     }
 
     private func readManualModeFreeSpace(username: String, ip: String, remotePath: String) {
-        let escapedPath = remotePath
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-            .replacingOccurrences(of: "$", with: "\\$")
-            .replacingOccurrences(of: "`", with: "\\`")
+        let escapedPath = shellEscapeForDoubleQuotes(remotePath)
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         proc.arguments = [

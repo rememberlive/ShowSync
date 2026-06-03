@@ -24,6 +24,13 @@ func formatBytes(_ bytes: Int64) -> String {
     return String(format: "%.1f GB", Double(bytes) / 1_073_741_824)
 }
 
+func shellEscapeForDoubleQuotes(_ path: String) -> String {
+    path.replacingOccurrences(of: "\\", with: "\\\\")
+        .replacingOccurrences(of: "\"", with: "\\\"")
+        .replacingOccurrences(of: "$", with: "\\$")
+        .replacingOccurrences(of: "`", with: "\\`")
+}
+
 enum SignalFile {
     static let start = ".sync_start"
     static let progress = ".sync_progress"
