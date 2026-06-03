@@ -450,7 +450,7 @@ struct SettingsView: View {
                                     .font(.system(size: 12, weight: .medium))
                                     .foregroundColor(service.isReachableOnSelectedInterface ? .white : .red)
                                 if service.isReachableOnSelectedInterface {
-                                    Text("\(service.resolvedIP) · \(formatBytes(service.freeSpaceBytes)) free")
+                                    Text("\(service.resolvedIP) · \(service.freeSpaceBytes > 0 ? formatBytes(service.freeSpaceBytes) : "?") free")
                                         .font(.system(size: 11, design: .monospaced))
                                         .foregroundColor(labelColor)
                                 } else {
@@ -634,14 +634,6 @@ struct SettingsView: View {
                 NSApp.terminate(nil)
             }
         }
-    }
-
-    private func formatBytes(_ bytes: Int64) -> String {
-        if bytes <= 0 { return "?" }
-        let gb = Double(bytes) / 1_073_741_824
-        if gb >= 100 { return String(format: "%.0f GB", gb) }
-        if gb >= 10  { return String(format: "%.1f GB", gb) }
-        return String(format: "%.2f GB", gb)
     }
 
     // MARK: - Remote rename helpers

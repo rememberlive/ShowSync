@@ -330,7 +330,7 @@ final class SyncEngine: ObservableObject {
 
                 let (previewFiles, _) = Self.parseDryRunOutput(output)
                 if fileCount > 0 && previewFiles.isEmpty {
-                    let note = totalBytes > 0 ? "\nTotal size: \(SyncEngine.formatBytes(totalBytes))" : ""
+                    let note = totalBytes > 0 ? "\nTotal size: \(formatBytes(totalBytes))" : ""
                     self.dryRunResult = DryRunResult(
                         title: "Check Files Complete",
                         body: "\(fileCount) file\(fileCount == 1 ? "" : "s") will be transferred\(note)"
@@ -878,13 +878,6 @@ final class SyncEngine: ObservableObject {
         }
         if names.count > 5 { lines.append("  + \(names.count - 5) more") }
         return ("Check Files Complete", lines.joined(separator: "\n"))
-    }
-
-    static func formatBytes(_ bytes: Int64) -> String {
-        if bytes < 1_024           { return "\(bytes) bytes" }
-        if bytes < 1_048_576       { return String(format: "%.1f KB", Double(bytes) / 1_024) }
-        if bytes < 1_073_741_824   { return String(format: "%.1f MB", Double(bytes) / 1_048_576) }
-        return String(format: "%.1f GB", Double(bytes) / 1_073_741_824)
     }
 
     // MARK: - Stats output parsing (from --stats flag)
@@ -1908,7 +1901,7 @@ struct MainView: View {
                         if let connectedBackup = bonjourBrowser.services.first(where: { $0.resolvedIP == store.config.destinationIP }),
                            connectedBackup.freeSpaceBytes > 0 {
                             let isLow = connectedBackup.freeSpaceBytes < Int64(store.config.minFreeSpaceGB) * 1024 * 1024 * 1024
-                            Text("\(SyncEngine.formatBytes(connectedBackup.freeSpaceBytes)) free")
+                            Text("\(formatBytes(connectedBackup.freeSpaceBytes)) free")
                                 .font(.system(size: 10))
                                 .foregroundColor(isLow ? .orange : Color(white: 0.45))
                         }
@@ -2548,7 +2541,7 @@ struct HistoryRow: View {
 
     private var filesDisplay: String {
         let files = entry.fileCount == 1 ? "1 file" : "\(entry.fileCount) files"
-        let bytes = SyncEngine.formatBytes(entry.totalBytes)
+        let bytes = formatBytes(entry.totalBytes)
         return "\(files) · \(bytes)"
     }
 

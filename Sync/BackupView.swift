@@ -740,13 +740,6 @@ final class ReceiveMonitor: ObservableObject {
         }
     }
 
-    static func formatBytes(_ bytes: Int64) -> String {
-        if bytes < 1_024         { return "\(bytes) bytes" }
-        if bytes < 1_048_576     { return String(format: "%.1f KB", Double(bytes) / 1_024) }
-        if bytes < 1_073_741_824 { return String(format: "%.1f MB", Double(bytes) / 1_048_576) }
-        return String(format: "%.1f GB", Double(bytes) / 1_073_741_824)
-    }
-
     private static func isValidBonjourName(_ name: String) -> Bool {
         guard !name.isEmpty, name.utf8.count <= 63 else { return false }
         // Disallow control characters and forward slash (invalid in Bonjour names)
