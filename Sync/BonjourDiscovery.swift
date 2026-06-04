@@ -680,7 +680,6 @@ extension BonjourBrowser: NetServiceDelegate {
             // GUARD: skip verify if Backup is unreachable on selected interface
             let config = ConfigStore.shared.config
             if !verifyReq.isEmpty && verifyReq != self.lastHandledVerifyNonce {
-                // Find the service to check if it's our connected Backup
                 if let service = self.services.first(where: { $0.id == name }),
                    config.destinationIP == service.resolvedIP,
                    service.isReachableOnSelectedInterface {
@@ -707,12 +706,16 @@ extension BonjourBrowser: NetServiceDelegate {
                 NSLog("[Bonjour] TXT update for %@: dest=%@, effective=%@", name, destPath, effectivePath)
 
                 // If this is the currently connected Backup, update config live
+                // Defer scalar writes to next runloop tick to avoid AttributeGraph cycle
+                // (services array write above stays synchronous to avoid stale-index risk)
                 let config = ConfigStore.shared.config
                 if config.destinationIP == old.resolvedIP {
-                    ConfigStore.shared.config.backupDestination = destPath
                     let isFallback = !effectivePath.isEmpty && effectivePath != destPath
-                    SyncEngine.shared.usingFallback = isFallback
-                    NSLog("[Bonjour] Updated connected Backup destination: %@ (fallback=%d)", destPath, isFallback ? 1 : 0)
+                    DispatchQueue.main.asyncAfter(deadline: .now()) {
+                        ConfigStore.shared.config.backupDestination = destPath
+                        SyncEngine.shared.usingFallback = isFallback
+                        NSLog("[Bonjour] Updated connected Backup destination: %@ (fallback=%d)", destPath, isFallback ? 1 : 0)
+                    }
                 }
             }
         }
@@ -910,6 +913,49 @@ final class BonjourPairingService: NSObject, ObservableObject {
 
     // MARK: - Main-role: Initiate pairing
 
+    /// Generate SSH key if missing (mirrors SSHKeyWizard.generateKey)
+    private func ensureSSHKeyExists(completion: @escaping (Bool) -> Void) {
+        let fm = FileManager.default
+        let sshDir = (NSHomeDirectory() as NSString).appendingPathComponent(".ssh")
+        let keyPath = (sshDir as NSString).appendingPathComponent("id_ed25519")
+
+        // Key already exists - proceed
+        if fm.fileExists(atPath: keyPath) {
+            completion(true)
+            return
+        }
+
+        // Create ~/.ssh (0700) if needed
+        if !fm.fileExists(atPath: sshDir) {
+            do {
+                try fm.createDirectory(atPath: sshDir, withIntermediateDirectories: true, attributes: nil)
+                try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: sshDir)
+            } catch {
+                NSLog("[Pairing] Failed to create ~/.ssh: %@", error.localizedDescription)
+                completion(false)
+                return
+            }
+        }
+
+        // Generate key (same args as SSHKeyWizard)
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh-keygen")
+        proc.arguments = ["-t", "ed25519", "-f", keyPath, "-N", "", "-q"]
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        proc.terminationHandler = { p in
+            DispatchQueue.main.async { completion(p.terminationStatus == 0) }
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try proc.run()
+            } catch {
+                NSLog("[Pairing] ssh-keygen launch failed: %@", error.localizedDescription)
+                DispatchQueue.main.async { completion(false) }
+            }
+        }
+    }
+
     /// Start pairing with a specific Backup (by deviceId).
     /// - Parameters:
     ///   - targetBackupId: The deviceId of the Backup to pair with
@@ -924,15 +970,24 @@ final class BonjourPairingService: NSObject, ObservableObject {
         self.pairingCompletion = completion
         self.currentNonce = UUID().uuidString
 
-        DispatchQueue.main.async { [weak self] in
+        // FIX 2: asyncAfter to avoid "Publishing changes from within view updates"
+        DispatchQueue.main.asyncAfter(deadline: .now()) { [weak self] in
             self?.state = .advertising(targetBackupId: targetBackupId)
         }
 
-        // Ensure runloop is ready before advertising
-        DispatchQueue.global(qos: .utility).async { [weak self] in
+        // FIX 1: Ensure SSH key exists before advertising (generate if missing)
+        ensureSSHKeyExists { [weak self] keyOK in
             guard let self else { return }
-            if !self.isRunLoopReady { self.runLoopReady.wait() }
-            self.perform(#selector(self.startAdvertisingPairing), on: self.pairingThread, with: nil, waitUntilDone: false)
+            guard keyOK else {
+                self.finishPairing(success: false, error: "Could not generate SSH key")
+                return
+            }
+            // Key exists - proceed to advertise
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let self else { return }
+                if !self.isRunLoopReady { self.runLoopReady.wait() }
+                self.perform(#selector(self.startAdvertisingPairing), on: self.pairingThread, with: nil, waitUntilDone: false)
+            }
         }
 
         // 45-second hard timeout
@@ -954,6 +1009,15 @@ final class BonjourPairingService: NSObject, ObservableObject {
     }
 
     @objc private func startAdvertisingPairing() {
+        // Defensive cleanup: stop any stale advertiser from a previous attempt
+        // (can occur if stopAdvertisingPairing queued async hasn't completed yet)
+        if let old = advertiserService {
+            old.stop()
+            old.delegate = nil
+            advertiserService = nil
+            NSLog("[Pairing] Cleaned up stale advertiser before re-advertising")
+        }
+
         let identity = ConfigStore.shared.identity
         let pubKeyPath = (NSHomeDirectory() as NSString).appendingPathComponent(".ssh/id_ed25519.pub")
         guard let pubKey = try? String(contentsOfFile: pubKeyPath, encoding: .utf8)
@@ -988,7 +1052,7 @@ final class BonjourPairingService: NSObject, ObservableObject {
         if let runLoop = pairingRunLoop {
             svc.schedule(in: runLoop, forMode: .common)
         }
-        svc.publish()
+        svc.publish(options: .listenForConnections)
         advertiserService = svc
         NSLog("[Pairing] Main advertising _syncpair._tcp for Backup %@", targetBackupId)
     }
@@ -1045,7 +1109,8 @@ final class BonjourPairingService: NSObject, ObservableObject {
         }
 
         isPairingInProgress = false
-        DispatchQueue.main.async { [weak self] in
+        // FIX 2: asyncAfter to avoid "Publishing changes from within view updates"
+        DispatchQueue.main.asyncAfter(deadline: .now()) { [weak self] in
             self?.state = reason
             self?.pairingCompletion?(false, errorMsg)
             self?.pairingCompletion = nil
@@ -1061,7 +1126,8 @@ final class BonjourPairingService: NSObject, ObservableObject {
         perform(#selector(stopAdvertisingPairing), on: pairingThread, with: nil, waitUntilDone: false)
 
         isPairingInProgress = false
-        DispatchQueue.main.async { [weak self] in
+        // FIX 2: asyncAfter to avoid "Publishing changes from within view updates"
+        DispatchQueue.main.asyncAfter(deadline: .now()) { [weak self] in
             if success {
                 self?.state = .paired(peerName: self?.targetBackupId ?? "Backup")
             } else {
@@ -1108,7 +1174,7 @@ final class BonjourPairingService: NSObject, ObservableObject {
         }
         browser.searchForServices(ofType: pairingServiceType, inDomain: "")
         pairingBrowser = browser
-        DispatchQueue.main.async { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now()) { [weak self] in
             self?.state = .browsing
         }
         NSLog("[Pairing] Backup started browsing for _syncpair._tcp")
@@ -1132,7 +1198,8 @@ final class BonjourPairingService: NSObject, ObservableObject {
             svc.delegate = nil
         }
         resolvingServices = []
-        DispatchQueue.main.async { [weak self] in
+        // FIX 2: asyncAfter to avoid "Publishing changes from within view updates"
+        DispatchQueue.main.asyncAfter(deadline: .now()) { [weak self] in
             self?.state = .idle
         }
         NSLog("[Pairing] Backup stopped browsing for _syncpair._tcp")
@@ -1143,7 +1210,7 @@ final class BonjourPairingService: NSObject, ObservableObject {
 
 extension BonjourPairingService: NetServiceDelegate {
     func netServiceDidPublish(_ sender: NetService) {
-        NSLog("[Pairing] Successfully published _syncpair._tcp as '%@'", sender.name)
+        NSLog("[Pairing] Successfully published _syncpair._tcp as '%@' on port %d", sender.name, sender.port)
     }
 
     func netService(_ sender: NetService, didNotPublish errorDict: [String: NSNumber]) {
@@ -1152,6 +1219,13 @@ extension BonjourPairingService: NetServiceDelegate {
         DispatchQueue.main.async { [weak self] in
             self?.finishPairing(success: false, error: "Failed to advertise pairing request")
         }
+    }
+
+    func netService(_ sender: NetService, didAcceptConnectionWith inputStream: InputStream, outputStream: OutputStream) {
+        // Pairing data rides TXT records, not this socket — close immediately to avoid leaks
+        inputStream.close()
+        outputStream.close()
+        NSLog("[Pairing] pairing service accepted+closed an incoming connection")
     }
 
     func netServiceDidResolveAddress(_ sender: NetService) {
@@ -1192,8 +1266,10 @@ extension BonjourPairingService: NetServiceDelegate {
             self?.state = .waitingForConfirm(peerName: mainName)
         }
 
-        // Show confirm dialog (on main thread via AppDelegate)
-        if let appDelegate = NSApp.delegate as? AppDelegate {
+        // Show confirm dialog — must run on main thread
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            guard let appDelegate = AppDelegate.shared else { return }
             appDelegate.showPairingConfirmDialog(peerName: mainName, peerFingerprint: mainFP) { [weak self] (result: PairingConfirmResult) in
                 guard let self else { return }
                 switch result {

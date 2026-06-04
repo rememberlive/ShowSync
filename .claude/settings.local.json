@@ -84,7 +84,16 @@
       "Bash(pkill -9 -f \"Sync.app/Contents/MacOS/Sync\")",
       "Bash(killall -9 Sync)",
       "Bash(pkill -9 Sync)",
-      "Read(//Users/remember/Library/Application Support/Sync/**)"
+      "Read(//Users/remember/Library/Application Support/Sync/**)",
+      "Bash(rm -rf /tmp/SyncPairingTest.app)",
+      "Bash(cp -R /Users/remember/Library/Developer/Xcode/DerivedData/Sync-baelifthnwytsreklatiaalxwlqm/Build/Products/Debug/Sync.app /tmp/SyncPairingTest.app)",
+      "Read(//tmp/**)",
+      "Bash(/tmp/SyncPairingTest.app/Contents/MacOS/Sync)",
+      "Bash(swift *)",
+      "Read(//Users/remember/Documents/LiveAudioApps/**)",
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_2b-clean.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
+      "Bash(git -C ~/Documents/LiveAudioApps/Sync add -A)",
+      "Bash(git -C ~/Documents/LiveAudioApps/Sync status)"
     ]
   }
 }

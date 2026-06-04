@@ -27,6 +27,7 @@
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_rememberlivesync._tcp</string>
+		<string>_syncpair._tcp</string>
 	</array>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>

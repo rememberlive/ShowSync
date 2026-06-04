@@ -92,11 +92,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
+        // Validate destination BEFORE advertising TXT (so effectiveDestination is correct)
+        startReceiveMonitorIfNeeded()
         updateBonjourAdvertiser()
         updateBonjourBrowser()
         startAutoSyncIfNeeded()
         startPushSyncIfNeeded()
-        startReceiveMonitorIfNeeded()
         startGlobalHotkeyIfNeeded()
         applyAppPresence()
     }
