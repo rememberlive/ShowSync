@@ -2,6 +2,7 @@ import Foundation
 import Darwin
 import Network
 import AppKit
+import ShowNetwork
 
 // Pure-Apple Bonjour discovery for the Sync app.
 //

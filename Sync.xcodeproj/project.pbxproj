@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 56;
+	objectVersion = 60;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -19,6 +19,7 @@
 		A100000C /* GlobalHotkey.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000C /* GlobalHotkey.swift */; };
 		A100000D /* Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000D /* Helpers.swift */; };
 		E87125292FC640AB00904BBD /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E87125282FC640AB00904BBD /* Assets.xcassets */; };
+		E8DBDA802FD4C7A000109A85 /* ShowNetwork in Frameworks */ = {isa = PBXBuildFile; productRef = E8DBDA7F2FD4C7A000109A85 /* ShowNetwork */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -44,6 +45,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E8DBDA802FD4C7A000109A85 /* ShowNetwork in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -131,6 +133,9 @@
 				Base,
 			);
 			mainGroup = A4000000;
+			packageReferences = (
+				E8DBDA7E2FD4C7A000109A85 /* XCLocalSwiftPackageReference "../ifbind-sandbox" */,
+			);
 			productRefGroup = A4000002 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -368,6 +373,20 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		E8DBDA7E2FD4C7A000109A85 /* XCLocalSwiftPackageReference "../ifbind-sandbox" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../ifbind-sandbox";
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		E8DBDA7F2FD4C7A000109A85 /* ShowNetwork */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ShowNetwork;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = A7000000 /* Project object */;
 }
