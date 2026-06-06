@@ -17,12 +17,9 @@ struct SettingsView: View {
     // Spec §5: callback to return to main dropdown view
     var onBack: () -> Void = {}
 
-    private enum SSHConnectionState { case checking, connected, notConnected, failed }
-
     @State private var showRoleConfirm = false
     @State private var showResetConnectionConfirm = false
     @State private var showResetToDefaultsConfirm = false
-    @State private var sshConnectionState: SSHConnectionState = .checking
     @State private var launchAtLoginError: String?
     @State private var localDiscoveryMode = "automatic"
     @State private var isEditingDiscoveryName = false
@@ -38,6 +35,7 @@ struct SettingsView: View {
     @State private var destinationCheckState: DestinationCheckState = .idle
     @State private var hasConfirmedDestinationThisConnection = false
     @State private var manualModeFreeSpace: Int64 = 0  // Free space read via SSH for manual mode
+    @State private var isPairingStarting = false
 
     // Custom timing option editing state
     @State private var isEditingAutoInterval = false
@@ -313,19 +311,19 @@ struct SettingsView: View {
         }
         .onChange(of: store.config.destinationIP) { _ in
             Task { @MainActor in
-                sshConnectionState = .notConnected
+                store.sshConnectionState = .notConnected
                 hasConfirmedDestinationThisConnection = false
                 destinationCheckState = .idle
             }
         }
         .onChange(of: store.config.username) { _ in
             Task { @MainActor in
-                sshConnectionState = .notConnected
+                store.sshConnectionState = .notConnected
                 hasConfirmedDestinationThisConnection = false
                 destinationCheckState = .idle
             }
         }
-        .onChange(of: sshConnectionState) { newState in
+        .onChange(of: store.sshConnectionState) { newState in
             // Manual mode: confirm destination on reconnect (transition INTO .connected)
             if newState == .connected && !isAutomatic && !hasConfirmedDestinationThisConnection {
                 hasConfirmedDestinationThisConnection = true
@@ -380,6 +378,14 @@ struct SettingsView: View {
             let targetIP = store.config.destinationIP
             if let match = services.first(where: { $0.resolvedIP == targetIP }) {
                 handleRenameConfirmed(newName: match.id)
+            }
+        }
+        .onChange(of: pairingService.state) { newState in
+            switch newState {
+            case .advertising, .browsing, .waitingForConfirm, .paired, .declined, .timeout, .failed:
+                isPairingStarting = false
+            case .idle:
+                break
             }
         }
     }
@@ -1077,7 +1083,7 @@ struct SettingsView: View {
                     }
                 }
 
-                switch sshConnectionState {
+                switch store.sshConnectionState {
                 case .checking:
                     Button("Checking...") {}
                         .buttonStyle(.borderedProminent)
@@ -1094,14 +1100,19 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity)
                 case .notConnected, .failed:
                     // Layer 2b: Show pairing state if active
-                    if case .advertising = pairingService.state {
+                    let isAdvertisingState: Bool = {
+                        if case .advertising = pairingService.state { return true }
+                        return false
+                    }()
+                    if isPairingStarting || isAdvertisingState {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
-                            Text("Pairing...")
+                            Text(isPairingStarting && !isAdvertisingState ? "Starting..." : "Pairing...")
                                 .font(.system(size: 12))
                                 .foregroundColor(labelColor)
                         }
                         Button("Cancel") {
+                            isPairingStarting = false
                             pairingService.cancelPairing()
                         }
                         .buttonStyle(.bordered)
@@ -1151,11 +1162,19 @@ struct SettingsView: View {
 
         VStack(spacing: 8) {
             // Primary: Pair Automatically (only if we have a targetable Backup)
-            if let backupId = selectedBackupId {
+            if let _ = selectedBackupId {
                 Button("Pair Automatically") {
-                    pairingService.startPairing(targetBackupId: backupId) { success, error in
+                    isPairingStarting = true
+                    guard let freshBackupId = bonjourBrowser.services
+                            .first(where: { $0.resolvedIP == store.config.destinationIP })?
+                            .backupDeviceId,
+                          !freshBackupId.isEmpty else {
+                        isPairingStarting = false
+                        return
+                    }
+                    pairingService.startPairing(targetBackupId: freshBackupId) { success, error in
+                        isPairingStarting = false
                         if success {
-                            // Refresh SSH connection status
                             runLiveSSHTest()
                         } else if let error {
                             NSLog("[Sync] Pairing failed: %@", error)
@@ -1635,7 +1654,7 @@ struct SettingsView: View {
     // MARK: - SSH connection helpers
 
     private var sshStatusDotColor: Color {
-        switch sshConnectionState {
+        switch store.sshConnectionState {
         case .checking:     return Color(white: 0.55)
         case .connected:    return .green
         case .notConnected: return Color(white: 0.45)
@@ -1644,7 +1663,7 @@ struct SettingsView: View {
     }
 
     private var sshStatusLabel: String {
-        switch sshConnectionState {
+        switch store.sshConnectionState {
         case .checking:     return "Checking..."
         case .connected:    return "Connected"
         case .notConnected: return "Not set"
@@ -1653,12 +1672,16 @@ struct SettingsView: View {
     }
 
     private func runLiveSSHTest() {
+        guard store.sshConnectionState != .checking else { return }
         let username = store.config.username
         let ip = store.config.destinationIP
         guard !username.isEmpty, !ip.isEmpty else { return }
-        // Defer state change off layout pass to avoid recursion
-        DispatchQueue.main.async { [self] in
-            sshConnectionState = .checking
+        // Write to shared ConfigStore so the view re-renders live
+        // Only show "Checking..." if not already connected (silent background re-verify)
+        DispatchQueue.main.async {
+            if ConfigStore.shared.sshConnectionState != .connected {
+                ConfigStore.shared.sshConnectionState = .checking
+            }
         }
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
@@ -1674,8 +1697,8 @@ struct SettingsView: View {
         proc.terminationHandler = { p in
             let ok = p.terminationStatus == 0
             Task { @MainActor in
-                if ok { store.config.sshKeysConfigured = true }
-                sshConnectionState = ok ? .connected : .notConnected
+                if ok { ConfigStore.shared.config.sshKeysConfigured = true }
+                ConfigStore.shared.sshConnectionState = ok ? .connected : .notConnected
             }
         }
         DispatchQueue.global(qos: .utility).async {
@@ -1684,7 +1707,7 @@ struct SettingsView: View {
             } catch {
                 NSLog("[Sync] live SSH test launch failed: %@", error.localizedDescription)
                 Task { @MainActor in
-                    sshConnectionState = .failed
+                    ConfigStore.shared.sshConnectionState = .failed
                 }
             }
         }

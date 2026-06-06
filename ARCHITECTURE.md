@@ -198,7 +198,7 @@ Order matters — destination must be validated before TXT is published:
 
 | Singleton | File:Line | @Published Properties | Writers | Readers |
 |-----------|-----------|----------------------|---------|---------|
-| `ConfigStore.shared` | Config.swift:157 | `config`, `isSyncing`, `iconState`, `lastConfigSaveFailed`, `pendingQuitConfirm`, `transferLog`, `identity`, `trustedPeers`, `trustLog` | SyncEngine, SettingsView, AppDelegate, BonjourBrowser, pairing | All views |
+| `ConfigStore.shared` | Config.swift:165 | `config`, `isSyncing`, `iconState`, `lastConfigSaveFailed`, `pendingQuitConfirm`, `sshConnectionState`, `transferLog`, `identity`, `trustedPeers`, `trustLog` | SyncEngine, SettingsView, AppDelegate, BonjourBrowser, pairing | All views |
 | `SyncEngine.shared` | MainView.swift:99 | `status`, `lastSyncTime`, `dryRunResult`, `syncProgress`, `fallbackNotice`, `lowSpaceNotice`, `usingFallback`, `manualModeFreeSpace`, `nextAutoSyncDate`, `nextPushSyncDate`, `hasUnacknowledgedError`, `verifyStatus` | SyncEngine (self), BonjourBrowser (usingFallback) | MainView, SettingsView |
 | `BonjourAdvertiser.shared` | BonjourDiscovery.swift:33 | `state`, `confirmedName`, `verifyRequestNonce` | BonjourAdvertiser (self), ReceiveMonitor (verifyRequestNonce) | BackupView, SettingsView |
 | `BonjourBrowser.shared` | BonjourDiscovery.swift:331 | `services`, `state` | BonjourBrowser (self) | SettingsView |
@@ -213,8 +213,7 @@ Order matters — destination must be validated before TXT is published:
 
 | Property | Line | Purpose | Writers | Readers |
 |----------|------|---------|---------|---------|
-| `sshConnectionState` | 25 | SSH connection status | `runLiveSSHTest()`, `.onChange(of: config)` | secureConnectionSection |
-| `localDiscoveryMode` | 27 | Discovery mode picker | `.onAppear`, user selection | body |
+| `localDiscoveryMode` | 24 | Discovery mode picker | `.onAppear`, user selection | body |
 | `renameState` | 36 | Remote rename flow | `sendRemoteRename()`, `handleRenameConfirmed()` | body |
 | `destinationCheckState` | 38 | Manual mode destination check | `confirmBackupDestination()` | body |
 

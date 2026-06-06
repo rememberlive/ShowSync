@@ -93,7 +93,9 @@
       "Read(//Users/remember/Documents/LiveAudioApps/**)",
       "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_2b-clean.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
       "Bash(git -C ~/Documents/LiveAudioApps/Sync add -A)",
-      "Bash(git -C ~/Documents/LiveAudioApps/Sync status)"
+      "Bash(git -C ~/Documents/LiveAudioApps/Sync status)",
+      "Bash(git *)",
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_2b.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
     ]
   }
 }

@@ -26,6 +26,15 @@ enum SyncIconState: Equatable {
     case error          // red — rsync failure or network lost
 }
 
+// SSH connection state for the Secure Connection status in Settings.
+// Observed by SettingsView via ConfigStore (@Published).
+enum SSHConnectionState {
+    case checking
+    case connected
+    case notConnected
+    case failed
+}
+
 // MARK: - Runtime config (never stored directly; see ConfigStore for persistence)
 
 struct Config {
@@ -173,6 +182,10 @@ final class ConfigStore: ObservableObject {
     // Transient — not persisted. Set true to request the inline Quit confirmation view
     // (used by AppDelegate.applicationShouldTerminate when Cmd+Q hit mid-sync).
     @Published var pendingQuitConfirm: Bool = false
+
+    // Transient — not persisted. SSH connection status for Settings "Secure Connection" label.
+    // Observed by SettingsView; updated by runLiveSSHTest().
+    @Published var sshConnectionState: SSHConnectionState = .checking
 
     // Transfer log — persisted to transfer_log.json, capped at 100 entries
     @Published var transferLog: [TransferLogEntry] = []
@@ -430,6 +443,11 @@ final class ConfigStore: ObservableObject {
         } catch {
             NSLog("[Sync] identity.json save failed: %@", error.localizedDescription)
         }
+    }
+
+    func reloadIdentityFromDisk() {
+        identity = Self.loadOrCreateIdentity(from: identityURL)
+        NSLog("[Sync] Reloaded identity from disk: %@", identity.deviceId)
     }
 
     func saveTrustedPeers() {

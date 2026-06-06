@@ -158,6 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func updateBonjourAdvertiser() {
         let cfg = ConfigStore.shared.config
         if cfg.role == "backup" && cfg.discoveryMode == "automatic" {
+            ConfigStore.shared.reloadIdentityFromDisk()
             BonjourAdvertiser.shared.start()
             // Layer 2b: Also start listening for pairing requests
             BonjourPairingService.shared.startListening()
