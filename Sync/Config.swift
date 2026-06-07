@@ -1,4 +1,5 @@
 import Foundation
+import ShowNetwork
 
 // MARK: - Transfer Log Entry
 
@@ -76,7 +77,8 @@ struct Config {
     var minFreeSpaceGB: Int = 2  // Minimum free space threshold (floor 1GB)
 
     // Network interface selection (both roles)
-    var preferredInterface: String = ""  // Empty = "Automatic", otherwise interface name like "en0"
+    var preferredInterface: String = ""  // Legacy BSD name — kept for migration only
+    var preferredInterfaceMAC: String = ""  // Empty = "Automatic", otherwise MAC address
 
     // Global hotkey (Main role only)
     var globalHotkeyEnabled: Bool = true  // ⌃⌥⌘S triggers Sync Now from anywhere
@@ -120,6 +122,7 @@ private struct MainConfig: Codable {
     var lastBackupDiscoveryName: String = ""
     var lastBackupIP: String = ""
     var preferredInterface: String = ""
+    var preferredInterfaceMAC: String = ""
     var globalHotkeyEnabled: Bool = true
 }
 
@@ -133,6 +136,7 @@ private struct BackupConfig: Codable {
     var networkDiscoveryName: String = ""
     var minFreeSpaceGB: Int = 2
     var preferredInterface: String = ""
+    var preferredInterfaceMAC: String = ""
 }
 
 private struct SharedConfig: Codable {
@@ -322,6 +326,7 @@ final class ConfigStore: ObservableObject {
                 lastBackupDiscoveryName:       config.lastBackupDiscoveryName,
                 lastBackupIP:                  config.lastBackupIP,
                 preferredInterface:            config.preferredInterface,
+                preferredInterfaceMAC:         config.preferredInterfaceMAC,
                 globalHotkeyEnabled:           config.globalHotkeyEnabled
             )
             do {
@@ -342,7 +347,8 @@ final class ConfigStore: ObservableObject {
                 discoveryMode:     config.discoveryMode,
                 networkDiscoveryName: config.networkDiscoveryName,
                 minFreeSpaceGB:    max(1, config.minFreeSpaceGB),  // Floor of 1GB
-                preferredInterface: config.preferredInterface
+                preferredInterface: config.preferredInterface,
+                preferredInterfaceMAC: config.preferredInterfaceMAC
             )
             do {
                 let data = try JSONEncoder().encode(b)
@@ -652,7 +658,9 @@ final class ConfigStore: ObservableObject {
         c.lastBackupDiscoveryName       = m.lastBackupDiscoveryName
         c.lastBackupIP                  = m.lastBackupIP
         c.preferredInterface            = m.preferredInterface
+        c.preferredInterfaceMAC         = m.preferredInterfaceMAC
         c.globalHotkeyEnabled           = m.globalHotkeyEnabled
+        migrateInterfaceMACIfNeeded(&c)
         return c
     }
 
@@ -670,7 +678,18 @@ final class ConfigStore: ObservableObject {
         c.networkDiscoveryName = b.networkDiscoveryName
         c.minFreeSpaceGB   = max(1, b.minFreeSpaceGB)  // Floor of 1GB
         c.preferredInterface = b.preferredInterface
+        c.preferredInterfaceMAC = b.preferredInterfaceMAC
+        migrateInterfaceMACIfNeeded(&c)
         return c
+    }
+
+    private static func migrateInterfaceMACIfNeeded(_ c: inout Config) {
+        guard c.preferredInterfaceMAC.isEmpty, !c.preferredInterface.isEmpty else { return }
+        if let interfaces = try? Interfaces.list(),
+           let match = interfaces.first(where: { $0.name == c.preferredInterface }),
+           let mac = match.mac {
+            c.preferredInterfaceMAC = mac
+        }
     }
 
     // MARK: - One-time migration from legacy config.json

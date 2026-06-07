@@ -231,7 +231,7 @@ final class SyncEngine: ObservableObject {
         prepProc.executableURL = URL(fileURLWithPath: rsyncPath)
         var prepArgs = ["-av", "--dry-run", "--stats"]
         if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
-           !ConfigStore.shared.config.preferredInterface.isEmpty {
+           !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
             prepArgs.insert(contentsOf: ["-e", "ssh -b \(bindIP)"], at: 0)
         }
         prepArgs.append(contentsOf: [source, dest])
@@ -384,7 +384,7 @@ final class SyncEngine: ObservableObject {
                     proc.executableURL = URL(fileURLWithPath: rsyncPath)
                     var rsyncArgs = ["-av", "--stats", "--exclude=*~sync-v~*"]
                     if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
-                       !ConfigStore.shared.config.preferredInterface.isEmpty {
+                       !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
                         rsyncArgs.insert(contentsOf: ["-e", "ssh -b \(bindIP)"], at: 0)
                     }
                     rsyncArgs.append(contentsOf: [source, dest])
@@ -636,7 +636,7 @@ final class SyncEngine: ObservableObject {
 
         var args = ["-avc", "--dry-run", "--exclude=*~sync-v~*"]
         if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
-           !config.preferredInterface.isEmpty {
+           !config.preferredInterfaceMAC.isEmpty {
             args.insert(contentsOf: ["-e", "ssh -b \(bindIP)"], at: 0)
         }
         args.append(contentsOf: [source, dest])
@@ -964,7 +964,7 @@ final class SyncEngine: ObservableObject {
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         var duArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no"]
         if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
-           !ConfigStore.shared.config.preferredInterface.isEmpty {
+           !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
             duArgs.insert(contentsOf: ["-b", bindIP], at: 0)
         }
         duArgs.append(contentsOf: ["\(username)@\(ip)", "du -sk \"\(escaped)\" 2>/dev/null | cut -f1"])
@@ -1048,7 +1048,7 @@ final class SyncEngine: ObservableObject {
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         var sshArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=2", "-o", "StrictHostKeyChecking=no"]
         if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
-           !config.preferredInterface.isEmpty {
+           !config.preferredInterfaceMAC.isEmpty {
             sshArgs.insert(contentsOf: ["-b", bindIP], at: 0)
         }
         sshArgs.append(contentsOf: ["\(config.username)@\(config.destinationIP)", cmd])
@@ -1064,7 +1064,7 @@ final class SyncEngine: ObservableObject {
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         var sshArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=2", "-o", "StrictHostKeyChecking=no"]
         if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
-           !ConfigStore.shared.config.preferredInterface.isEmpty {
+           !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
             sshArgs.insert(contentsOf: ["-b", bindIP], at: 0)
         }
         sshArgs.append(contentsOf: ["\(syncUsername)@\(syncIP)", command])
@@ -1097,7 +1097,7 @@ final class SyncEngine: ObservableObject {
         var testArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=2", "-o", "ServerAliveInterval=2",
                         "-o", "ServerAliveCountMax=2", "-o", "StrictHostKeyChecking=no"]
         if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
-           !ConfigStore.shared.config.preferredInterface.isEmpty {
+           !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
             testArgs.insert(contentsOf: ["-b", bindIP], at: 0)
         }
         testArgs.append(contentsOf: ["\(username)@\(ip)", cmd])
@@ -1167,7 +1167,7 @@ final class SyncEngine: ObservableObject {
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         var refuseArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=2", "-o", "StrictHostKeyChecking=no"]
         if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
-           !ConfigStore.shared.config.preferredInterface.isEmpty {
+           !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
             refuseArgs.insert(contentsOf: ["-b", bindIP], at: 0)
         }
         refuseArgs.append(contentsOf: ["\(username)@\(ip)", cmd])
@@ -1369,7 +1369,7 @@ final class SyncEngine: ObservableObject {
         dryRunProc.executableURL = URL(fileURLWithPath: rsyncPath)
         var dryRunArgs = ["-av", "--dry-run", "--out-format=%n", "--exclude=*~sync-v~*"]
         if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
-           !config.preferredInterface.isEmpty {
+           !config.preferredInterfaceMAC.isEmpty {
             dryRunArgs.insert(contentsOf: ["-e", "ssh -b \(bindIP)"], at: 0)
         }
         dryRunArgs.append(contentsOf: [source, dest])
@@ -1474,7 +1474,7 @@ final class SyncEngine: ObservableObject {
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         var sshArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=30", "-o", "StrictHostKeyChecking=no"]
         if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
-           !ConfigStore.shared.config.preferredInterface.isEmpty {
+           !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
             sshArgs.insert(contentsOf: ["-b", bindIP], at: 0)
         }
         sshArgs.append(contentsOf: ["\(username)@\(ip)", cmd])
@@ -1524,7 +1524,7 @@ while IFS= read -r f; do rm -rf "$f"; done
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         var sshArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=no"]
         if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
-           !ConfigStore.shared.config.preferredInterface.isEmpty {
+           !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
             sshArgs.insert(contentsOf: ["-b", bindIP], at: 0)
         }
         sshArgs.append(contentsOf: ["\(username)@\(ip)", cmd])
@@ -1605,7 +1605,7 @@ final class SSHChecker: ObservableObject {
             let cmd = "cat \"$HOME/Library/Application Support/Sync/config_backup.json\" 2>/dev/null || echo '{}'; echo '---DF---'; df -k ~ 2>/dev/null | awk 'NR==2 {print $4}'; echo '---VERIFY---'; cat ~/Sync/\(SignalFile.verifyRequest) 2>/dev/null || echo ''"
             var manualArgs = ["-o", "ConnectTimeout=2", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no"]
             if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
-               !ConfigStore.shared.config.preferredInterface.isEmpty {
+               !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
                 manualArgs.insert(contentsOf: ["-b", bindIP], at: 0)
             }
             manualArgs.append(contentsOf: ["\(username)@\(ip)", cmd])
@@ -1672,7 +1672,7 @@ final class SSHChecker: ObservableObject {
             // Auto mode: simple exit test (TXT push handles config updates)
             var autoArgs = ["-o", "ConnectTimeout=2", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no"]
             if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
-               !ConfigStore.shared.config.preferredInterface.isEmpty {
+               !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
                 autoArgs.insert(contentsOf: ["-b", bindIP], at: 0)
             }
             autoArgs.append(contentsOf: ["\(username)@\(ip)", "exit"])

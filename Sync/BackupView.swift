@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import Network
 import SystemConfiguration
+import ShowNetwork
 
 private let darkBg = Color(red: 0.12, green: 0.12, blue: 0.12)
 private let popoverWidth: CGFloat = 360
@@ -87,12 +88,17 @@ final class NetworkInterfaceManager: ObservableObject {
         // Sort by BSD name for consistent ordering
         let interfaces = ifaceDict.values.sorted { $0.name < $1.name }
 
-        let preferred = ConfigStore.shared.config.preferredInterface
-        let preferredAvailable = preferred.isEmpty || interfaces.contains { $0.name == preferred }
+        let preferredMAC = ConfigStore.shared.config.preferredInterfaceMAC
+        let preferredAvailable = preferredMAC.isEmpty || interfaces.contains { iface in
+            if let snIface = try? Interfaces.find(byMAC: preferredMAC) {
+                return iface.name == snIface.name
+            }
+            return false
+        }
 
         Task { @MainActor [weak self] in
             self?.availableInterfaces = interfaces
-            self?.usingFallback = !preferred.isEmpty && !preferredAvailable
+            self?.usingFallback = !preferredMAC.isEmpty && !preferredAvailable
             if self?.usingFallback == true {
                 if ConfigStore.shared.iconState != .syncing && ConfigStore.shared.iconState != .receiving {
                     ConfigStore.shared.iconState = .warning
@@ -136,20 +142,20 @@ final class NetworkInterfaceManager: ObservableObject {
     }
 
     func getEffectiveIP() -> String? {
-        let preferred = ConfigStore.shared.config.preferredInterface
-        if !preferred.isEmpty {
-            if let iface = availableInterfaces.first(where: { $0.name == preferred }) {
-                return iface.ipv4
+        let preferredMAC = ConfigStore.shared.config.preferredInterfaceMAC
+        if !preferredMAC.isEmpty {
+            if let snIface = try? Interfaces.find(byMAC: preferredMAC) {
+                return snIface.ipv4
             }
         }
         return availableInterfaces.first?.ipv4
     }
 
     func getEffectiveInterface() -> NetworkInterface? {
-        let preferred = ConfigStore.shared.config.preferredInterface
-        if !preferred.isEmpty {
-            if let iface = availableInterfaces.first(where: { $0.name == preferred }) {
-                return iface
+        let preferredMAC = ConfigStore.shared.config.preferredInterfaceMAC
+        if !preferredMAC.isEmpty {
+            if let snIface = try? Interfaces.find(byMAC: preferredMAC) {
+                return availableInterfaces.first { $0.name == snIface.name }
             }
         }
         return availableInterfaces.first
@@ -186,10 +192,10 @@ final class NetworkMonitor: ObservableObject {
     deinit { monitor.cancel() }
 
     private static func extractIPv4(from path: NWPath) -> String? {
-        let preferred = ConfigStore.shared.config.preferredInterface
-        if !preferred.isEmpty {
+        let preferredMAC = ConfigStore.shared.config.preferredInterfaceMAC
+        if !preferredMAC.isEmpty, let snIface = try? Interfaces.find(byMAC: preferredMAC) {
             for iface in path.availableInterfaces {
-                if iface.name == preferred, let ip = ipv4Address(for: iface.name) {
+                if iface.name == snIface.name, let ip = ipv4Address(for: iface.name) {
                     return ip
                 }
             }

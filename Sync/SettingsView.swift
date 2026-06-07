@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import ServiceManagement
+import ShowNetwork
 
 private let darkBg = Color(red: 0.12, green: 0.12, blue: 0.12)
 private let sectionHeaderColor = Color(white: 0.45)
@@ -359,9 +360,12 @@ struct SettingsView: View {
                 SyncEngine.shared.startAutoSync(delay: interval)
             }
         }
-        .onChange(of: store.config.preferredInterface) { _ in
+        .onChange(of: store.config.preferredInterfaceMAC) { _ in
             if isMain && isAutomatic {
                 BonjourBrowser.shared.restart()
+            }
+            if !isMain {
+                BonjourAdvertiser.shared.restart()
             }
         }
         .onChange(of: store.config.appPresence) { _ in
@@ -1215,12 +1219,13 @@ struct SettingsView: View {
         sectionHeader("Network Interface")
         VStack(alignment: .leading, spacing: 8) {
             Picker("", selection: Binding(
-                get: { store.config.preferredInterface },
-                set: { store.config.preferredInterface = $0 }
+                get: { store.config.preferredInterfaceMAC },
+                set: { store.config.preferredInterfaceMAC = $0 }
             )) {
                 Text("Automatic").tag("")
                 ForEach(interfaceManager.availableInterfaces) { iface in
-                    Text(iface.displayLabel).tag(iface.name)
+                    let mac = macForInterface(name: iface.name)
+                    Text(iface.displayLabel).tag(mac)
                 }
             }
             .pickerStyle(.menu)
@@ -1245,6 +1250,11 @@ struct SettingsView: View {
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 12)
+    }
+
+    private func macForInterface(name: String) -> String {
+        guard let interfaces = try? Interfaces.list() else { return "" }
+        return interfaces.first { $0.name == name }?.mac ?? ""
     }
 
     // Preset sets for timing options
