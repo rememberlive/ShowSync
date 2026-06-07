@@ -224,6 +224,7 @@ final class BonjourBrowser: ObservableObject {
 
     @Published var services: [DiscoveredBackup] = []
     @Published var state: BrowserState = .idle
+    @Published var isCurrentPeerReachable: Bool = true
 
     var pairingAckCallback: ((String, String) -> Void)?
     var pairingNackCallback: ((String, String) -> Void)?
@@ -278,6 +279,10 @@ final class BonjourBrowser: ObservableObject {
 
     func restart() {
         stop()
+        // Clear destinationIP on interface change — will be re-set if peer is reachable on new interface
+        ConfigStore.shared.config.destinationIP = ""
+        ConfigStore.shared.config.backupHostname = ""
+        isCurrentPeerReachable = false
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             self?.start()
         }
@@ -302,7 +307,7 @@ final class BonjourBrowser: ObservableObject {
         do {
             try resolver.start { [weak self] event in
                 DispatchQueue.main.async {
-                    self?.handleResolverEvent(event, serviceName: name)
+                    self?.handleResolverEvent(event, serviceName: name, interface: interface)
                 }
             }
         } catch {
@@ -310,11 +315,27 @@ final class BonjourBrowser: ObservableObject {
         }
     }
 
-    private func handleResolverEvent(_ event: Resolver.Event, serviceName: String) {
+    private func handleResolverEvent(_ event: Resolver.Event, serviceName: String, interface: Interface) {
         switch event {
         case .resolved(let host, _, let txt, let addresses):
-            let ipv4s = addresses.filter { !$0.contains(":") && !$0.hasPrefix("169.254.") }
-            guard let resolvedIP = ipv4s.first else { return }
+            let ipv4s = addresses.filter { !$0.contains(":") }
+            guard !ipv4s.isEmpty else { return }
+
+            let resolvedIP: String
+            var isReachable: Bool
+
+            if let subnet = getInterfaceSubnet(name: interface.name) {
+                if let sameSubnetIP = ipv4s.first(where: { isOnSubnet($0, ifaceIP: subnet.ip, mask: subnet.mask) }) {
+                    resolvedIP = sameSubnetIP
+                    isReachable = true
+                } else {
+                    resolvedIP = ipv4s.first { !$0.hasPrefix("169.254.") } ?? ipv4s[0]
+                    isReachable = false
+                }
+            } else {
+                resolvedIP = ipv4s.first { !$0.hasPrefix("169.254.") } ?? ipv4s[0]
+                isReachable = true
+            }
 
             let hostname = host
                 .replacingOccurrences(of: ".local.", with: "")
@@ -329,8 +350,6 @@ final class BonjourBrowser: ObservableObject {
             if let currentIP = getCurrentIP(), resolvedIP == currentIP {
                 return
             }
-
-            let isReachable = checkSubnetReachability(ip: resolvedIP)
 
             let backup = DiscoveredBackup(
                 id: serviceName,
@@ -351,6 +370,18 @@ final class BonjourBrowser: ObservableObject {
             handlePairingFields(txt: txt)
             handleVerifyRequest(txt: txt, serviceName: serviceName, resolvedIP: resolvedIP, isReachable: isReachable)
             handleAutoReconnect(backup: backup)
+
+            // Update reachability for currently-targeted peer; clear stale destinationIP if unreachable
+            let currentDestIP = ConfigStore.shared.config.destinationIP
+            if !currentDestIP.isEmpty {
+                if let targetedService = services.first(where: { $0.resolvedIP == currentDestIP }) {
+                    isCurrentPeerReachable = targetedService.isReachableOnSelectedInterface
+                    if !isCurrentPeerReachable {
+                        ConfigStore.shared.config.destinationIP = ""
+                        ConfigStore.shared.config.backupHostname = ""
+                    }
+                }
+            }
 
         case .error:
             break
@@ -394,6 +425,7 @@ final class BonjourBrowser: ObservableObject {
             if !nameMatch && config.lastBackupDiscoveryName != backup.id {
                 ConfigStore.shared.config.lastBackupDiscoveryName = backup.id
             }
+            isCurrentPeerReachable = true
         }
     }
 

@@ -149,6 +149,14 @@ final class SyncEngine: ObservableObject {
     func sync(config: Config, isAuto: Bool = false, isPush: Bool = false) {
         guard config.isReadyToSync else { return }
         guard !status.isActive else { return }
+        // Interface isolation: in automatic mode, refuse sync if peer not reachable on bound interface
+        // Manual mode bypasses this check (user explicitly entered the IP)
+        if config.discoveryMode == "automatic" {
+            guard BonjourBrowser.shared.isCurrentPeerReachable else {
+                NSLog("[Sync] Refused: peer not reachable on selected interface")
+                return
+            }
+        }
         // Sync supersedes verify - cancel any in-flight verify before starting
         if verifyStatus == .verifying { cancelVerify() }
         isAutoSync         = isAuto
@@ -2001,8 +2009,10 @@ struct MainView: View {
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(!store.config.isReadyToSync || syncButtonDisabled)
-                        .help(store.config.isReadyToSync ? "" : "Set source folder and BACKUP IP in Settings first")
+                        .disabled(!store.config.isReadyToSync || syncButtonDisabled ||
+                                  (store.config.discoveryMode == "automatic" && !bonjourBrowser.isCurrentPeerReachable))
+                        .help(!store.config.isReadyToSync ? "Set source folder and BACKUP IP in Settings first" :
+                              (store.config.discoveryMode == "automatic" && !bonjourBrowser.isCurrentPeerReachable) ? "Backup not reachable on selected interface" : "")
 
                         Button {
                             engine.verifyNow(config: store.config)
