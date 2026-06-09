@@ -98,7 +98,8 @@
       "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_2b.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
       "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_stage0.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
       "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_shownetwork-swap.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
-      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_isolation-fix.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_isolation-fix.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_ipv4-isolation.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
     ]
   }
 }

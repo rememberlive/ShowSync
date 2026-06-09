@@ -318,21 +318,30 @@ final class BonjourBrowser: ObservableObject {
     private func handleResolverEvent(_ event: Resolver.Event, serviceName: String, interface: Interface) {
         switch event {
         case .resolved(let host, _, let txt, let addresses):
-            let ipv4s = addresses.filter { !$0.contains(":") }
+            // IPv4-only preferred-address selection — keep ssh/rsync traffic on the bound NIC.
+            // IPv6 (ULA / link-local with %scope) is deferred to v2; ignored here so no IPv6
+            // address can ever reach the engine dest-string sites (which would need bracketing).
+            let ipv4s = addresses.filter { PreferredAddress.isIPv4($0) }
             guard !ipv4s.isEmpty else { return }
 
             let resolvedIP: String
-            var isReachable: Bool
+            let isReachable: Bool
 
             if let subnet = getInterfaceSubnet(name: interface.name) {
-                if let sameSubnetIP = ipv4s.first(where: { isOnSubnet($0, ifaceIP: subnet.ip, mask: subnet.mask) }) {
-                    resolvedIP = sameSubnetIP
+                if let chosen = PreferredAddress.pickPreferredIPv4(from: ipv4s, subnet: subnet) {
+                    // On the bound interface (link-local 169.254/16, or private same-subnet)
+                    // → the address is only reachable via this NIC, so traffic stays on it.
+                    resolvedIP = chosen
                     isReachable = true
                 } else {
+                    // No on-interface IPv4 (no link-local / private same-subnet) → unreachable.
+                    // NO routable fallback: a routable IPv4 could egress another NIC and leak.
+                    // Keep a display IP only; it never becomes destinationIP (gated by isReachable=false).
                     resolvedIP = ipv4s.first { !$0.hasPrefix("169.254.") } ?? ipv4s[0]
                     isReachable = false
                 }
             } else {
+                // Bound subnet undeterminable (e.g. automatic mode, candidate without IPv4) → permissive.
                 resolvedIP = ipv4s.first { !$0.hasPrefix("169.254.") } ?? ipv4s[0]
                 isReachable = true
             }
@@ -783,5 +792,65 @@ final class BonjourPairingService: ObservableObject {
                 }
             }
         }
+    }
+}
+
+// MARK: - Preferred-address selection (IPv4 only; IPv6 deferred to v2)
+
+// Chooses the peer IPv4 address that keeps SSH/rsync traffic on the bound interface.
+// Leak-safe order:
+//   1. IPv4 link-local (169.254.0.0/16) on the bound interface's subnet
+//   2. IPv4 private (10/8, 172.16/12, 192.168/16) on the bound interface's subnet
+//   else: nil — peer is not reachable on the bound interface. There is deliberately NO
+//         "any routable IPv4" fallback: a routable address can egress another NIC and
+//         would reintroduce the cross-interface leak the isolation fix removed.
+// IPv6 selection (ULA / fe80 with %scope) + rsync bracketing is a separate v2 task and
+// is intentionally absent here, so no IPv6 address can ever become the ssh destination.
+enum PreferredAddress {
+
+    /// Returns the preferred on-interface IPv4 address, or nil if none qualifies.
+    /// - Parameters:
+    ///   - ipv4Addresses: peer addresses already filtered to IPv4 (see `isIPv4`).
+    ///   - subnet: the bound interface's (ip, mask) in network byte order.
+    static func pickPreferredIPv4(from ipv4Addresses: [String],
+                                  subnet: (ip: UInt32, mask: UInt32)) -> String? {
+        let onSubnet = ipv4Addresses.filter { isOnSubnet($0, ifaceIP: subnet.ip, mask: subnet.mask) }
+        guard !onSubnet.isEmpty else { return nil }
+
+        // Rule 1: link-local on the bound subnet.
+        if let linkLocal = onSubnet.first(where: { $0.hasPrefix("169.254.") }) {
+            return linkLocal
+        }
+        // Rule 2: RFC 1918 private on the bound subnet.
+        if let priv = onSubnet.first(where: { isPrivateIPv4($0) }) {
+            return priv
+        }
+        // On-subnet but neither link-local nor private (public same-subnet) → not selected.
+        return nil
+    }
+
+    /// True if the string is a dotted-quad IPv4 address (rejects IPv6 / anything with ':').
+    static func isIPv4(_ s: String) -> Bool {
+        if s.contains(":") { return false }
+        var addr = in_addr()
+        return inet_pton(AF_INET, s, &addr) == 1
+    }
+
+    /// True for RFC 1918 private ranges: 10/8, 172.16/12, 192.168/16.
+    static func isPrivateIPv4(_ s: String) -> Bool {
+        var addr = in_addr()
+        guard inet_pton(AF_INET, s, &addr) == 1 else { return false }
+        let host = UInt32(bigEndian: addr.s_addr)            // network → host byte order
+        if (host & 0xFF00_0000) == 0x0A00_0000 { return true }   // 10.0.0.0/8
+        if (host & 0xFFF0_0000) == 0xAC10_0000 { return true }   // 172.16.0.0/12
+        if (host & 0xFFFF_0000) == 0xC0A8_0000 { return true }   // 192.168.0.0/16
+        return false
+    }
+
+    /// Masked-subnet equality. `ifaceIP` and `mask` are network byte order (sockaddr_in.s_addr).
+    static func isOnSubnet(_ ipString: String, ifaceIP: UInt32, mask: UInt32) -> Bool {
+        var addr = in_addr()
+        guard inet_pton(AF_INET, ipString, &addr) == 1 else { return false }
+        return (addr.s_addr & mask) == (ifaceIP & mask)
     }
 }
