@@ -37,6 +37,10 @@ struct SettingsView: View {
     @State private var hasConfirmedDestinationThisConnection = false
     @State private var manualModeFreeSpace: Int64 = 0  // Free space read via SSH for manual mode
     @State private var isPairingStarting = false
+    // Dedicated in-flight sentinel for the live SSH test. Must NOT reuse .checking as the
+    // sentinel: .checking is also the default sshConnectionState, which previously made the
+    // guard bail before the first test ever launched (stuck on "Checking…").
+    @State private var isSSHTestInFlight = false
 
     // Custom timing option editing state
     @State private var isEditingAutoInterval = false
@@ -1682,10 +1686,13 @@ struct SettingsView: View {
     }
 
     private func runLiveSSHTest() {
-        guard store.sshConnectionState != .checking else { return }
+        // Bail only when a test is genuinely in flight — NOT when state == .checking
+        // (.checking is the initial default, which previously blocked the first launch).
+        guard !isSSHTestInFlight else { return }
         let username = store.config.username
         let ip = store.config.destinationIP
         guard !username.isEmpty, !ip.isEmpty else { return }
+        isSSHTestInFlight = true
         // Write to shared ConfigStore so the view re-renders live
         // Only show "Checking..." if not already connected (silent background re-verify)
         DispatchQueue.main.async {
@@ -1695,18 +1702,25 @@ struct SettingsView: View {
         }
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        proc.arguments = [
+        // Bind the source to the chosen interface (same as SSHChecker and the sync engine)
+        // so the test reaches a bound/link-local peer the way the real sync does.
+        var args = [
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=3",
-            "-o", "StrictHostKeyChecking=no",
-            "\(username)@\(ip)",
-            "exit"
+            "-o", "StrictHostKeyChecking=no"
         ]
+        if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
+           !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
+            args.insert(contentsOf: ["-b", bindIP], at: 0)
+        }
+        args.append(contentsOf: ["\(username)@\(ip)", "exit"])
+        proc.arguments = args
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError  = FileHandle.nullDevice
         proc.terminationHandler = { p in
             let ok = p.terminationStatus == 0
             Task { @MainActor in
+                isSSHTestInFlight = false
                 if ok { ConfigStore.shared.config.sshKeysConfigured = true }
                 ConfigStore.shared.sshConnectionState = ok ? .connected : .notConnected
             }
@@ -1717,6 +1731,7 @@ struct SettingsView: View {
             } catch {
                 NSLog("[Sync] live SSH test launch failed: %@", error.localizedDescription)
                 Task { @MainActor in
+                    isSSHTestInFlight = false
                     ConfigStore.shared.sshConnectionState = .failed
                 }
             }

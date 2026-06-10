@@ -578,7 +578,10 @@ final class BonjourPairingService: ObservableObject {
             "nonce": currentNonce
         ]
 
-        let adv = Advertiser(interface: iface, type: pairingServiceType, name: identity.deviceName, port: 0, txt: txt)
+        // Port must be non-zero: DNSServiceRegister treats port 0 as a non-discoverable
+        // placeholder, so the Backup's browser never sees it. The value itself is irrelevant
+        // for pairing (all data rides in TXT; acks come back via _rememberlivesync).
+        let adv = Advertiser(interface: iface, type: pairingServiceType, name: identity.deviceName, port: 22, txt: txt)
         do {
             try adv.start { [weak self] event in
                 DispatchQueue.main.async {
