@@ -233,7 +233,24 @@ final class BonjourBrowser: ObservableObject {
     private var resolvers: [String: Resolver] = [:]
     private var lastHandledVerifyNonce: String = ""
 
+    // Rename settling window: after the Main asks the Backup to rename, the old
+    // advertisement can linger (lost mDNS goodbye). Until the new name resolves
+    // (or Settings times the rename out), an entry with the old name must not
+    // overwrite config.lastBackupDiscoveryName — that's the old-name flashback.
+    private var renameSettlingOldName: String? = nil
+    private var renameSettlingNewName: String? = nil
+
     private init() {}
+
+    func noteRenamePending(oldName: String, newName: String) {
+        renameSettlingOldName = oldName
+        renameSettlingNewName = newName
+    }
+
+    func clearRenameSettling() {
+        renameSettlingOldName = nil
+        renameSettlingNewName = nil
+    }
 
     func start() {
         guard browser == nil else { return }
@@ -302,6 +319,9 @@ final class BonjourBrowser: ObservableObject {
     }
 
     private func startResolver(name: String, type: String, domain: String, interface: Interface) {
+        // Stop any existing resolver for this name before overwriting — a duplicate
+        // .added (advertiser restart) would otherwise orphan a live DNS-SD query.
+        resolvers[name]?.stop()
         let resolver = Resolver(interface: interface, name: name, type: type, domain: domain)
         resolvers[name] = resolver
         do {
@@ -316,6 +336,11 @@ final class BonjourBrowser: ObservableObject {
     }
 
     private func handleResolverEvent(_ event: Resolver.Event, serviceName: String, interface: Interface) {
+        // NOTE: no resolver-dict membership guard here — late .resolved events must
+        // be processed. The Backup's advertiser stop+starts mid-protocol (pairing
+        // acks, TXT updates), and under remove/add races the re-install of the
+        // entry by a "late" event is load-bearing (a guard here broke pairing).
+        // Rename staleness is handled by id+IP+hostname (stale-entry drop below).
         switch event {
         case .resolved(let host, _, let txt, let addresses):
             // IPv4-only preferred-address selection — keep ssh/rsync traffic on the bound NIC.
@@ -372,9 +397,24 @@ final class BonjourBrowser: ObservableObject {
                 backupFingerprint: backupFP
             )
 
-            services.removeAll { $0.id == serviceName }
+            // A different service name resolving to the same IP + hostname is a stale
+            // pre-rename advertisement of this same device (its goodbye was lost) —
+            // drop it and stop its resolver so old + new never coexist in the list.
+            let staleIds = services.filter {
+                $0.resolvedIP == resolvedIP && $0.hostname == hostname && $0.id != serviceName
+            }.map(\.id)
+            for staleId in staleIds {
+                resolvers[staleId]?.stop()
+                resolvers.removeValue(forKey: staleId)
+            }
+            services.removeAll { $0.id == serviceName || staleIds.contains($0.id) }
             services.append(backup)
             services.sort { $0.hostname.localizedCaseInsensitiveCompare($1.hostname) == .orderedAscending }
+
+            // The requested new name is live — the rename has settled.
+            if serviceName == renameSettlingNewName {
+                clearRenameSettling()
+            }
 
             handlePairingFields(txt: txt)
             handleVerifyRequest(txt: txt, serviceName: serviceName, resolvedIP: resolvedIP, isReachable: isReachable)
@@ -431,7 +471,11 @@ final class BonjourBrowser: ObservableObject {
             }
             ConfigStore.shared.config.backupDestination = backup.destinationPath
             SyncEngine.shared.usingFallback = backup.isUsingFallback
-            if !nameMatch && config.lastBackupDiscoveryName != backup.id {
+            // Adopt the advertised name — except while a rename is settling: the old
+            // advertisement may still resolve, and re-adopting its name would clobber
+            // the optimistic new name (old-name flashback / ping-pong).
+            if !nameMatch && config.lastBackupDiscoveryName != backup.id
+                && backup.id != renameSettlingOldName {
                 ConfigStore.shared.config.lastBackupDiscoveryName = backup.id
             }
             isCurrentPeerReachable = true

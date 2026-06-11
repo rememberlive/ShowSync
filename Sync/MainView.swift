@@ -14,7 +14,9 @@ struct DryRunResult: Equatable {
 
 struct SyncProgress: Equatable {
     let transferred: Int64   // bytes received by Backup (SSH du polling)
-    let expected: Int64      // total size from dry run (0 = not yet known)
+    let expected: Int64      // transfer delta from the estimate dry-run (0 = unknown → indeterminate bar)
+    let startTime: Date      // when this sync started
+    let bytesPerSec: Double? // smoothed rate (≥3 du samples); nil = still calculating
 }
 
 enum MainViewState {
@@ -195,6 +197,11 @@ final class SyncEngine: ObservableObject {
             fallbackNotice = nil
             lowSpaceNotice = nil
 
+            // Transfer estimate — concurrent with the write-test, never blocks the sync.
+            // Fills expectedSize/syncTotalFiles when it lands; on failure the bar
+            // simply stays indeterminate.
+            runTransferEstimate(config: config)
+
             // Write-test then rsync
             let originalRemotePath = syncRemotePath
             NSLog("[SyncTrace] 4 starting write-test, remotePath='%@'", originalRemotePath)
@@ -237,7 +244,7 @@ final class SyncEngine: ObservableObject {
         NSLog("[SyncTrace] 2 starting dry-run PREVIEW, rsyncPath=%@", rsyncPath)
         let prepProc = Process()
         prepProc.executableURL = URL(fileURLWithPath: rsyncPath)
-        var prepArgs = ["-av", "--dry-run", "--stats"]
+        var prepArgs = ["-av", "--dry-run", "--stats"] + RsyncExclusions.args
         if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
            !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
             prepArgs.insert(contentsOf: ["-e", "ssh -b \(bindIP)"], at: 0)
@@ -371,7 +378,9 @@ final class SyncEngine: ObservableObject {
     private func continueSyncAfterWriteTest(config: Config, totalBytes: Int64, fileCount: Int, dryRunOutput: String) {
         NSLog("[SyncTrace] 7 continueSyncAfterWriteTest entered, setting status=syncing")
         status = .syncing
-        writeSyncStart(totalBytes: totalBytes, totalFiles: fileCount)
+        // Use the engine fields, not the caller's values — the concurrent estimate
+        // fills them with real totals (the call site passes zeros).
+        writeSyncStart(totalBytes: expectedSize, totalFiles: syncTotalFiles)
 
         // Rebuild dest with potentially updated syncRemotePath
         let rawSource = config.sourceFolder.hasPrefix("~")
@@ -390,7 +399,7 @@ final class SyncEngine: ObservableObject {
                     NSLog("[SyncTrace] 9 launchRsync closure executing")
                     let proc = Process()
                     proc.executableURL = URL(fileURLWithPath: rsyncPath)
-                    var rsyncArgs = ["-av", "--stats", "--exclude=*~sync-v~*"]
+                    var rsyncArgs = ["-av", "--stats"] + RsyncExclusions.args
                     if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
                        !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
                         rsyncArgs.insert(contentsOf: ["-e", "ssh -b \(bindIP)"], at: 0)
@@ -642,7 +651,7 @@ final class SyncEngine: ObservableObject {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: rsyncPath)
 
-        var args = ["-avc", "--dry-run", "--exclude=*~sync-v~*"]
+        var args = ["-avc", "--dry-run"] + RsyncExclusions.args
         if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
            !config.preferredInterfaceMAC.isEmpty {
             args.insert(contentsOf: ["-e", "ssh -b \(bindIP)"], at: 0)
@@ -933,9 +942,88 @@ final class SyncEngine: ObservableObject {
     private var duPollTimer:       Timer?
     private var duInFlight:        Bool  = false
     private var baselineSyncBytes: Int64 = 0
+    private var rateSamples: [(time: Date, bytes: Int64)] = []  // rolling window for smoothed rate
+    private var lastWrittenProgress: (percent: Int, bytesDone: Int64)? = nil
+
+    // Pre-sync transfer estimate — runs concurrently with the write-test and never
+    // delays or blocks the sync. Parses the transfer DELTA ("Total transferred file
+    // size"), not the full source size (parseTotalSize reads the wrong field for
+    // progress: on an additive sync most bytes already exist at the destination).
+    private func runTransferEstimate(config: Config) {
+        let rawSource = config.sourceFolder.hasPrefix("~")
+            ? (NSHomeDirectory() as NSString).appendingPathComponent(String(config.sourceFolder.dropFirst()))
+            : config.sourceFolder
+        let source = rawSource.hasSuffix("/") ? rawSource : rawSource + "/"
+        let dest = "\(syncUsername)@\(syncIP):\(syncRemotePath)/"
+
+        let rsyncCandidates = ["/opt/homebrew/bin/rsync", "/usr/local/bin/rsync", "/usr/bin/rsync"]
+        let rsyncPath = rsyncCandidates.first { FileManager.default.fileExists(atPath: $0) } ?? "/usr/bin/rsync"
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: rsyncPath)
+        // No -v: stats only, no file list — output stays tiny (no pipe-drain risk)
+        var args = ["-a", "--dry-run", "--stats"] + RsyncExclusions.args
+        if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
+           !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
+            args.insert(contentsOf: ["-e", "ssh -b \(bindIP)"], at: 0)
+        }
+        args.append(contentsOf: [source, dest])
+        proc.arguments = args
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        proc.terminationHandler = { [weak self] p in
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8) ?? ""
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard p.terminationStatus == 0 else { return }  // estimate failed → indeterminate bar
+                guard self.status == .preparing || self.status == .syncing else { return }
+                if let delta = Self.parseTransferDelta(output) {
+                    self.expectedSize = delta
+                }
+                if let files = Self.parseTransferredFileCount(output) {
+                    self.syncTotalFiles = files
+                }
+            }
+        }
+        DispatchQueue.global(qos: .utility).async { try? proc.run() }
+    }
+
+    // "Total transferred file size: 51200 B" (openrsync) / "...: 51,200 bytes" (GNU)
+    private static func parseTransferDelta(_ output: String) -> Int64? {
+        for line in output.components(separatedBy: .newlines) {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("Total transferred file size:") {
+                let numStr = t.dropFirst("Total transferred file size:".count)
+                    .trimmingCharacters(in: .whitespaces)
+                    .components(separatedBy: " ").first?
+                    .replacingOccurrences(of: ",", with: "") ?? ""
+                if let n = Int64(numStr) { return n }
+            }
+        }
+        return nil
+    }
+
+    // "Number of files transferred: 1" (openrsync) / "Number of regular files transferred: 1" (GNU)
+    private static func parseTransferredFileCount(_ output: String) -> Int? {
+        for line in output.components(separatedBy: .newlines) {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("Number of regular files transferred:") || t.hasPrefix("Number of files transferred:") {
+                let numStr = t.components(separatedBy: ":").last?
+                    .trimmingCharacters(in: .whitespaces)
+                    .components(separatedBy: " ").first?
+                    .replacingOccurrences(of: ",", with: "") ?? ""
+                if let n = Int(numStr) { return n }
+            }
+        }
+        return nil
+    }
 
     private func startDuPolling(username: String, ip: String) {
         duInFlight = false
+        rateSamples = []
+        lastWrittenProgress = nil
         runDu(username: username, ip: ip) { [weak self] baseline in
             guard let self else { return }
             self.baselineSyncBytes = baseline
@@ -949,11 +1037,31 @@ final class SyncEngine: ObservableObject {
         runDu(username: username, ip: ip) { [weak self] current in
             guard let self else { return }
             let transferred = max(0, current - self.baselineSyncBytes)
-            let capped = self.expectedSize > 0 ? min(transferred, self.expectedSize) : transferred
-            self.syncProgress = SyncProgress(transferred: capped, expected: self.expectedSize)
-            if self.expectedSize > 0 {
-                let percent = Int(min(Double(capped) / Double(self.expectedSize), 1.0) * 100)
-                self.writeSyncProgress(percent: percent)
+            var capped = self.expectedSize > 0 ? min(transferred, self.expectedSize) : transferred
+            capped = max(capped, self.syncProgress?.transferred ?? 0)  // bar never moves backward
+
+            // Rolling rate window (5 samples ≈ 5 s) for a smoothed ETA
+            rateSamples.append((time: Date(), bytes: capped))
+            if rateSamples.count > 5 { rateSamples.removeFirst() }
+            var rate: Double? = nil
+            if rateSamples.count >= 3,
+               let first = rateSamples.first, let last = rateSamples.last {
+                let dt = last.time.timeIntervalSince(first.time)
+                if dt > 0 { rate = Double(last.bytes - first.bytes) / dt }
+            }
+
+            self.syncProgress = SyncProgress(transferred: capped,
+                                             expected: self.expectedSize,
+                                             startTime: self.syncStartTime,
+                                             bytesPerSec: rate)
+
+            let percent: Int = self.expectedSize > 0
+                ? Int(min(Double(capped) / Double(self.expectedSize), 1.0) * 100)
+                : -1
+            // Skip the ssh write when nothing changed (e.g. stalled transfer)
+            if self.lastWrittenProgress?.percent != percent || self.lastWrittenProgress?.bytesDone != capped {
+                self.lastWrittenProgress = (percent, capped)
+                self.writeSyncProgress(percent: percent, bytesDone: capped, bytesTotal: self.expectedSize)
             }
         }
     }
@@ -962,6 +1070,7 @@ final class SyncEngine: ObservableObject {
         duPollTimer?.invalidate()
         duPollTimer = nil
         duInFlight  = false
+        rateSamples = []
     }
 
     private func runDu(username: String, ip: String, completion: @escaping (Int64) -> Void) {
@@ -1028,9 +1137,11 @@ final class SyncEngine: ObservableObject {
         sshWrite("echo '{\"totalBytes\":\(totalBytes),\"totalFiles\":\(totalFiles)}' > \"\(escaped)/\(SignalFile.start)\"")
     }
 
-    private func writeSyncProgress(percent: Int) {
+    // Extended payload: bytesDone/bytesTotal let the Backup draw a bar + ETA.
+    // percent -1 / bytesTotal 0 = delta unknown (estimate pending or failed).
+    private func writeSyncProgress(percent: Int, bytesDone: Int64, bytesTotal: Int64) {
         let escaped = shellEscapeForDoubleQuotes(syncRemotePath)
-        sshWrite("echo '{\"percent\":\(percent)}' > \"\(escaped)/\(SignalFile.progress)\"")
+        sshWrite("echo '{\"percent\":\(percent),\"bytesDone\":\(bytesDone),\"bytesTotal\":\(bytesTotal)}' > \"\(escaped)/\(SignalFile.progress)\"")
     }
 
     private func writeSyncComplete(totalFiles: Int, totalBytes: Int64, duration: Int) {
@@ -1375,7 +1486,7 @@ final class SyncEngine: ObservableObject {
         NSLog("[Version] Running dry-run to identify changed files")
         let dryRunProc = Process()
         dryRunProc.executableURL = URL(fileURLWithPath: rsyncPath)
-        var dryRunArgs = ["-av", "--dry-run", "--out-format=%n", "--exclude=*~sync-v~*"]
+        var dryRunArgs = ["-av", "--dry-run", "--out-format=%n"] + RsyncExclusions.args
         if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
            !config.preferredInterfaceMAC.isEmpty {
             dryRunArgs.insert(contentsOf: ["-e", "ssh -b \(bindIP)"], at: 0)
@@ -1561,165 +1672,24 @@ while IFS= read -r f; do rm -rf "$f"; done
 
 }
 
-// MARK: - SSH reachability
-
-enum ReachabilityState {
-    case checking, reachable, unreachable
-}
-
-// Checks SSH connectivity using the same username + IP that rsync uses.
-// Fires immediately on startChecking(), then repeats every 3 s while the
-// dropdown is open. Stops completely — zero CPU — when the dropdown closes.
-final class SSHChecker: ObservableObject {
-    @Published var state: ReachabilityState? = nil
-
-    private var process: Process?
-    private var checkID = 0
-    private var timer:   Timer?
-    private var lastHandledVerifyNonce: String = ""  // Dedupe for manual mode verify requests
-
-    func startChecking(username: String, ip: String) {
-        guard !username.isEmpty, !ip.isEmpty else { stopChecking(); return }
-        stopChecking()
-        check(username: username, ip: ip)
-        timer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
-            self?.check(username: username, ip: ip)
-        }
-    }
-
-    func stopChecking() {
-        timer?.invalidate()
-        timer = nil
-        cancelInFlight()
-        // Defer state change off layout pass to avoid recursion
-        DispatchQueue.main.async { [weak self] in
-            self?.state = nil
-        }
-    }
-
-    private func check(username: String, ip: String) {
-        cancelInFlight()
-        DispatchQueue.main.async { [weak self] in
-            self?.state = .checking
-        }
-        let currentID = checkID
-        let isManualMode = ConfigStore.shared.config.discoveryMode == "manual"
-
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-
-        if isManualMode {
-            // Manual mode: read config + free space + check for verify request in one call
-            let cmd = "cat \"$HOME/Library/Application Support/Sync/config_backup.json\" 2>/dev/null || echo '{}'; echo '---DF---'; df -k ~ 2>/dev/null | awk 'NR==2 {print $4}'; echo '---VERIFY---'; cat ~/Sync/\(SignalFile.verifyRequest) 2>/dev/null || echo ''"
-            var manualArgs = ["-o", "ConnectTimeout=2", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no"]
-            if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
-               !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
-                manualArgs.insert(contentsOf: ["-b", bindIP], at: 0)
-            }
-            manualArgs.append(contentsOf: ["\(username)@\(ip)", cmd])
-            proc.arguments = manualArgs
-            let pipe = Pipe()
-            proc.standardOutput = pipe
-            proc.standardError = FileHandle.nullDevice
-            proc.terminationHandler = { [weak self] p in
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                Task { @MainActor [weak self] in
-                    guard let self, self.checkID == currentID else { return }
-                    self.process = nil
-
-                    if p.terminationStatus != 0 {
-                        // SSH failed — unreachable, but keep last-known config values
-                        self.state = .unreachable
-                        return
-                    }
-
-                    self.state = .reachable
-
-                    // Parse output: JSON config, then ---DF---, then free space KB
-                    let output = String(data: data, encoding: .utf8) ?? ""
-                    let parts = output.components(separatedBy: "---DF---")
-
-                    // Parse config JSON (only update if parse succeeds)
-                    if let jsonPart = parts.first?.trimmingCharacters(in: .whitespacesAndNewlines),
-                       let jsonData = jsonPart.data(using: .utf8),
-                       let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-                       let dest = json["destinationFolder"] as? String, !dest.isEmpty {
-                        let effectivePath = (json["effectivePath"] as? String) ?? dest
-                        let isFallback = !effectivePath.isEmpty && effectivePath != dest
-                        ConfigStore.shared.config.backupDestination = dest
-                        SyncEngine.shared.usingFallback = isFallback
-                    }
-                    // On parse failure: keep last-known values (no else branch needed)
-                    // Parse free space (only update if parse succeeds)
-                    if parts.count > 1 {
-                        let dfAndVerify = parts[1].components(separatedBy: "---VERIFY---")
-                        if let kbStr = dfAndVerify[0].trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: .newlines).first,
-                           let kb = Int64(kbStr) {
-                            SyncEngine.shared.manualModeFreeSpace = kb * 1024
-                        }
-                        // Parse verify request (manual mode only)
-                        if dfAndVerify.count > 1 {
-                            let verifyContent = dfAndVerify[1].trimmingCharacters(in: .whitespacesAndNewlines)
-                            if !verifyContent.isEmpty,
-                               let verifyData = verifyContent.data(using: .utf8),
-                               let verifyJson = try? JSONSerialization.jsonObject(with: verifyData) as? [String: Any],
-                               let nonce = verifyJson["nonce"] as? String, !nonce.isEmpty,
-                               nonce != self.lastHandledVerifyNonce {
-                                // Found a new verify request - trigger remote verify
-                                self.lastHandledVerifyNonce = nonce
-                                NSLog("[SSHChecker] Manual mode verify request: nonce=%@", nonce)
-                                SyncEngine.shared.triggerRemoteVerify()
-                            }
-                        }
-                    }
-                }
-            }
-            process = proc
-            DispatchQueue.global(qos: .utility).async { try? proc.run() }
-        } else {
-            // Auto mode: simple exit test (TXT push handles config updates)
-            var autoArgs = ["-o", "ConnectTimeout=2", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no"]
-            if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
-               !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
-                autoArgs.insert(contentsOf: ["-b", bindIP], at: 0)
-            }
-            autoArgs.append(contentsOf: ["\(username)@\(ip)", "exit"])
-            proc.arguments = autoArgs
-            proc.standardOutput = FileHandle.nullDevice
-            proc.standardError = FileHandle.nullDevice
-            proc.terminationHandler = { [weak self] p in
-                Task { @MainActor [weak self] in
-                    guard let self, self.checkID == currentID else { return }
-                    self.state = p.terminationStatus == 0 ? .reachable : .unreachable
-                    self.process = nil
-                }
-            }
-            process = proc
-            DispatchQueue.global(qos: .utility).async { try? proc.run() }
-        }
-    }
-
-    private func cancelInFlight() {
-        checkID += 1
-        if let proc = process, proc.isRunning { proc.terminate() }
-        process = nil
-    }
-
-    deinit { stopChecking() }
-}
-
 // MARK: - Main view
+
+// SSH reachability moved to ConnectionStatus.swift — one shared checker
+// feeds the dot here AND the Settings "Secure Connection" label.
 
 struct MainView: View {
     @EnvironmentObject var store: ConfigStore
     @ObservedObject private var engine = SyncEngine.shared
-    @StateObject private var sshChecker = SSHChecker()
+    @ObservedObject private var connectionStatus = ConnectionStatus.shared
     @ObservedObject private var networkMonitor = NetworkMonitor.shared
+    @ObservedObject private var interfaceManager = NetworkInterfaceManager.shared
     @ObservedObject private var fsEventsWatcher = FSEventsWatcher.shared
     @ObservedObject private var bonjourBrowser = BonjourBrowser.shared
     @State private var viewState: MainViewState = .normal
     @State private var clockTick  = Date()
     @State private var clockTimer: Timer? = nil
+    @State private var syncEtaText = ""  // smoothed ETA; frozen on stall, never bounces
+    @State private var sourceFolderSummary: String? = nil  // "N files · X" — computed on popover open / sync done, never polled
     var onSettingsTapped: () -> Void = {}
 
     var body: some View {
@@ -1816,7 +1786,7 @@ struct MainView: View {
                         .font(.system(size: 12))
                         .foregroundColor(Color(white: 0.45))
                     Spacer()
-                    if let rs = sshChecker.state {
+                    if let rs = connectionStatus.state {
                         Circle()
                             .fill(reachDotColor(rs))
                             .frame(width: 6, height: 6)
@@ -1864,7 +1834,7 @@ struct MainView: View {
                             .multilineTextAlignment(.center)
                     }
 
-                    if let rs = sshChecker.state {
+                    if let rs = connectionStatus.state {
                         HStack(spacing: 4) {
                             Circle()
                                 .fill(reachDotColor(rs))
@@ -1910,9 +1880,9 @@ struct MainView: View {
                         Text("This Mac's IP")
                             .font(.system(size: 11))
                             .foregroundColor(Color(white: 0.45))
-                        Text(networkMonitor.currentIP == "—" ? "Not set" : networkMonitor.currentIP)
+                        Text(effectiveDisplayIP == "—" ? "Not set" : effectiveDisplayIP)
                             .font(.system(size: 28, weight: .bold, design: .monospaced))
-                            .foregroundColor(networkMonitor.currentIP == "—" ? Color(white: 0.38) : .white)
+                            .foregroundColor(effectiveDisplayIP == "—" ? Color(white: 0.38) : .white)
                             .minimumScaleFactor(0.6)
                             .lineLimit(1)
                     }
@@ -1928,8 +1898,11 @@ struct MainView: View {
             VStack(alignment: .leading, spacing: 10) {
                 infoRow(
                     label: "Last sync",
-                    value: engine.lastSyncTime.map { formatTime($0) } ?? "Never"
+                    value: lastSyncDisplay
                 )
+                if let summary = sourceFolderSummary {
+                    infoRow(label: "Source", value: summary)
+                }
                 if store.config.autoSyncEnabled, !engine.status.isActive,
                    let countdown = nextAutoSyncCountdown {
                     infoRow(label: "Next auto sync", value: countdown)
@@ -1942,7 +1915,36 @@ struct MainView: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
 
-            if let (text, color) = activeProgressText {
+            if engine.status == .syncing, let sp = engine.syncProgress {
+                Divider()
+                VStack(alignment: .leading, spacing: 5) {
+                    if sp.expected > 0 {
+                        ProgressView(value: min(Double(sp.transferred) / Double(sp.expected), 1.0))
+                            .progressViewStyle(.linear)
+                            .tint(.yellow)
+                        HStack {
+                            Text("Syncing… \(Int(min(Double(sp.transferred) / Double(sp.expected), 1.0) * 100))% · \(formatBytes(sp.transferred)) of \(formatBytes(sp.expected))")
+                            Spacer()
+                            Text(syncEtaText)
+                        }
+                        .font(.system(size: 11))
+                        .foregroundColor(.yellow)
+                    } else {
+                        // Delta unknown (estimate pending or failed) — honest indeterminate bar
+                        ProgressView()
+                            .progressViewStyle(.linear)
+                            .tint(.yellow)
+                        HStack {
+                            Text("Syncing… \(formatBytes(sp.transferred)) moved")
+                            Spacer()
+                        }
+                        .font(.system(size: 11))
+                        .foregroundColor(.yellow)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+            } else if let (text, color) = activeProgressText {
                 Divider()
                 Text(text)
                     .font(.system(size: 12))
@@ -2113,17 +2115,19 @@ struct MainView: View {
                     }
                 }
             }
-            sshChecker.startChecking(username: store.config.username, ip: store.config.destinationIP)
+            connectionStatus.start("main")
+            NetworkInterfaceManager.shared.refreshAvailability()  // fresh IP label
+            if sourceFolderSummary == nil { refreshSourceSummary() }
             if store.config.autoSyncEnabled { engine.startAutoSync() }
             startPushSyncIfNeeded()
         }
         .onDisappear {
-            sshChecker.stopChecking()
+            connectionStatus.stop("main")
             // Push Sync timer and watcher must survive view lifecycle — do not stop here
             clockTimer?.invalidate()
             clockTimer = nil
         }
-        .onChange(of: sshChecker.state) { newState in
+        .onChange(of: connectionStatus.state) { newState in
             if newState == .reachable, ConfigStore.shared.iconState == .error {
                 Task { @MainActor in
                     ConfigStore.shared.iconState = store.config.isReadyToSync ? .idle : .notConfigured
@@ -2137,11 +2141,31 @@ struct MainView: View {
                 }
             }
         }
+        .onChange(of: engine.syncProgress) { sp in
+            // ETA smoothing: update only while moving with a known total; freeze on
+            // stall (rate ≈ 0) rather than inflate; clear when the sync ends.
+            guard let sp, engine.status == .syncing, sp.expected > 0 else {
+                syncEtaText = ""
+                return
+            }
+            if let rate = sp.bytesPerSec {
+                if rate > 1024 {
+                    let remaining = Double(sp.expected - sp.transferred) / rate
+                    syncEtaText = formatETA(remaining)
+                }
+                // else: stalled — keep the last ETA text
+            } else if syncEtaText.isEmpty {
+                syncEtaText = "calculating…"
+            }
+        }
         .onChange(of: engine.status) { newStatus in
             if !newStatus.isActive, viewState == .confirmCancel {
                 Task { @MainActor in
                     viewState = .normal
                 }
+            }
+            if newStatus == .done {
+                refreshSourceSummary()  // source may have grown during the sync
             }
         }
         .onChange(of: store.config.pushSyncEnabled) { enabled in
@@ -2180,14 +2204,16 @@ struct MainView: View {
                     }
                 }
             }
-            sshChecker.startChecking(username: store.config.username, ip: store.config.destinationIP)
+            connectionStatus.start("main")
+            NetworkInterfaceManager.shared.refreshAvailability()  // fresh IP label
+            refreshSourceSummary()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSPopover.didCloseNotification)) { _ in
             Task { @MainActor in
                 clockTimer?.invalidate()
                 clockTimer = nil
             }
-            sshChecker.stopChecking()
+            connectionStatus.stop("main")
         }
         } // end else
     }
@@ -2287,7 +2313,62 @@ struct MainView: View {
         return Int(min(Double(sp.transferred) / Double(sp.expected), 1.0) * 100)
     }
 
-    private func reachDotColor(_ state: ReachabilityState) -> Color {
+    // Display the IP of the interface the engine actually binds with — same truth
+    // as getEffectiveIP (e.g. 169.254.x when the cable is selected), not the
+    // system's satisfied-path IP (which is Wi-Fi when the cable has no internet).
+    private var effectiveDisplayIP: String {
+        interfaceManager.getEffectiveIP() ?? "—"
+    }
+
+    // "<time> · 11 files · 41.3 MB" from the newest successful transfer_log entry.
+    // The log is persisted, so this survives relaunch (engine.lastSyncTime doesn't).
+    private var lastSyncDisplay: String {
+        let lastSuccess = store.transferLog.first(where: { $0.result == "success" })
+        let time: String? = engine.lastSyncTime.map { formatTime($0) }
+            ?? lastSuccess.map { formatTime($0.date) }
+        guard let time else { return "Never" }
+        guard let entry = lastSuccess else { return time }
+        let fileWord = entry.fileCount == 1 ? "file" : "files"
+        return "\(time) · \(entry.fileCount) \(fileWord) · \(formatBytes(entry.totalBytes))"
+    }
+
+    // Source folder contents — same enumeration the Backup uses for its sync-folder
+    // row (skipsHiddenFiles, consistent with the .DS_Store exclusion). Computed only
+    // when the popover opens or a sync completes; cached; zero cost while closed.
+    private func refreshSourceSummary() {
+        let folder = store.config.sourceFolder
+        guard !folder.isEmpty else {
+            sourceFolderSummary = nil
+            return
+        }
+        let path = folder.hasPrefix("~")
+            ? (NSHomeDirectory() as NSString).appendingPathComponent(String(folder.dropFirst()))
+            : folder
+        let url = URL(fileURLWithPath: path)
+        DispatchQueue.global(qos: .utility).async {
+            guard let enumerator = FileManager.default.enumerator(
+                at: url,
+                includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+                options: .skipsHiddenFiles
+            ) else {
+                Task { @MainActor in sourceFolderSummary = nil }
+                return
+            }
+            var count = 0
+            var totalBytes: Int64 = 0
+            for case let fileURL as URL in enumerator {
+                guard let res = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                      res.isRegularFile == true else { continue }
+                count += 1
+                totalBytes += Int64(res.fileSize ?? 0)
+            }
+            let fileWord = count == 1 ? "file" : "files"
+            let result = count == 0 ? "0 files · empty" : "\(count) \(fileWord) · \(formatBytes(totalBytes))"
+            Task { @MainActor in sourceFolderSummary = result }
+        }
+    }
+
+    private func reachDotColor(_ state: ConnectionState) -> Color {
         switch state {
         case .checking:    return Color(white: 0.55)
         case .reachable:   return .green
@@ -2295,7 +2376,7 @@ struct MainView: View {
         }
     }
 
-    private func reachLabel(_ state: ReachabilityState) -> String {
+    private func reachLabel(_ state: ConnectionState) -> String {
         switch state {
         case .checking:    return "Checking..."
         case .reachable:   return "Reachable"

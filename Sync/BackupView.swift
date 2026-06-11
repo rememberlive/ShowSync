@@ -30,15 +30,23 @@ final class NetworkInterfaceManager: ObservableObject {
     private let queue = DispatchQueue(label: "com.sync.interfacemanager", qos: .utility)
 
     private init() {
-        monitor.pathUpdateHandler = { [weak self] path in
-            self?.updateInterfaces(from: path)
+        monitor.pathUpdateHandler = { [weak self] _ in
+            self?.updateInterfaces()
         }
         monitor.start(queue: queue)
     }
 
     deinit { monitor.cancel() }
 
-    private func updateInterfaces(from path: NWPath) {
+    // Recompute availableInterfaces + usingFallback outside path-monitor events.
+    // Path events alone leave the flag stale: a picker change or a transient
+    // no-IPv4 moment could pin the "network not found" warning against a NIC
+    // that is present and working.
+    func refreshAvailability() {
+        queue.async { [weak self] in self?.updateInterfaces() }
+    }
+
+    private func updateInterfaces() {
         // Enumerate via getifaddrs directly (not NWPathMonitor.availableInterfaces)
         // to include interfaces with self-assigned IPs (169.254.x.x) for direct cables
         var ifaceDict: [String: NetworkInterface] = [:]  // Dedupe by BSD name
@@ -227,10 +235,10 @@ final class NetworkMonitor: ObservableObject {
         return nil
     }
 
+    // Self-filter truth for the browser: the IP of the interface we actually bind
+    // with (the old implementation read currentPath off a never-started monitor).
     static func getCurrentIP() -> String? {
-        let monitor = NWPathMonitor()
-        let currentPath = monitor.currentPath
-        return extractIPv4(from: currentPath)
+        NetworkInterfaceManager.shared.getEffectiveIP()
     }
 }
 
@@ -373,6 +381,10 @@ final class ReceiveMonitor: ObservableObject {
     @Published var state: ReceiveState    = .idle
     @Published var receivePercent: Int    = -1    // -1 = unknown; 0–100 during transfer
     @Published var receiveDetails: String = ""    // "4 files · 620 MB in 0:42"
+    @Published var receivedBytes: Int64   = -1    // from .sync_progress bytesDone; -1 = unknown
+    @Published var expectedBytes: Int64   = -1    // from .sync_progress bytesTotal; -1 = unknown
+    @Published var receiveRate: Double?   = nil   // smoothed bytes/sec (≥3 samples); nil = calculating
+    private var receiveRateSamples: [(time: Date, bytes: Int64)] = []
     @Published var usingFallback: Bool    = false // True when custom folder missing, using ~/Sync
     @Published var verifyStatus: BackupVerifyStatus = .idle  // Backup-initiated verify status
     // `lastReceivedTime` now lives on ConfigStore.config so it survives relaunch.
@@ -401,11 +413,21 @@ final class ReceiveMonitor: ObservableObject {
 
     private init() {}
 
+    // One reset for every transfer-progress field — called wherever a transfer
+    // ends (done/cancel/self-heal) so the bar resolves cleanly and never goes stale.
+    private func resetProgressFields() {
+        receivePercent = -1
+        receivedBytes  = -1
+        expectedBytes  = -1
+        receiveRate    = nil
+        receiveRateSamples = []
+    }
+
     func startMonitoring() {
         validateDestination()
         clearStaleSignalFiles()  // FIX 4: Clean slate on restart/launch
         state          = .idle
-        receivePercent = -1
+        resetProgressFields()
         receiveDetails = ""
         receivingStartTime = nil
         lastProgressTime = nil
@@ -517,7 +539,7 @@ final class ReceiveMonitor: ObservableObject {
         pollTimer      = nil
         isChecking     = false
         state          = .idle
-        receivePercent = -1
+        resetProgressFields()
         ConfigStore.shared.isSyncing = false
         removeVolumeObservers()
         // lastReceivedTime preserved across close/open
@@ -580,11 +602,21 @@ final class ReceiveMonitor: ObservableObject {
                     self?.isChecking      = false
                     guard let self else { return }
                     self.receiveDetails   = details
-                    self.receivePercent   = -1
+                    self.resetProgressFields()
                     self.state            = .done
                     ConfigStore.shared.config.lastReceivedTime = Date()
                     ConfigStore.shared.isSyncing = false
                     ConfigStore.shared.iconState = .success
+                    // Storage truth: re-publish free space — but delayed 5 s so the
+                    // snapshot measures settled reality, not mid-write APFS churn
+                    // (purgeable-space estimate drifts right after a transfer).
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                        // Re-check the guard: mode may have changed during the delay,
+                        // and updateTXTRecord would START the advertiser in manual mode.
+                        if ConfigStore.shared.config.discoveryMode == "automatic" {
+                            BonjourAdvertiser.shared.updateTXTRecord()
+                        }
+                    }
                     Task { @MainActor [weak self] in
                         try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
                         guard let self, self.state == .done else { return }
@@ -624,11 +656,26 @@ final class ReceiveMonitor: ObservableObject {
             if fm.fileExists(atPath: progressPath.path) {
                 let content = (try? String(contentsOf: progressPath, encoding: .utf8))?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let pct = Self.parseProgressFile(content)
+                let progress = Self.parseProgressFile(content)
                 Task { @MainActor [weak self] in
                     self?.isChecking = false
                     guard let self else { return }
-                    self.receivePercent = pct
+                    self.receivePercent = progress.percent
+                    self.receivedBytes  = progress.bytesDone
+                    self.expectedBytes  = progress.bytesTotal
+                    // Smoothed rate from bytesDone deltas (rolling ~5-sample window)
+                    if progress.bytesDone >= 0 {
+                        if let last = self.receiveRateSamples.last, progress.bytesDone < last.bytes {
+                            self.receiveRateSamples = []  // new transfer — reset window
+                        }
+                        self.receiveRateSamples.append((time: Date(), bytes: progress.bytesDone))
+                        if self.receiveRateSamples.count > 5 { self.receiveRateSamples.removeFirst() }
+                        if self.receiveRateSamples.count >= 3,
+                           let first = self.receiveRateSamples.first, let last = self.receiveRateSamples.last,
+                           last.time.timeIntervalSince(first.time) > 0 {
+                            self.receiveRate = Double(last.bytes - first.bytes) / last.time.timeIntervalSince(first.time)
+                        }
+                    }
                     self.lastProgressTime = Date()  // FIX 3: track progress
                     if self.state != .receiving {
                         self.state = .receiving
@@ -675,7 +722,7 @@ final class ReceiveMonitor: ObservableObject {
                             NSLog("[Backup] Self-heal: clearing stale signal files after %.0fs timeout", now.timeIntervalSince(startTime))
                             self.clearStaleSignalFiles()
                             self.state = .idle
-                            self.receivePercent = -1
+                            self.resetProgressFields()
                             self.receivingStartTime = nil
                             self.lastProgressTime = nil
                             ConfigStore.shared.isSyncing = false
@@ -683,7 +730,7 @@ final class ReceiveMonitor: ObservableObject {
                             return
                         }
                     }
-                    self.receivePercent = -1
+                    self.resetProgressFields()
                 }
                 return
             }
@@ -694,7 +741,7 @@ final class ReceiveMonitor: ObservableObject {
                 guard let self else { return }
                 if self.state == .receiving {
                     self.state          = .idle
-                    self.receivePercent = -1
+                    self.resetProgressFields()
                     self.receivingStartTime = nil
                     self.lastProgressTime = nil
                     ConfigStore.shared.isSyncing = false
@@ -720,11 +767,18 @@ final class ReceiveMonitor: ObservableObject {
         return "\(base) in \(duration / 60):\(String(format: "%02d", duration % 60))"
     }
 
-    private static func parseProgressFile(_ content: String) -> Int {
+    // Extended payload {"percent","bytesDone","bytesTotal"}; falls back to
+    // percent-only (older Mains) — bytes report -1 = unknown.
+    private static func parseProgressFile(_ content: String) -> (percent: Int, bytesDone: Int64, bytesTotal: Int64) {
         guard let data = content.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let pct  = (json["percent"] as? NSNumber)?.intValue else { return -1 }
-        return max(0, min(100, pct))
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return (-1, -1, -1)
+        }
+        let rawPct = (json["percent"] as? NSNumber)?.intValue ?? -1
+        let pct = rawPct < 0 ? -1 : max(0, min(100, rawPct))
+        let done = (json["bytesDone"] as? NSNumber)?.int64Value ?? -1
+        let total = (json["bytesTotal"] as? NSNumber)?.int64Value ?? -1
+        return (pct, done, total <= 0 ? -1 : total)
     }
 
     private static func parseVerifyResult(_ content: String) -> BackupVerifyStatus {
@@ -763,8 +817,10 @@ struct BackupView: View {
     @ObservedObject private var networkMonitor = NetworkMonitor.shared
     @StateObject private var storageMonitor = StorageMonitor()
     @ObservedObject private var receiveMonitor = ReceiveMonitor.shared
+    @ObservedObject private var interfaceManager = NetworkInterfaceManager.shared
     @ObservedObject private var advertiser  = BonjourAdvertiser.shared
     @State private var showQuitConfirm = false
+    @State private var backupEtaText = ""  // smoothed ETA; frozen on stall, never bounces
     var onSettingsTapped: () -> Void = {}
 
     private var isAutomatic: Bool { store.config.discoveryMode == "automatic" }
@@ -826,7 +882,7 @@ struct BackupView: View {
                             .foregroundColor(.white)
                             .minimumScaleFactor(0.6)
                             .lineLimit(1)
-                        Text(networkMonitor.currentIP == "—" ? "Not set" : networkMonitor.currentIP)
+                        Text(effectiveDisplayIP == "—" ? "Not set" : effectiveDisplayIP)
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundColor(Color(white: 0.55))
                     } else {
@@ -846,9 +902,9 @@ struct BackupView: View {
                     Text("This Mac's IP")
                         .font(.system(size: 11))
                         .foregroundColor(Color(white: 0.45))
-                    Text(networkMonitor.currentIP == "—" ? "Not set" : networkMonitor.currentIP)
+                    Text(effectiveDisplayIP == "—" ? "Not set" : effectiveDisplayIP)
                         .font(.system(size: 22, weight: .bold, design: .monospaced))
-                        .foregroundColor(networkMonitor.currentIP == "—" ? Color(white: 0.55) : .white)
+                        .foregroundColor(effectiveDisplayIP == "—" ? Color(white: 0.55) : .white)
                         .minimumScaleFactor(0.6)
                         .lineLimit(1)
                 }
@@ -909,7 +965,7 @@ struct BackupView: View {
                                     .foregroundColor(.red)
                             }
                         } else if receiveMonitor.state == .receiving {
-                            Text(receivingText)
+                            Text("Receiving…")
                                 .font(.system(size: 12))
                                 .foregroundColor(.yellow)
                                 .lineLimit(1)
@@ -924,6 +980,33 @@ struct BackupView: View {
                                 .foregroundColor(.white)
                                 .lineLimit(1)
                         }
+                    }
+                    if receiveMonitor.state == .receiving && storageMonitor.syncFolderWritable {
+                        VStack(alignment: .leading, spacing: 5) {
+                            if let frac = receiveFraction {
+                                ProgressView(value: frac)
+                                    .progressViewStyle(.linear)
+                                    .tint(.yellow)
+                                HStack {
+                                    Text(receiveByteText)
+                                    Spacer()
+                                    Text(backupEtaText)
+                                }
+                                .font(.system(size: 11))
+                                .foregroundColor(.yellow)
+                            } else {
+                                // Totals unknown (older Main or estimate failed) — honest indeterminate bar
+                                ProgressView()
+                                    .progressViewStyle(.linear)
+                                    .tint(.yellow)
+                                if receiveMonitor.receivedBytes >= 0 {
+                                    Text("\(formatBytes(receiveMonitor.receivedBytes)) received")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.yellow)
+                                }
+                            }
+                        }
+                        .padding(.top, 2)
                     }
                     if receiveMonitor.usingFallback {
                         Text("Syncing to ~/Sync until drive returns")
@@ -1019,6 +1102,7 @@ struct BackupView: View {
         .onAppear {
             storageMonitor.startStorageUpdates()
             receiveMonitor.startMonitoring()
+            NetworkInterfaceManager.shared.refreshAvailability()  // fresh IP label
             if store.config.username.isEmpty {
                 store.config.username = NSUserName()
             }
@@ -1031,12 +1115,31 @@ struct BackupView: View {
             receiveMonitor.stopAfterTransfer = false
             receiveMonitor.validateDestination()  // Recheck if drive returned
             if !receiveMonitor.isMonitoring { receiveMonitor.startMonitoring() }
+            NetworkInterfaceManager.shared.refreshAvailability()  // fresh IP label
         }
         .onReceive(NotificationCenter.default.publisher(for: NSPopover.didCloseNotification)) { _ in
             storageMonitor.stopStorageUpdates()
         }
         .onChange(of: store.pendingQuitConfirm) { newValue in
             if newValue { showQuitConfirm = true }
+        }
+        .onChange(of: receiveMonitor.receivedBytes) { bytes in
+            // ETA smoothing: update only while moving with a known total; freeze on
+            // stall rather than inflate; clear when the transfer ends.
+            guard receiveMonitor.state == .receiving, bytes >= 0,
+                  receiveMonitor.expectedBytes > 0 else {
+                backupEtaText = ""
+                return
+            }
+            if let rate = receiveMonitor.receiveRate {
+                if rate > 1024 {
+                    let remaining = Double(receiveMonitor.expectedBytes - bytes) / rate
+                    backupEtaText = formatETA(remaining)
+                }
+                // else: stalled — keep the last ETA text
+            } else if backupEtaText.isEmpty {
+                backupEtaText = "calculating…"
+            }
         }
         } // end else
     }
@@ -1053,9 +1156,31 @@ struct BackupView: View {
 
     private var isReceiving: Bool { receiveMonitor.state == .receiving }
 
-    private var receivingText: String {
-        let pct = receiveMonitor.receivePercent
-        return pct >= 0 ? "Receiving... \(pct)%" : "Receiving..."
+    // Display the IP of the interface the engine actually binds with — same truth
+    // as getEffectiveIP (e.g. 169.254.x when the cable is selected), not the
+    // system's satisfied-path IP (which is Wi-Fi when the cable has no internet).
+    private var effectiveDisplayIP: String {
+        interfaceManager.getEffectiveIP() ?? "—"
+    }
+
+    // Bar fraction: prefer byte-accurate (extended payload), fall back to percent,
+    // nil = indeterminate (older Main or estimate failed).
+    private var receiveFraction: Double? {
+        if receiveMonitor.receivedBytes >= 0, receiveMonitor.expectedBytes > 0 {
+            return min(Double(receiveMonitor.receivedBytes) / Double(receiveMonitor.expectedBytes), 1.0)
+        }
+        if receiveMonitor.receivePercent >= 0 {
+            return Double(receiveMonitor.receivePercent) / 100.0
+        }
+        return nil
+    }
+
+    private var receiveByteText: String {
+        let pct = Int((receiveFraction ?? 0) * 100)
+        if receiveMonitor.receivedBytes >= 0, receiveMonitor.expectedBytes > 0 {
+            return "\(pct)% · \(formatBytes(receiveMonitor.receivedBytes)) of \(formatBytes(receiveMonitor.expectedBytes))"
+        }
+        return "\(pct)%"
     }
 
     // MARK: - Row helpers

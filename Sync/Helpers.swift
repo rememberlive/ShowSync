@@ -17,6 +17,17 @@ func formatTime(_ date: Date) -> String {
     return f.string(from: date)
 }
 
+// Friendly transfer ETA: "Almost done" / "About 40 sec left" / "About 3 min left"
+func formatETA(_ seconds: Double) -> String {
+    if seconds < 10 { return "Almost done" }
+    if seconds < 90 {
+        let s = max(10, Int((seconds / 10).rounded() * 10))
+        return "About \(s) sec left"
+    }
+    let m = max(2, Int((seconds / 60).rounded()))
+    return "About \(m) min left"
+}
+
 func formatBytes(_ bytes: Int64) -> String {
     if bytes < 1_024           { return "\(bytes) bytes" }
     if bytes < 1_048_576       { return String(format: "%.1f KB", Double(bytes) / 1_024) }
@@ -39,6 +50,27 @@ enum SignalFile {
     static let renameRequest = ".sync_rename_request"
     static let verifyRequest = ".verify_request"
     static let verifyResult = ".verify_result"
+}
+
+// Shared rsync exclusions — the single source of comparison criteria for sync,
+// the pre-transfer preview, the version dry-run, and verify. All four must compare
+// the same file set, or verify can flag noise sync never promised to copy
+// (e.g. .DS_Store rewritten by Finder between sync and verify).
+enum RsyncExclusions {
+    static let patterns: [String] = [
+        "*~sync-v~*",   // inline version files
+        ".DS_Store",    // Finder metadata — churns whenever the user browses the folder
+        // Signal files live in the destination, so a push-direction rsync never
+        // compares them — excluded defensively in case one ever lands in a source.
+        SignalFile.start,
+        SignalFile.progress,
+        SignalFile.complete,
+        SignalFile.refused,
+        SignalFile.renameRequest,
+        SignalFile.verifyRequest,
+        SignalFile.verifyResult,
+    ]
+    static var args: [String] { patterns.map { "--exclude=\($0)" } }
 }
 
 // MARK: - Trust Foundation Types (Layer 1)

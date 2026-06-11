@@ -15,6 +15,7 @@ struct SettingsView: View {
     @ObservedObject private var engine = SyncEngine.shared
     @ObservedObject private var interfaceManager = NetworkInterfaceManager.shared
     @ObservedObject private var pairingService = BonjourPairingService.shared
+    @ObservedObject private var connectionStatus = ConnectionStatus.shared
     // Spec §5: callback to return to main dropdown view
     var onBack: () -> Void = {}
 
@@ -33,14 +34,11 @@ struct SettingsView: View {
     @State private var editingBackupName = ""
     @State private var renameState: RenameState = .idle
     @State private var renameGeneration: Int = 0
+    @State private var pendingRenameNewName = ""  // The name we asked the Backup to take
     @State private var destinationCheckState: DestinationCheckState = .idle
     @State private var hasConfirmedDestinationThisConnection = false
     @State private var manualModeFreeSpace: Int64 = 0  // Free space read via SSH for manual mode
     @State private var isPairingStarting = false
-    // Dedicated in-flight sentinel for the live SSH test. Must NOT reuse .checking as the
-    // sentinel: .checking is also the default sshConnectionState, which previously made the
-    // guard bail before the first test ever launched (stuck on "Checking…").
-    @State private var isSSHTestInFlight = false
 
     // Custom timing option editing state
     @State private var isEditingAutoInterval = false
@@ -58,7 +56,8 @@ struct SettingsView: View {
     private enum RenameState: Equatable {
         case idle
         case pending(oldName: String)
-        case sent       // SSH write succeeded, waiting for Bonjour re-advertise
+        case sent       // legacy: kept for the waiting-state checks; no longer set on success
+        case renamed    // SSH write succeeded — name settled optimistically; brief "✓ Renamed"
         case failed
     }
 
@@ -302,40 +301,51 @@ struct SettingsView: View {
             DispatchQueue.main.async {
                 localDiscoveryMode = store.config.discoveryMode
             }
-            if !store.config.username.isEmpty && !store.config.destinationIP.isEmpty {
-                runLiveSSHTest()
+            // Catch-up: the fallback warning may be stale if no path event fired
+            NetworkInterfaceManager.shared.refreshAvailability()
+            connectionStatus.start("settings")
+            // Manual mode: the shared checker may already be .reachable (started by
+            // MainView), so the transition-based onChange below would never fire —
+            // confirm the destination for this connection now.
+            if connectionStatus.state == .reachable && !isAutomatic && !hasConfirmedDestinationThisConnection {
+                hasConfirmedDestinationThisConnection = true
+                confirmBackupDestination()
             }
+        }
+        .onDisappear {
+            connectionStatus.stop("settings")
         }
         // onAppear only fires when SettingsView enters the hierarchy (gear tap while popover open).
         // willShowNotification fires every time the popover opens, catching the return-from-wizard case
         // where the popover was closed by the wizard and then reopened by the user.
         .onReceive(NotificationCenter.default.publisher(for: NSPopover.willShowNotification)) { _ in
-            if !store.config.username.isEmpty && !store.config.destinationIP.isEmpty {
-                runLiveSSHTest()
-            }
+            connectionStatus.start("settings")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSPopover.didCloseNotification)) { _ in
+            connectionStatus.stop("settings")
         }
         .onChange(of: store.config.destinationIP) { _ in
             Task { @MainActor in
-                store.sshConnectionState = .notConnected
                 hasConfirmedDestinationThisConnection = false
                 destinationCheckState = .idle
+                connectionStatus.recheck()
             }
         }
         .onChange(of: store.config.username) { _ in
             Task { @MainActor in
-                store.sshConnectionState = .notConnected
                 hasConfirmedDestinationThisConnection = false
                 destinationCheckState = .idle
+                connectionStatus.recheck()
             }
         }
-        .onChange(of: store.sshConnectionState) { newState in
-            // Manual mode: confirm destination on reconnect (transition INTO .connected)
-            if newState == .connected && !isAutomatic && !hasConfirmedDestinationThisConnection {
+        .onChange(of: connectionStatus.state) { newState in
+            // Manual mode: confirm destination on reconnect (transition INTO .reachable)
+            if newState == .reachable && !isAutomatic && !hasConfirmedDestinationThisConnection {
                 hasConfirmedDestinationThisConnection = true
                 confirmBackupDestination()
             }
             // Reset flag when connection drops
-            if newState == .notConnected || newState == .failed {
+            if newState == .unreachable {
                 hasConfirmedDestinationThisConnection = false
                 destinationCheckState = .idle
             }
@@ -365,6 +375,8 @@ struct SettingsView: View {
             }
         }
         .onChange(of: store.config.preferredInterfaceMAC) { _ in
+            // Recompute the availability flag now — path events alone leave it stale
+            NetworkInterfaceManager.shared.refreshAvailability()
             if isMain && isAutomatic {
                 BonjourBrowser.shared.restart()
             }
@@ -376,15 +388,17 @@ struct SettingsView: View {
             AppDelegate.shared?.applyAppPresence()
         }
         .onChange(of: bonjourBrowser.services) { services in
-            // Detect remote rename confirmation: same IP, new name
+            // Detect remote rename confirmation: the REQUESTED name must appear at the
+            // target IP. Never confirm by IP alone — the old advertisement can linger
+            // (lost mDNS goodbye) and an IP-only match would re-install the old name.
             let isWaitingForRename = { () -> Bool in
                 if case .pending = renameState { return true }
                 if case .sent = renameState { return true }
                 return false
             }()
-            guard isWaitingForRename else { return }
+            guard isWaitingForRename, !pendingRenameNewName.isEmpty else { return }
             let targetIP = store.config.destinationIP
-            if let match = services.first(where: { $0.resolvedIP == targetIP }) {
+            if let match = services.first(where: { $0.id == pendingRenameNewName && $0.resolvedIP == targetIP }) {
                 handleRenameConfirmed(newName: match.id)
             }
         }
@@ -668,6 +682,7 @@ struct SettingsView: View {
         renameGeneration += 1
         let thisGen = renameGeneration
         renameState = .pending(oldName: oldName)
+        pendingRenameNewName = newName
 
         let username = store.config.username
         let ip = store.config.destinationIP
@@ -695,8 +710,15 @@ struct SettingsView: View {
             Task { @MainActor in
                 guard renameGeneration == thisGen else { return }
                 if p.terminationStatus == 0 {
-                    // SSH write succeeded — wait for Bonjour re-advertise
-                    renameState = .sent
+                    // SSH write succeeded — optimistic update: Main validated the name with
+                    // the same rules the Backup applies, so show it immediately. Discovery
+                    // reconciles if the Backup ends up advertising something else.
+                    ConfigStore.shared.config.lastBackupDiscoveryName = newName
+                    BonjourBrowser.shared.noteRenamePending(oldName: oldName, newName: newName)
+                    // Row settles with the name: brief "✓ Renamed", then idle.
+                    renameState = .renamed
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    if renameState == .renamed && renameGeneration == thisGen { renameState = .idle }
                 } else {
                     // SSH write failed — show error
                     renameState = .failed
@@ -717,6 +739,9 @@ struct SettingsView: View {
             } else if case .sent = renameState {
                 renameState = .idle  // Soft timeout: just clear, name may have updated via onChange
             }
+            // Close the settling window: if the rename never materialized on the Backup,
+            // discovery may now reconcile the stored name back to what's really advertised.
+            BonjourBrowser.shared.clearRenameSettling()
         }
     }
 
@@ -724,6 +749,8 @@ struct SettingsView: View {
         renameGeneration += 1  // Cancel any pending timeouts
         store.config.lastBackupDiscoveryName = newName
         renameState = .idle
+        pendingRenameNewName = ""
+        BonjourBrowser.shared.clearRenameSettling()
     }
 
     // MARK: - Main Settings Section Content
@@ -1047,6 +1074,12 @@ struct SettingsView: View {
                                 .foregroundColor(.green)
                                 .lineLimit(1)
                             Spacer()
+                        case .renamed:
+                            Text("✓ Renamed")
+                                .font(.system(size: 12))
+                                .foregroundColor(.green)
+                                .lineLimit(1)
+                            Spacer()
                         case .failed:
                             Text(store.config.lastBackupDiscoveryName.isEmpty ? "Not set" : store.config.lastBackupDiscoveryName)
                                 .font(.system(size: 12))
@@ -1091,14 +1124,14 @@ struct SettingsView: View {
                     }
                 }
 
-                switch store.sshConnectionState {
+                switch connectionStatus.state ?? .checking {
                 case .checking:
                     Button("Checking...") {}
                         .buttonStyle(.borderedProminent)
                         .font(.system(size: 12))
                         .frame(maxWidth: .infinity)
                         .disabled(true)
-                case .connected:
+                case .reachable:
                     Button("Reset Connection") {
                         showResetConnectionConfirm = true
                     }
@@ -1106,7 +1139,7 @@ struct SettingsView: View {
                     .tint(.red)
                     .font(.system(size: 12))
                     .frame(maxWidth: .infinity)
-                case .notConnected, .failed:
+                case .unreachable:
                     // Layer 2b: Show pairing state if active
                     let isAdvertisingState: Bool = {
                         if case .advertising = pairingService.state { return true }
@@ -1183,7 +1216,7 @@ struct SettingsView: View {
                     pairingService.startPairing(targetBackupId: freshBackupId) { success, error in
                         isPairingStarting = false
                         if success {
-                            runLiveSSHTest()
+                            connectionStatus.recheck()
                         } else if let error {
                             NSLog("[Sync] Pairing failed: %@", error)
                         }
@@ -1226,7 +1259,7 @@ struct SettingsView: View {
                 get: { store.config.preferredInterfaceMAC },
                 set: { store.config.preferredInterfaceMAC = $0 }
             )) {
-                Text("Automatic").tag("")
+                Text("Automatic (first available)").tag("")
                 ForEach(interfaceManager.availableInterfaces) { iface in
                     let mac = macForInterface(name: iface.name)
                     Text(iface.displayLabel).tag(mac)
@@ -1241,13 +1274,13 @@ struct SettingsView: View {
                     Circle()
                         .fill(Color.orange)
                         .frame(width: 6, height: 6)
-                    Text("Preferred network unavailable — using automatic")
+                    Text("Selected network not found — reconnect it or switch to Automatic")
                         .font(.system(size: 11))
                         .foregroundColor(.orange)
                 }
             }
 
-            Text("Controls which network Sync connects over. Does not restrict Bonjour advertising.")
+            Text("Locks Sync to one network connection: discovery, pairing, and backups all use only this interface. Automatic picks the first available.")
                 .font(.system(size: 10))
                 .foregroundColor(Color(white: 0.45))
                 .fixedSize(horizontal: false, vertical: true)
@@ -1668,73 +1701,18 @@ struct SettingsView: View {
     // MARK: - SSH connection helpers
 
     private var sshStatusDotColor: Color {
-        switch store.sshConnectionState {
-        case .checking:     return Color(white: 0.55)
-        case .connected:    return .green
-        case .notConnected: return Color(white: 0.45)
-        case .failed:       return .red
+        switch connectionStatus.state ?? .checking {
+        case .checking:    return Color(white: 0.55)
+        case .reachable:   return .green
+        case .unreachable: return .red
         }
     }
 
     private var sshStatusLabel: String {
-        switch store.sshConnectionState {
-        case .checking:     return "Checking..."
-        case .connected:    return "Connected"
-        case .notConnected: return "Not set"
-        case .failed:       return "Connection check failed — try again"
-        }
-    }
-
-    private func runLiveSSHTest() {
-        // Bail only when a test is genuinely in flight — NOT when state == .checking
-        // (.checking is the initial default, which previously blocked the first launch).
-        guard !isSSHTestInFlight else { return }
-        let username = store.config.username
-        let ip = store.config.destinationIP
-        guard !username.isEmpty, !ip.isEmpty else { return }
-        isSSHTestInFlight = true
-        // Write to shared ConfigStore so the view re-renders live
-        // Only show "Checking..." if not already connected (silent background re-verify)
-        DispatchQueue.main.async {
-            if ConfigStore.shared.sshConnectionState != .connected {
-                ConfigStore.shared.sshConnectionState = .checking
-            }
-        }
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        // Bind the source to the chosen interface (same as SSHChecker and the sync engine)
-        // so the test reaches a bound/link-local peer the way the real sync does.
-        var args = [
-            "-o", "BatchMode=yes",
-            "-o", "ConnectTimeout=3",
-            "-o", "StrictHostKeyChecking=no"
-        ]
-        if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
-           !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
-            args.insert(contentsOf: ["-b", bindIP], at: 0)
-        }
-        args.append(contentsOf: ["\(username)@\(ip)", "exit"])
-        proc.arguments = args
-        proc.standardOutput = FileHandle.nullDevice
-        proc.standardError  = FileHandle.nullDevice
-        proc.terminationHandler = { p in
-            let ok = p.terminationStatus == 0
-            Task { @MainActor in
-                isSSHTestInFlight = false
-                if ok { ConfigStore.shared.config.sshKeysConfigured = true }
-                ConfigStore.shared.sshConnectionState = ok ? .connected : .notConnected
-            }
-        }
-        DispatchQueue.global(qos: .utility).async {
-            do {
-                try proc.run()
-            } catch {
-                NSLog("[Sync] live SSH test launch failed: %@", error.localizedDescription)
-                Task { @MainActor in
-                    isSSHTestInFlight = false
-                    ConfigStore.shared.sshConnectionState = .failed
-                }
-            }
+        switch connectionStatus.state ?? .checking {
+        case .checking:    return "Checking..."
+        case .reachable:   return "Connected"
+        case .unreachable: return "Not connected"
         }
     }
 
@@ -1832,6 +1810,6 @@ struct SettingsView: View {
         store.config.sshKeysConfigured           = false
         store.config.sshKeyConfiguredForIP       = ""
         store.config.sshKeyConfiguredForUsername = ""
-        runLiveSSHTest()
+        connectionStatus.recheck()
     }
 }
