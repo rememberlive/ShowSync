@@ -161,6 +161,9 @@ final class BonjourAdvertiser: ObservableObject {
         let identity = ConfigStore.shared.identity
         txt["backupId"] = identity.deviceId
         if let fp = getSSHFingerprint() { txt["backupFP"] = fp }
+        // Identity: the account name the Main must ssh in as — broadcast so the
+        // Main never types it (auto-username).
+        txt["username"] = NSUserName()
 
         if !pairAckDeviceId.isEmpty {
             txt["pairAck"] = pairAckDeviceId
@@ -207,6 +210,7 @@ struct DiscoveredBackup: Identifiable, Equatable {
     var isReachableOnSelectedInterface: Bool = true
     var backupDeviceId: String = ""
     var backupFingerprint: String = ""
+    var username: String = ""  // Backup's macOS account name ("" = older Backup, no broadcast)
 
     var isUsingFallback: Bool {
         !effectiveDestinationPath.isEmpty && effectiveDestinationPath != destinationPath
@@ -380,6 +384,7 @@ final class BonjourBrowser: ObservableObject {
             let freeBytes = Int64(txt["free"] ?? "0") ?? 0
             let backupId = txt["backupId"] ?? ""
             let backupFP = txt["backupFP"] ?? ""
+            let backupUsername = txt["username"] ?? ""  // "" = older Backup
 
             if let currentIP = getCurrentIP(), resolvedIP == currentIP {
                 return
@@ -394,7 +399,8 @@ final class BonjourBrowser: ObservableObject {
                 freeSpaceBytes: freeBytes,
                 isReachableOnSelectedInterface: isReachable,
                 backupDeviceId: backupId,
-                backupFingerprint: backupFP
+                backupFingerprint: backupFP,
+                username: backupUsername
             )
 
             // A different service name resolving to the same IP + hostname is a stale
@@ -424,7 +430,9 @@ final class BonjourBrowser: ObservableObject {
             let currentDestIP = ConfigStore.shared.config.destinationIP
             if !currentDestIP.isEmpty {
                 if let targetedService = services.first(where: { $0.resolvedIP == currentDestIP }) {
-                    isCurrentPeerReachable = targetedService.isReachableOnSelectedInterface
+                    if isCurrentPeerReachable != targetedService.isReachableOnSelectedInterface {
+                        isCurrentPeerReachable = targetedService.isReachableOnSelectedInterface
+                    }
                     if !isCurrentPeerReachable {
                         ConfigStore.shared.config.destinationIP = ""
                         ConfigStore.shared.config.backupHostname = ""
@@ -469,8 +477,14 @@ final class BonjourBrowser: ObservableObject {
                 ConfigStore.shared.config.destinationIP = backup.resolvedIP
                 ConfigStore.shared.config.backupHostname = backup.hostname
             }
-            ConfigStore.shared.config.backupDestination = backup.destinationPath
-            SyncEngine.shared.usingFallback = backup.isUsingFallback
+            // Write-on-change: this runs on every matched resolve — unguarded writes
+            // would re-render every ConfigStore observer and schedule config saves.
+            if ConfigStore.shared.config.backupDestination != backup.destinationPath {
+                ConfigStore.shared.config.backupDestination = backup.destinationPath
+            }
+            if SyncEngine.shared.usingFallback != backup.isUsingFallback {
+                SyncEngine.shared.usingFallback = backup.isUsingFallback
+            }
             // Adopt the advertised name — except while a rename is settling: the old
             // advertisement may still resolve, and re-adopting its name would clobber
             // the optimistic new name (old-name flashback / ping-pong).
@@ -478,7 +492,13 @@ final class BonjourBrowser: ObservableObject {
                 && backup.id != renameSettlingOldName {
                 ConfigStore.shared.config.lastBackupDiscoveryName = backup.id
             }
-            isCurrentPeerReachable = true
+            // Auto-username: the Backup broadcasts its account name — in automatic
+            // mode the broadcast wins (only the Backup knows its own account).
+            // Guarded: no churn, and "" (older Backup) never overwrites.
+            if !backup.username.isEmpty && config.username != backup.username {
+                ConfigStore.shared.config.username = backup.username
+            }
+            if !isCurrentPeerReachable { isCurrentPeerReachable = true }
         }
     }
 

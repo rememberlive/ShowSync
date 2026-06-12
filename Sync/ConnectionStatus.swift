@@ -131,8 +131,14 @@ final class ConnectionStatus: ObservableObject {
                        let dest = json["destinationFolder"] as? String, !dest.isEmpty {
                         let effectivePath = (json["effectivePath"] as? String) ?? dest
                         let isFallback = !effectivePath.isEmpty && effectivePath != dest
-                        ConfigStore.shared.config.backupDestination = dest
-                        SyncEngine.shared.usingFallback = isFallback
+                        // Write-on-change: this runs every 3 s — unguarded writes would
+                        // re-render every observer and schedule a config save per tick.
+                        if ConfigStore.shared.config.backupDestination != dest {
+                            ConfigStore.shared.config.backupDestination = dest
+                        }
+                        if SyncEngine.shared.usingFallback != isFallback {
+                            SyncEngine.shared.usingFallback = isFallback
+                        }
                     }
                     // On parse failure: keep last-known values (no else branch needed)
                     // Parse free space (only update if parse succeeds)
@@ -140,7 +146,9 @@ final class ConnectionStatus: ObservableObject {
                         let dfAndVerify = parts[1].components(separatedBy: "---VERIFY---")
                         if let kbStr = dfAndVerify[0].trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: .newlines).first,
                            let kb = Int64(kbStr) {
-                            SyncEngine.shared.manualModeFreeSpace = kb * 1024
+                            if SyncEngine.shared.manualModeFreeSpace != kb * 1024 {
+                                SyncEngine.shared.manualModeFreeSpace = kb * 1024
+                            }
                         }
                         // Parse verify request (manual mode only)
                         if dfAndVerify.count > 1 {

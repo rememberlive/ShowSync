@@ -105,8 +105,15 @@ final class NetworkInterfaceManager: ObservableObject {
         }
 
         Task { @MainActor [weak self] in
-            self?.availableInterfaces = interfaces
-            self?.usingFallback = !preferredMAC.isEmpty && !preferredAvailable
+            // Write-on-change: path events + popover-open refreshes often re-deliver
+            // identical lists — don't republish them.
+            if self?.availableInterfaces != interfaces {
+                self?.availableInterfaces = interfaces
+            }
+            let newFallback = !preferredMAC.isEmpty && !preferredAvailable
+            if self?.usingFallback != newFallback {
+                self?.usingFallback = newFallback
+            }
             if self?.usingFallback == true {
                 if ConfigStore.shared.iconState != .syncing && ConfigStore.shared.iconState != .receiving {
                     ConfigStore.shared.iconState = .warning
@@ -277,12 +284,15 @@ final class StorageMonitor: ObservableObject {
             free = attrs?[.systemFreeSize] as? Int64 ?? 0
         }
         let gb = Double(free) / 1_073_741_824
+        let newValue: String
         if gb >= 1.0 {
-            storageString = String(format: "%.1f GB free", gb)
+            newValue = String(format: "%.1f GB free", gb)
         } else {
             let mb = Double(free) / 1_048_576
-            storageString = String(format: "%.1f MB free", mb)
+            newValue = String(format: "%.1f MB free", mb)
         }
+        // Write-on-change: 1 s timer — identical strings must not republish
+        if storageString != newValue { storageString = newValue }
     }
 
     private func updateSyncFolder() {
@@ -295,7 +305,9 @@ final class StorageMonitor: ObservableObject {
             let writable = FileManager.default.createFile(atPath: testFile.path, contents: Data())
             if writable { try? FileManager.default.removeItem(at: testFile) }
             guard writable else {
-                Task { @MainActor in self.syncFolderWritable = false }
+                Task { @MainActor in
+                    if self.syncFolderWritable { self.syncFolderWritable = false }
+                }
                 return
             }
             guard let enumerator = FileManager.default.enumerator(
@@ -304,8 +316,8 @@ final class StorageMonitor: ObservableObject {
                 options: .skipsHiddenFiles
             ) else {
                 Task { @MainActor in
-                    self.syncFolderWritable = true
-                    self.syncFolderString = "0 files · empty"
+                    if !self.syncFolderWritable { self.syncFolderWritable = true }
+                    if self.syncFolderString != "0 files · empty" { self.syncFolderString = "0 files · empty" }
                 }
                 return
             }
@@ -328,8 +340,9 @@ final class StorageMonitor: ObservableObject {
             let fileWord = count == 1 ? "file" : "files"
             let result = count == 0 ? "0 files · empty" : "\(count) \(fileWord) · \(sizeStr)"
             Task { @MainActor in
-                self.syncFolderWritable = true
-                self.syncFolderString = result
+                // Write-on-change: 1 s timer — identical values must not republish
+                if !self.syncFolderWritable { self.syncFolderWritable = true }
+                if self.syncFolderString != result { self.syncFolderString = result }
             }
         }
     }
@@ -660,9 +673,11 @@ final class ReceiveMonitor: ObservableObject {
                 Task { @MainActor [weak self] in
                     self?.isChecking = false
                     guard let self else { return }
-                    self.receivePercent = progress.percent
-                    self.receivedBytes  = progress.bytesDone
-                    self.expectedBytes  = progress.bytesTotal
+                    // Write-on-change: 0.5 s poll vs 1 s payload cadence — every other
+                    // tick re-reads identical values.
+                    if self.receivePercent != progress.percent { self.receivePercent = progress.percent }
+                    if self.receivedBytes != progress.bytesDone { self.receivedBytes = progress.bytesDone }
+                    if self.expectedBytes != progress.bytesTotal { self.expectedBytes = progress.bytesTotal }
                     // Smoothed rate from bytesDone deltas (rolling ~5-sample window)
                     if progress.bytesDone >= 0 {
                         if let last = self.receiveRateSamples.last, progress.bytesDone < last.bytes {

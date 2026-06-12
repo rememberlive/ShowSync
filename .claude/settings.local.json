@@ -127,7 +127,8 @@
       "Bash(dd if=/dev/zero of=/tmp/prog_src/new.bin bs=1024 count=50)",
       "Bash(sed -n '1,12p')",
       "Bash(sed -n '192,215p' Sync/BonjourDiscovery.swift)",
-      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_truth-sweep.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_truth-sweep.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_auto-username.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
     ]
   }
 }

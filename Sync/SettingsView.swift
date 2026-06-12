@@ -463,6 +463,11 @@ struct SettingsView: View {
                             store.config.lastBackupDiscoveryName = service.id
                             store.config.lastBackupIP = service.resolvedIP
                         }
+                        // Auto-username: adopt the Backup's broadcast account name
+                        // ("" = older Backup → keep whatever is typed).
+                        if !service.username.isEmpty && store.config.username != service.username {
+                            store.config.username = service.username
+                        }
                         // Set fallback state from discovered service
                         SyncEngine.shared.usingFallback = service.isUsingFallback
                     } label: {
@@ -667,6 +672,15 @@ struct SettingsView: View {
 
     // MARK: - Remote rename helpers
 
+    // Auto-username: true when the selected Backup broadcasts its account name in
+    // automatic mode — the row is then read-only ("" = older Backup → editable).
+    private var usernameIsBroadcast: Bool {
+        guard isAutomatic else { return false }
+        let broadcast = bonjourBrowser.services
+            .first(where: { $0.resolvedIP == store.config.destinationIP })?.username ?? ""
+        return !broadcast.isEmpty
+    }
+
     private var isValidRenameInput: Bool {
         let t = editingBackupName.trimmingCharacters(in: .whitespaces)
         guard !t.isEmpty, t.utf8.count <= 63 else { return false }
@@ -802,7 +816,19 @@ struct SettingsView: View {
                     .font(.system(size: 12))
                     .foregroundColor(labelColor)
                 Spacer()
-                if isEditingUsername {
+                if usernameIsBroadcast {
+                    // Automatic mode + Backup broadcasts its account name: the
+                    // broadcast is the truth — nothing to type, nothing to edit.
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text(store.config.username)
+                            .font(.system(size: 12))
+                            .foregroundColor(.white)
+                            .lineLimit(1)
+                        Text("set by Backup")
+                            .font(.system(size: 9))
+                            .foregroundColor(Color(white: 0.45))
+                    }
+                } else if isEditingUsername {
                     TextField("Username", text: $editingUsername)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 100)

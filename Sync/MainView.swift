@@ -106,6 +106,7 @@ final class SyncEngine: ObservableObject {
     @Published var syncProgress: SyncProgress? = nil
     @Published var fallbackNotice: String? = nil  // Calm notice when fallback to ~/Sync
     @Published var lowSpaceNotice: String? = nil  // Notice when Backup refuses due to low space
+    @Published var syncBlockedNotice: String? = nil  // Why a sync request was refused (was a silent return)
     @Published var usingFallback: Bool = false    // True when sync redirected to ~/Sync due to unavailable drive
     @Published var manualModeFreeSpace: Int64 = 0 // Free space from manual-mode config poll (bytes)
 
@@ -149,16 +150,29 @@ final class SyncEngine: ObservableObject {
     // Phase 1 always runs a dry run to get accurate totals and show "Preparing...".
     // Phase 2 starts the real transfer once totals are known (skipped in preview mode).
     func sync(config: Config, isAuto: Bool = false, isPush: Bool = false) {
-        guard config.isReadyToSync else { return }
-        guard !status.isActive else { return }
-        // Interface isolation: in automatic mode, refuse sync if peer not reachable on bound interface
-        // Manual mode bypasses this check (user explicitly entered the IP)
+        guard config.isReadyToSync else {
+            surfaceBlockedNotice(
+                config.sourceFolder.isEmpty ? "Can't sync — choose a source folder"
+                : config.destinationIP.isEmpty ? "Can't sync — no Backup selected"
+                : config.username.isEmpty ? "Can't sync — no Backup user set"
+                : "Can't sync — connection not yet set up")
+            return
+        }
+        guard !status.isActive else { return }  // UI already shows the active sync
+        // Interface isolation: in automatic mode, refuse sync if peer not reachable on
+        // bound interface. Reconciled with the live ssh probe: it binds -b to the chosen
+        // NIC, so a reachable ConnectionStatus is stronger proof than the browser
+        // heuristic. Manual mode bypasses this check (user explicitly entered the IP).
         if config.discoveryMode == "automatic" {
-            guard BonjourBrowser.shared.isCurrentPeerReachable else {
+            // sync() always runs on the main thread (button taps, main-runloop timers)
+            let sshReachable = MainActor.assumeIsolated { ConnectionStatus.shared.state == .reachable }
+            guard BonjourBrowser.shared.isCurrentPeerReachable || sshReachable else {
                 NSLog("[Sync] Refused: peer not reachable on selected interface")
+                surfaceBlockedNotice("Can't sync — Backup not reachable on selected network")
                 return
             }
         }
+        syncBlockedNotice = nil
         // Sync supersedes verify - cancel any in-flight verify before starting
         if verifyStatus == .verifying { cancelVerify() }
         isAutoSync         = isAuto
@@ -936,6 +950,15 @@ final class SyncEngine: ObservableObject {
         return 0
     }
 
+    // Transient "why the sync was refused" notice (lowSpaceNotice pattern) —
+    // replaces the old silent returns. Self-clears so the dropdown stays calm.
+    private func surfaceBlockedNotice(_ text: String) {
+        syncBlockedNotice = text
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
+            if self?.syncBlockedNotice == text { self?.syncBlockedNotice = nil }
+        }
+    }
+
     // MARK: - SSH du polling for byte-accurate progress
 
     private var expectedSize:      Int64 = 0
@@ -1050,10 +1073,11 @@ final class SyncEngine: ObservableObject {
                 if dt > 0 { rate = Double(last.bytes - first.bytes) / dt }
             }
 
-            self.syncProgress = SyncProgress(transferred: capped,
-                                             expected: self.expectedSize,
-                                             startTime: self.syncStartTime,
-                                             bytesPerSec: rate)
+            let newProgress = SyncProgress(transferred: capped,
+                                           expected: self.expectedSize,
+                                           startTime: self.syncStartTime,
+                                           bytesPerSec: rate)
+            if self.syncProgress != newProgress { self.syncProgress = newProgress }
 
             let percent: Int = self.expectedSize > 0
                 ? Int(min(Double(capped) / Double(self.expectedSize), 1.0) * 100)
@@ -1954,6 +1978,17 @@ struct MainView: View {
                     .padding(.vertical, 10)
             }
 
+            // Sync-refused notice (was a silent return inside sync())
+            if let notice = engine.syncBlockedNotice {
+                Divider()
+                Text(notice)
+                    .font(.system(size: 11))
+                    .foregroundColor(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 8)
+            }
+
             // Fallback notice (destination unwritable, fell back to ~/Sync)
             if let notice = engine.fallbackNotice {
                 Divider()
@@ -2011,10 +2046,7 @@ struct MainView: View {
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(!store.config.isReadyToSync || syncButtonDisabled ||
-                                  (store.config.discoveryMode == "automatic" && !bonjourBrowser.isCurrentPeerReachable))
-                        .help(!store.config.isReadyToSync ? "Set source folder and BACKUP IP in Settings first" :
-                              (store.config.discoveryMode == "automatic" && !bonjourBrowser.isCurrentPeerReachable) ? "Backup not reachable on selected interface" : "")
+                        .disabled(!store.config.isReadyToSync || syncButtonDisabled || !peerReachableForSync)
 
                         Button {
                             engine.verifyNow(config: store.config)
@@ -2025,6 +2057,13 @@ struct MainView: View {
                         .buttonStyle(.bordered)
                         .disabled(!store.config.isReadyToSync)
                         .help("Checksum every file to confirm Backup matches")
+                    }
+
+                    // Why Sync Now is disabled — inline, not hover-only
+                    if !syncButtonDisabled, let reason = syncDisabledReason {
+                        Text(reason)
+                            .font(.system(size: 10))
+                            .foregroundColor(Color(white: 0.5))
                     }
 
                     // Show verify result if any (not idle)
@@ -2280,6 +2319,24 @@ struct MainView: View {
         guard let next = engine.nextPushSyncDate else { return nil }
         let secs = max(0, next.timeIntervalSince(clockTick))
         return "in 0:\(String(format: "%02d", Int(secs)))"
+    }
+
+    // Reconciled automatic-mode reachability: browser heuristic OR a live
+    // bound-interface ssh probe — the probe binds -b to the chosen NIC, so a
+    // green ConnectionStatus is *stronger* proof of on-interface reachability.
+    private var peerReachableForSync: Bool {
+        guard store.config.discoveryMode == "automatic" else { return true }
+        return bonjourBrowser.isCurrentPeerReachable || connectionStatus.state == .reachable
+    }
+
+    // First failing readiness gate, in user-fixable order. nil = ready.
+    private var syncDisabledReason: String? {
+        if store.config.sourceFolder.isEmpty { return "Choose a source folder" }
+        if store.config.destinationIP.isEmpty { return "No Backup selected" }
+        if store.config.username.isEmpty { return "No Backup user set" }
+        if !store.config.sshKeysConfigured { return "Connection not yet set up" }
+        if !peerReachableForSync { return "Backup not reachable on selected network" }
+        return nil
     }
 
     // Sync Now button disabled when a sync is running OR in the brief post-sync cool-down.
