@@ -1152,6 +1152,18 @@ struct SettingsView: View {
             .padding(.bottom, 12)
         }
 
+        // Manual-mode setup hint: with only one of username/IP entered the Secure
+        // Connection section (and its setup button) is hidden — say what's missing.
+        if !isAutomatic && (store.config.username.isEmpty != store.config.destinationIP.isEmpty) {
+            Text(store.config.username.isEmpty
+                 ? "Enter the Backup's username to set up the connection"
+                 : "Enter the Backup's IP to set up the connection")
+                .font(.system(size: 10))
+                .foregroundColor(Color(white: 0.45))
+                .padding(.horizontal, 20)
+                .padding(.bottom, 12)
+        }
+
         if !store.config.username.isEmpty && !store.config.destinationIP.isEmpty {
             Divider()
 
@@ -1239,9 +1251,10 @@ struct SettingsView: View {
             .padding(.bottom, 12)
         }
 
-        // Layer 4: trust teardown — visible whenever a pairing exists, even when
-        // the Backup is offline or the destination was cleared (offline forget works).
-        if store.trustedPeers.contains(where: { $0.role == .backup }) {
+        // Layer 4: trust teardown — visible whenever a pairing OR a manual key
+        // setup exists, even when the Backup is offline or the destination was
+        // cleared (offline forget works).
+        if store.trustedPeers.contains(where: { $0.role == .backup }) || store.config.sshKeysConfigured {
             Divider()
             sectionHeader("Pairing")
             VStack(spacing: 8) {
@@ -1906,7 +1919,36 @@ struct SettingsView: View {
         // failure is logged, never queued (the Backup's own Forget is the remedy).
         let username = store.config.username
         let ip = store.config.destinationIP
-        if !username.isEmpty && !ip.isEmpty && connectionStatus.state == .reachable {
+        let hasPairedPeer = store.trustedPeers.contains(where: { $0.role == .backup })
+        if !username.isEmpty && !ip.isEmpty && connectionStatus.state == .reachable && !hasPairedPeer {
+            // Manual setup: no trust records exist on either side, so the signal/
+            // unpairPeer route can't clean the Backup — remove this Mac's key from
+            // its authorized_keys directly (mirror of the wizard's install),
+            // while we're still authorized.
+            let pubKeyPath = (NSHomeDirectory() as NSString).appendingPathComponent(".ssh/id_ed25519.pub")
+            let pubKey = (try? String(contentsOfFile: pubKeyPath, encoding: .utf8))?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !pubKey.isEmpty {
+                let remoteCmd = "if [ -f ~/.ssh/authorized_keys ]; then grep -vF '\(pubKey)' ~/.ssh/authorized_keys > ~/.ssh/authorized_keys.tmp; mv ~/.ssh/authorized_keys.tmp ~/.ssh/authorized_keys; chmod 600 ~/.ssh/authorized_keys; fi"
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+                proc.arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no",
+                                  "\(username)@\(ip)", remoteCmd]
+                proc.standardOutput = FileHandle.nullDevice
+                proc.standardError = FileHandle.nullDevice
+                proc.terminationHandler = { p in
+                    if p.terminationStatus != 0 {
+                        NSLog("[Sync] Forget (manual): key removal not delivered (exit %d) — Backup keeps the key", p.terminationStatus)
+                    }
+                    // Keypair deletion AFTER the removal attempt — it authenticates
+                    // with the key being deleted.
+                    Self.deleteLocalKeypair()
+                }
+                DispatchQueue.global(qos: .utility).async { try? proc.run() }
+            } else {
+                Self.deleteLocalKeypair()
+            }
+        } else if !username.isEmpty && !ip.isEmpty && connectionStatus.state == .reachable {
             let myId = store.identity.deviceId
             let nonce = UUID().uuidString
             let remotePath = store.config.backupDestination.isEmpty ? "~/Sync" : store.config.backupDestination

@@ -140,7 +140,10 @@
       "Bash(awk 'NR>=1596 && NR<=1640' Sync/SettingsView.swift)",
       "Bash(sed -n '264,284p' Sync/Config.swift)",
       "Bash(sed -n '118,162p' Sync/SettingsView.swift)",
-      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_layer4-forget.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_layer4-forget.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
+      "Bash(sed -n '135,160p' Sync/SSHKeyWizard.swift)",
+      "Bash(sed -n '536,546p' Sync/Config.swift)",
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_manual-forget.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
     ]
   }
 }
