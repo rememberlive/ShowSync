@@ -128,7 +128,19 @@
       "Bash(sed -n '1,12p')",
       "Bash(sed -n '192,215p' Sync/BonjourDiscovery.swift)",
       "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_truth-sweep.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
-      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_auto-username.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_auto-username.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
+      "Bash(sed -n '555,600p' Sync/Config.swift)",
+      "Bash(sed -n '200,240p' Sync/Helpers.swift)",
+      "Bash(sed -n '540,556p' Sync/Config.swift)",
+      "Bash(sed -n '160,180p' Sync/SettingsView.swift)",
+      "Bash(sed -n '1830,1846p' Sync/SettingsView.swift)",
+      "Bash(sed -n '84,105p' Sync/Helpers.swift)",
+      "Bash(sed -n '514,530p' Sync/Config.swift)",
+      "Bash(sed -n '130,166p' Sync/SettingsView.swift)",
+      "Bash(awk 'NR>=1596 && NR<=1640' Sync/SettingsView.swift)",
+      "Bash(sed -n '264,284p' Sync/Config.swift)",
+      "Bash(sed -n '118,162p' Sync/SettingsView.swift)",
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_layer4-forget.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
     ]
   }
 }

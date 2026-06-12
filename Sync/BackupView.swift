@@ -494,7 +494,9 @@ final class ReceiveMonitor: ObservableObject {
     func clearStaleSignalFiles() {
         let base = URL(fileURLWithPath: effectiveDestination)
         let fm = FileManager.default
-        let signalFiles = [SignalFile.start, SignalFile.progress, SignalFile.complete, SignalFile.refused, SignalFile.verifyRequest, SignalFile.verifyResult]
+        let signalFiles = [SignalFile.start, SignalFile.progress, SignalFile.complete, SignalFile.refused,
+                           SignalFile.renameRequest, SignalFile.unpairRequest,
+                           SignalFile.verifyRequest, SignalFile.verifyResult]
         for filename in signalFiles {
             let path = base.appendingPathComponent(filename)
             if fm.fileExists(atPath: path.path) {
@@ -600,6 +602,28 @@ final class ReceiveMonitor: ObservableObject {
                     DispatchQueue.main.async {
                         ConfigStore.shared.config.networkDiscoveryName = content
                         BonjourAdvertiser.shared.restart()
+                    }
+                }
+            }
+
+            // Layer 4: unpair request from Main — validate the deviceId against our
+            // trusted peers; on match, our own unpairPeer removes the Main's key from
+            // authorized_keys and logs the unpaired event. Mismatch: ignore (deleted).
+            let unpairPath = base.appendingPathComponent(SignalFile.unpairRequest)
+            if fm.fileExists(atPath: unpairPath.path) {
+                let content = (try? String(contentsOf: unpairPath, encoding: .utf8))?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                try? fm.removeItem(at: unpairPath) // Cleanup immediately
+                if let data = content.data(using: .utf8),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let mainId = json["mainId"] as? String, !mainId.isEmpty {
+                    DispatchQueue.main.async {
+                        if let peer = ConfigStore.shared.trustedPeers.first(where: { $0.peerDeviceId == mainId && $0.role == .main }) {
+                            _ = ConfigStore.shared.unpairPeer(peerId: peer.id)
+                            NSLog("[Backup] Forgot Main on its request: %@", mainId)
+                        } else {
+                            NSLog("[Backup] Ignored unpair request from unknown deviceId: %@", mainId)
+                        }
                     }
                 }
             }

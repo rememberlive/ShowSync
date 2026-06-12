@@ -48,6 +48,7 @@ enum SignalFile {
     static let complete = ".sync_complete"
     static let refused = ".sync_refused"
     static let renameRequest = ".sync_rename_request"
+    static let unpairRequest = ".sync_unpair_request"
     static let verifyRequest = ".verify_request"
     static let verifyResult = ".verify_result"
 }
@@ -67,6 +68,7 @@ enum RsyncExclusions {
         SignalFile.complete,
         SignalFile.refused,
         SignalFile.renameRequest,
+        SignalFile.unpairRequest,
         SignalFile.verifyRequest,
         SignalFile.verifyResult,
     ]

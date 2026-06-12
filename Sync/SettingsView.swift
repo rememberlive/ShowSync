@@ -20,7 +20,8 @@ struct SettingsView: View {
     var onBack: () -> Void = {}
 
     @State private var showRoleConfirm = false
-    @State private var showResetConnectionConfirm = false
+    @State private var showForgetBackupConfirm = false   // Main role: forget paired Backup
+    @State private var showForgetMainConfirm = false     // Backup role: forget paired Main
     @State private var showResetToDefaultsConfirm = false
     @State private var launchAtLoginError: String?
     @State private var localDiscoveryMode = "automatic"
@@ -142,9 +143,12 @@ struct SettingsView: View {
                                 // Register global hotkey for Main role
                                 GlobalHotkey.shared.register()
                             } else if currentRole == "main" && targetRole == "backup" {
-                                // Main → Backup: Stop global hotkey, start advertising
+                                // Main → Backup: stop global hotkey. The advertiser is
+                                // NOT started here — that used to bind it with the OLD
+                                // role's config (pre-setRole); rebuildPopover →
+                                // updateBonjourAdvertiser below starts it with the
+                                // backup config.
                                 GlobalHotkey.shared.unregister()
-                                BonjourAdvertiser.shared.start()
                             }
 
                             // Reset transient fallback state on any role switch
@@ -161,22 +165,34 @@ struct SettingsView: View {
                         }
                     }
                 )
-            } else if showResetConnectionConfirm {
+            } else if showForgetBackupConfirm {
                 InlineConfirm(
-                    title: "Reset Secure Connection?",
-                    message: "You will need to set up the connection again.",
-                    confirmLabel: "Reset",
+                    title: "Forget This Backup?",
+                    message: "Removes the pairing from this Mac and asks the Backup to forget it too. You'll need to pair again to sync.",
+                    confirmLabel: "Forget",
                     confirmColor: .red,
-                    onCancel: { showResetConnectionConfirm = false },
+                    onCancel: { showForgetBackupConfirm = false },
                     onConfirm: {
-                        showResetConnectionConfirm = false
-                        resetSSHKeys()
+                        showForgetBackupConfirm = false
+                        forgetBackup()
+                    }
+                )
+            } else if showForgetMainConfirm {
+                InlineConfirm(
+                    title: "Forget Paired Main?",
+                    message: "Removes the pairing from this Mac. The Main won't be able to back up here until you pair again.",
+                    confirmLabel: "Forget",
+                    confirmColor: .red,
+                    onCancel: { showForgetMainConfirm = false },
+                    onConfirm: {
+                        showForgetMainConfirm = false
+                        forgetPairedMain()
                     }
                 )
             } else if showResetToDefaultsConfirm {
                 InlineConfirm(
                     title: "Reset to Defaults?",
-                    message: "This will erase all settings, the backup pairing, and sync history, and return Sync to its first-launch state. Your synced files will NOT be deleted. This cannot be undone.",
+                    message: "This will erase all settings, the pairing, and sync history, and return Sync to its first-launch state. If the other Mac is reachable, it will forget this Mac too. Your synced files will NOT be deleted. This cannot be undone.",
                     confirmLabel: "Reset",
                     confirmColor: .red,
                     onCancel: { showResetToDefaultsConfirm = false },
@@ -382,6 +398,9 @@ struct SettingsView: View {
             }
             if !isMain {
                 BonjourAdvertiser.shared.restart()
+                // The pairing listener must re-bind to the new interface too —
+                // it's the one component nothing else restarts.
+                BonjourPairingService.shared.restartListening()
             }
         }
         .onChange(of: store.config.appPresence) { _ in
@@ -632,6 +651,16 @@ struct SettingsView: View {
     }
 
     private func performResetToDefaults() {
+        // 0. Tear down the pairing first (one teardown truth — same path as Forget).
+        // Without this, the wipe leaves the Backup still authorizing this Mac's key
+        // and holding a trust record for a deviceId that's about to be erased.
+        // The remote ask is a detached Process, so it survives the relaunch.
+        if isMain {
+            forgetBackup()
+        } else {
+            forgetPairedMain()
+        }
+
         // 1. Unregister Launch at Login if enabled (must happen before wipe)
         if store.config.launchAtLogin {
             try? SMAppService.mainApp.unregister()
@@ -1158,13 +1187,10 @@ struct SettingsView: View {
                         .frame(maxWidth: .infinity)
                         .disabled(true)
                 case .reachable:
-                    Button("Reset Connection") {
-                        showResetConnectionConfirm = true
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.red)
-                    .font(.system(size: 12))
-                    .frame(maxWidth: .infinity)
+                    // Connected — the status line + fingerprint above say it all;
+                    // "Forget This Backup" (Pairing section below) is the one
+                    // destructive action (Reset Connection removed — Forget supersedes).
+                    EmptyView()
                 case .unreachable:
                     // Layer 2b: Show pairing state if active
                     let isAdvertisingState: Bool = {
@@ -1208,6 +1234,24 @@ struct SettingsView: View {
                         pairingButtons
                     }
                 }
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 12)
+        }
+
+        // Layer 4: trust teardown — visible whenever a pairing exists, even when
+        // the Backup is offline or the destination was cleared (offline forget works).
+        if store.trustedPeers.contains(where: { $0.role == .backup }) {
+            Divider()
+            sectionHeader("Pairing")
+            VStack(spacing: 8) {
+                Button("Forget This Backup") {
+                    showForgetBackupConfirm = true
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
+                .font(.system(size: 12))
+                .frame(maxWidth: .infinity)
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 12)
@@ -1692,6 +1736,23 @@ struct SettingsView: View {
             .padding(.horizontal, 20)
             .padding(.bottom, 12)
 
+        // Layer 4: trust teardown — visible whenever a Main is paired
+        if store.trustedPeers.contains(where: { $0.role == .main }) {
+            Divider()
+            sectionHeader("Pairing")
+            VStack(spacing: 8) {
+                Button("Forget Paired Main") {
+                    showForgetMainConfirm = true
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
+                .font(.system(size: 12))
+                .frame(maxWidth: .infinity)
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 12)
+        }
+
         Divider()
 
         sectionHeader("Options")
@@ -1827,15 +1888,81 @@ struct SettingsView: View {
         }
     }
 
-    private func resetSSHKeys() {
+    // MARK: - Layer 4: trust teardown
+
+    // True clean slate: the keypair is part of the relationship being forgotten;
+    // re-pairing regenerates it via ensureSSHKeyExists.
+    private static func deleteLocalKeypair() {
         let home = NSHomeDirectory()
-        let privKey = (home as NSString).appendingPathComponent(".ssh/id_ed25519")
-        let pubKey  = (home as NSString).appendingPathComponent(".ssh/id_ed25519.pub")
-        try? FileManager.default.removeItem(atPath: privKey)
-        try? FileManager.default.removeItem(atPath: pubKey)
+        try? FileManager.default.removeItem(atPath: (home as NSString).appendingPathComponent(".ssh/id_ed25519"))
+        try? FileManager.default.removeItem(atPath: (home as NSString).appendingPathComponent(".ssh/id_ed25519.pub"))
+    }
+
+    // Main role: forget the paired Backup. Best-effort asks the Backup to forget
+    // us too (signal file over SSH while still trusted), then always tears down
+    // local trust + selection + keypair.
+    private func forgetBackup() {
+        // (a) Ask the Backup to forget us — only attempted while reachable; a
+        // failure is logged, never queued (the Backup's own Forget is the remedy).
+        let username = store.config.username
+        let ip = store.config.destinationIP
+        if !username.isEmpty && !ip.isEmpty && connectionStatus.state == .reachable {
+            let myId = store.identity.deviceId
+            let nonce = UUID().uuidString
+            let remotePath = store.config.backupDestination.isEmpty ? "~/Sync" : store.config.backupDestination
+            let destFile = "\(remotePath)/\(SignalFile.unpairRequest)"
+            let safeDestFile: String
+            if destFile.hasPrefix("~/") {
+                let remainder = String(destFile.dropFirst(2))
+                safeDestFile = "\"$HOME/\(shellEscapeForDoubleQuotes(remainder))\""
+            } else {
+                safeDestFile = "\"\(shellEscapeForDoubleQuotes(destFile))\""
+            }
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+            proc.arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no",
+                              "\(username)@\(ip)",
+                              "echo '{\"mainId\":\"\(myId)\",\"nonce\":\"\(nonce)\"}' > \(safeDestFile)"]
+            proc.standardOutput = FileHandle.nullDevice
+            proc.standardError = FileHandle.nullDevice
+            proc.terminationHandler = { p in
+                if p.terminationStatus != 0 {
+                    NSLog("[Sync] Forget: unpair request not delivered (exit %d) — Backup keeps its record", p.terminationStatus)
+                }
+                // Keypair deletion AFTER the write attempt — the write authenticates
+                // with this key; deleting first would race its own auth.
+                Self.deleteLocalKeypair()
+            }
+            DispatchQueue.global(qos: .utility).async { try? proc.run() }
+        } else {
+            NSLog("[Sync] Forget: Backup unreachable — local teardown only")
+            Self.deleteLocalKeypair()
+        }
+
+        // Reset transient pairing state — a stale .paired short-circuits the gate's
+        // pairing UI into a button-less "Paired with …" dead end.
+        BonjourPairingService.shared.cancelPairing()
+
+        // (b) Local teardown — always.
+        for peer in store.trustedPeers where peer.role == .backup {
+            _ = store.unpairPeer(peerId: peer.id)
+        }
         store.config.sshKeysConfigured           = false
         store.config.sshKeyConfiguredForIP       = ""
         store.config.sshKeyConfiguredForUsername = ""
-        connectionStatus.recheck()
+        store.config.destinationIP               = ""
+        store.config.backupHostname              = ""
+        store.config.lastBackupDiscoveryName     = ""
+        store.config.lastBackupIP                = ""
+    }
+
+    // Backup role: forget the paired Main — local only (unpairPeer also removes
+    // the Main's key from authorized_keys and logs the unpaired event).
+    private func forgetPairedMain() {
+        for peer in store.trustedPeers where peer.role == .main {
+            _ = store.unpairPeer(peerId: peer.id)
+        }
+        // Reset transient pairing state (stale .paired dead end; keeps listening)
+        BonjourPairingService.shared.cancelPairing()
     }
 }

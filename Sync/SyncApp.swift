@@ -160,8 +160,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if cfg.role == "backup" && cfg.discoveryMode == "automatic" {
             ConfigStore.shared.reloadIdentityFromDisk()
             BonjourAdvertiser.shared.start()
-            // Layer 2b: Also start listening for pairing requests
-            BonjourPairingService.shared.startListening()
+            // Layer 2b: listen for pairing requests — RE-bind every time this runs
+            // (role switch, mode toggle, launch). startListening alone is bind-once
+            // and would keep a listener stranded on a previously-resolved interface.
+            BonjourPairingService.shared.restartListening()
         } else {
             BonjourAdvertiser.shared.stop()
             BonjourPairingService.shared.stopListening()

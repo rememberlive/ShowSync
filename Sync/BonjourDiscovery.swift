@@ -723,7 +723,11 @@ final class BonjourPairingService: ObservableObject {
         isPairingInProgress = false
         DispatchQueue.main.async {
             if success {
-                self.state = .paired(peerName: self.targetBackupId)
+                // Display name, not the raw deviceId UUID
+                let displayName = BonjourBrowser.shared.services
+                    .first(where: { $0.backupDeviceId == self.targetBackupId })?.hostname
+                    ?? self.targetBackupId
+                self.state = .paired(peerName: displayName)
             } else {
                 self.state = .failed(reason: error ?? "Unknown error")
             }
@@ -781,8 +785,17 @@ final class BonjourPairingService: ObservableObject {
             browser = b
             DispatchQueue.main.async { self.state = .browsing }
         } catch {
-            // Silent failure for listening
+            // Bind failures must be visible — a silently dead listener means the
+            // Trust dialog never fires and nothing anywhere says why.
+            NSLog("[Pairing] Listener bind failed on %@: %@", iface.name, error.localizedDescription)
         }
+    }
+
+    // Fresh bind to the CURRENT preferred interface. startListening alone is
+    // bind-once (guard browser == nil), so interface changes need this.
+    func restartListening() {
+        stopListening()
+        startListening()
     }
 
     func stopListening() {
