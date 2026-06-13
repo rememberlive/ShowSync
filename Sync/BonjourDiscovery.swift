@@ -592,7 +592,7 @@ final class BonjourPairingService: ObservableObject {
         ensureSSHKeyExists { [weak self] keyOK in
             guard let self else { return }
             guard keyOK else {
-                self.finishPairing(success: false, error: "Could not generate SSH key")
+                self.finishPairing(success: false, error: "Couldn't set up the secure connection — please try again.")
                 return
             }
             self.startAdvertisingPairing()
@@ -629,7 +629,7 @@ final class BonjourPairingService: ObservableObject {
         }
 
         guard let fingerprint = getSSHFingerprint() else {
-            finishPairing(success: false, error: "Could not get key fingerprint")
+            finishPairing(success: false, error: "Couldn't set up the secure connection — please try again.")
             return
         }
 

@@ -1714,6 +1714,7 @@ struct MainView: View {
     @State private var clockTimer: Timer? = nil
     @State private var syncEtaText = ""  // smoothed ETA; frozen on stall, never bounces
     @State private var sourceFolderSummary: String? = nil  // "N files · X" — computed on popover open / sync done, never polled
+    @State private var connectionInfoHovering = false  // hover highlight on the Connection Info disclosure row
     var onSettingsTapped: () -> Void = {}
 
     var body: some View {
@@ -1821,6 +1822,9 @@ struct MainView: View {
             .buttonStyle(.plain)
             .padding(.horizontal, 20)
             .padding(.vertical, 9)
+            .background(Color.primary.opacity(connectionInfoHovering ? 0.06 : 0))
+            .onHover { connectionInfoHovering = $0 }
+            .animation(.easeInOut(duration: 0.12), value: connectionInfoHovering)
 
             if store.config.mainShowConnectionInfo {
                 Divider()

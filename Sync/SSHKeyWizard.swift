@@ -227,15 +227,21 @@ extension AppDelegate {
         popover.performClose(nil)
         NSApp.activate(ignoringOtherApps: true)
 
+        // Display only — strip the technical "SHA256:" prefix. The raw value
+        // (peerFingerprint) is stored/compared elsewhere and is untouched.
+        let codeDisplay = peerFingerprint.hasPrefix("SHA256:")
+            ? String(peerFingerprint.dropFirst("SHA256:".count))
+            : peerFingerprint
+
         let alert = NSAlert()
         alert.messageText = "Pairing Request"
         alert.informativeText = """
             "\(peerName)" wants to sync files to this Mac.
 
-            Fingerprint:
-            \(peerFingerprint)
+            Verification code:
+            \(codeDisplay)
 
-            Verify this fingerprint matches the Main Mac's Settings to ensure a secure connection.
+            Check this code matches the one shown on the Main Mac's Settings screen, to be sure it's really them.
             """
         alert.addButton(withTitle: "Trust")
         alert.addButton(withTitle: "Decline")

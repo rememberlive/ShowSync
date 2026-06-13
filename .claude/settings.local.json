@@ -149,7 +149,8 @@
       "Bash(sed -n '1253,1276p' Sync/SettingsView.swift)",
       "Bash(sed -n '1005,1021p' Sync/BackupView.swift)",
       "Bash(sed -n '960,966p' Sync/BackupView.swift)",
-      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_cosmetic-pass-1.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_cosmetic-pass-1.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_cosmetic-pass-2.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
     ]
   }
 }

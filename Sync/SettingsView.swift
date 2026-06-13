@@ -277,24 +277,10 @@ struct SettingsView: View {
                     // Main Settings - Collapsible sections
 
                     // Section 1: Connection
-                    Button {
+                    groupHeader("Connection",
+                                expanded: store.config.mainSettingsShowConnection) {
                         toggleConnectionSection()
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: store.config.mainSettingsShowConnection ? "chevron.down" : "chevron.right")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundColor(Color(white: 0.4))
-                                .frame(width: 12)
-                            Text("Connection")
-                                .font(.system(size: 12))
-                                .foregroundColor(Color(white: 0.45))
-                            Spacer()
-                        }
-                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 9)
 
                     if store.config.mainSettingsShowConnection {
                         connectionSectionContent
@@ -315,24 +301,10 @@ struct SettingsView: View {
                     Divider()
 
                     // Section 3: Behaviour
-                    Button {
+                    groupHeader("Behaviour",
+                                expanded: store.config.mainSettingsShowBehaviour) {
                         toggleBehaviourSection()
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: store.config.mainSettingsShowBehaviour ? "chevron.down" : "chevron.right")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundColor(Color(white: 0.4))
-                                .frame(width: 12)
-                            Text("Behaviour")
-                                .font(.system(size: 12))
-                                .foregroundColor(Color(white: 0.45))
-                            Spacer()
-                        }
-                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 9)
 
                     if store.config.mainSettingsShowBehaviour {
                         behaviourSectionContent
@@ -655,26 +627,11 @@ struct SettingsView: View {
         return ProcessInfo.processInfo.hostName.replacingOccurrences(of: ".local", with: "")
     }
 
-    // Collapsible-group header row (chevron + title), same style as the
-    // original hand-written Connection/Behaviour headers.
+    // Collapsible-group header row (chevron + title). One builder drives all
+    // eight headers (4 per role); GroupHeaderRow adds the native hover highlight.
     @ViewBuilder
     private func groupHeader(_ title: String, expanded: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(Color(white: 0.4))
-                    .frame(width: 12)
-                Text(title)
-                    .font(.system(size: 12))
-                    .foregroundColor(Color(white: 0.45))
-                Spacer()
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 20)
-        .padding(.vertical, 9)
+        GroupHeaderRow(title: title, expanded: expanded, action: action)
     }
 
     @ViewBuilder
@@ -1313,11 +1270,14 @@ struct SettingsView: View {
 
                 // Layer 2b: Show this Mac's fingerprint for verification during pairing
                 if let fp = getSSHFingerprint() {
+                    // Display only — strip the technical "SHA256:" prefix; the raw
+                    // value is broadcast/stored elsewhere and is untouched.
+                    let codeDisplay = fp.hasPrefix("SHA256:") ? String(fp.dropFirst("SHA256:".count)) : fp
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("This Mac's Fingerprint")
+                        Text("This Mac's Verification Code")
                             .font(.system(size: 10))
                             .foregroundColor(sectionHeaderColor)
-                        Text(fp)
+                        Text(codeDisplay)
                             .font(.system(size: 10, design: .monospaced))
                             .foregroundColor(labelColor)
                             .textSelection(.enabled)
@@ -2179,5 +2139,37 @@ struct SettingsView: View {
         }
         // Reset transient pairing state (stale .paired dead end; keeps listening)
         BonjourPairingService.shared.cancelPairing()
+    }
+}
+
+// Collapsible-group header row with a subtle native hover highlight (light grey
+// fill on hover — never blue, which is for selection). View-only; the tap action
+// and expansion logic are unchanged.
+private struct GroupHeaderRow: View {
+    let title: String
+    let expanded: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(Color(white: 0.4))
+                    .frame(width: 12)
+                Text(title)
+                    .font(.system(size: 12))
+                    .foregroundColor(Color(white: 0.45))
+                Spacer()
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 9)
+        .background(Color.primary.opacity(hovering ? 0.06 : 0))
+        .onHover { hovering = $0 }
+        .animation(.easeInOut(duration: 0.12), value: hovering)
     }
 }
