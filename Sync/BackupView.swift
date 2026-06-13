@@ -956,7 +956,7 @@ struct BackupView: View {
 
             // BACKUP User
             VStack(spacing: 4) {
-                Text("BACKUP User")
+                Text("Backup User")
                     .font(.system(size: 11))
                     .foregroundColor(Color(white: 0.45))
                 Text(NSUserName())
@@ -995,13 +995,14 @@ struct BackupView: View {
                         }
                         Spacer()
                         if !storageMonitor.syncFolderWritable {
-                            HStack(spacing: 3) {
+                            HStack(alignment: .top, spacing: 3) {
                                 Circle()
                                     .fill(Color.red)
                                     .frame(width: 6, height: 6)
                                 Text("Cannot write — see Settings")
                                     .font(.system(size: 11))
                                     .foregroundColor(.red)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
                         } else if receiveMonitor.state == .receiving {
                             Text("Receiving…")
@@ -1080,35 +1081,6 @@ struct BackupView: View {
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
-
-            Divider()
-
-            // About
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Version")
-                        .font(.system(size: 12))
-                        .foregroundColor(Color(white: 0.45))
-                    Spacer()
-                    Text(appVersion())
-                        .font(.system(size: 12))
-                        .foregroundColor(.white)
-                }
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("© RememberLive 2026")
-                        .font(.system(size: 12))
-                        .foregroundColor(Color(white: 0.45))
-                    Text("Designed and Programmed by Remember Chaitezvi")
-                        .font(.system(size: 12))
-                        .foregroundColor(Color(white: 0.45))
-                    Text("rememberlive.africa")
-                        .font(.system(size: 12))
-                        .foregroundColor(Color(white: 0.45))
-                }
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
 
             Divider()
 

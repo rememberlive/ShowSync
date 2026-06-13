@@ -58,7 +58,7 @@ extension AppDelegate {
 
     private func showWizardLaunchFailureAlert() {
         let alert = NSAlert()
-        alert.messageText     = "Could not start setup"
+        alert.messageText     = "Could Not Start Setup"
         alert.informativeText = "A required system tool failed to launch. Please try again."
         alert.addButton(withTitle: "OK")
         _ = alert.runModal()
@@ -197,7 +197,7 @@ extension AppDelegate {
 
     private func showSuccessAlert() {
         let alert = NSAlert()
-        alert.messageText     = "Secure connection established."
+        alert.messageText     = "Secure Connection Established"
         alert.informativeText = "You will never need to enter a password again."
         alert.addButton(withTitle: "Done")
         _ = alert.runModal()
@@ -205,7 +205,7 @@ extension AppDelegate {
 
     private func showFailureAndMaybeRetry() {
         let alert = NSAlert()
-        alert.messageText     = "Could not connect."
+        alert.messageText     = "Could Not Connect"
         alert.informativeText = "Check the IP address and password and try again."
         alert.addButton(withTitle: "Retry")
         alert.addButton(withTitle: "Cancel")

@@ -723,10 +723,18 @@ final class BonjourPairingService: ObservableObject {
         isPairingInProgress = false
         DispatchQueue.main.async {
             if success {
-                // Display name, not the raw deviceId UUID
-                let displayName = BonjourBrowser.shared.services
-                    .first(where: { $0.backupDeviceId == self.targetBackupId })?.hostname
-                    ?? self.targetBackupId
+                // Authoritative Backup display name — matches the dropdown title,
+                // rename field, and discovered-list row. Never the deviceId UUID.
+                let savedName = ConfigStore.shared.config.lastBackupDiscoveryName
+                let displayName: String
+                if !savedName.isEmpty {
+                    displayName = savedName
+                } else if let id = BonjourBrowser.shared.services
+                    .first(where: { $0.backupDeviceId == self.targetBackupId })?.id {
+                    displayName = id
+                } else {
+                    displayName = "the Backup"
+                }
                 self.state = .paired(peerName: displayName)
             } else {
                 self.state = .failed(reason: error ?? "Unknown error")

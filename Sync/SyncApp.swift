@@ -300,18 +300,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ? "arrow.down.circle"
             : "arrow.up.circle"
 
-        let color: NSColor
+        guard let base = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil) else { return }
+
+        // Resting states render as a TEMPLATE image so AppKit paints them in the
+        // menu bar's adaptive content colour — crisp white on a dark menu bar,
+        // black on a light one, inverting correctly when the menu is open.
+        // (A dim secondaryLabelColor tint got lost under show pressure.)
         switch state {
-        case .idle:          color = .secondaryLabelColor
-        case .notConfigured: color = .tertiaryLabelColor
-        case .syncing:       color = .systemYellow
-        case .receiving:     color = .systemYellow
-        case .success:       color = .systemGreen
-        case .warning:       color = .systemOrange
-        case .error:         color = .systemRed
+        case .idle, .notConfigured:
+            base.isTemplate = true
+            statusItem.button?.image = base
+            return
+        default:
+            break
         }
 
-        guard let base = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil) else { return }
+        // Active/alert states keep an explicit colour regardless of menu-bar appearance.
+        let color: NSColor
+        switch state {
+        case .syncing:   color = .systemYellow
+        case .receiving: color = .systemYellow
+        case .success:   color = .systemGreen
+        case .warning:   color = .systemOrange
+        case .error:     color = .systemRed
+        case .idle, .notConfigured: return  // handled above
+        }
+
         let symConfig = NSImage.SymbolConfiguration(paletteColors: [color])
         guard let tinted = base.withSymbolConfiguration(symConfig) else { return }
         tinted.isTemplate = false

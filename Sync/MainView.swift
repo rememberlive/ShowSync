@@ -1806,7 +1806,7 @@ struct MainView: View {
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundColor(Color(white: 0.4))
                         .frame(width: 12)
-                    Text("Connection info")
+                    Text("Connection Info")
                         .font(.system(size: 12))
                         .foregroundColor(Color(white: 0.45))
                     Spacer()
@@ -1828,7 +1828,7 @@ struct MainView: View {
                 VStack(spacing: 12) {
                     if store.config.discoveryMode == "automatic" {
                         VStack(spacing: 3) {
-                            Text("BACKUP Network Discovery")
+                            Text("Backup Network Discovery")
                                 .font(.system(size: 11))
                                 .foregroundColor(Color(white: 0.45))
                             Text(store.config.lastBackupDiscoveryName.isEmpty ? "Not set" : store.config.lastBackupDiscoveryName)
@@ -1839,7 +1839,7 @@ struct MainView: View {
                     }
 
                     VStack(spacing: 3) {
-                        Text("BACKUP User")
+                        Text("Backup User")
                             .font(.system(size: 11))
                             .foregroundColor(Color(white: 0.45))
                         Text(store.config.username.isEmpty ? "Not set" : store.config.username)
@@ -1849,7 +1849,7 @@ struct MainView: View {
                     }
 
                     VStack(spacing: 3) {
-                        Text("BACKUP IP")
+                        Text("Backup IP")
                             .font(.system(size: 11))
                             .foregroundColor(Color(white: 0.45))
                         Text(backupIPDisplay)
@@ -1870,7 +1870,7 @@ struct MainView: View {
                     }
 
                     VStack(spacing: 3) {
-                        Text("BACKUP Folder")
+                        Text("Backup Folder")
                             .font(.system(size: 11))
                             .foregroundColor(Color(white: 0.45))
                         if engine.usingFallback {
@@ -2072,35 +2072,6 @@ struct MainView: View {
                             .font(.system(size: 12))
                             .foregroundColor(engine.verifyStatus.color)
                     }
-                }
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-
-            Divider()
-
-            // About
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Version")
-                        .font(.system(size: 12))
-                        .foregroundColor(Color(white: 0.45))
-                    Spacer()
-                    Text(appVersion())
-                        .font(.system(size: 12))
-                        .foregroundColor(.white)
-                }
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("© RememberLive 2026")
-                        .font(.system(size: 12))
-                        .foregroundColor(Color(white: 0.45))
-                    Text("Designed and Programmed by Remember Chaitezvi")
-                        .font(.system(size: 12))
-                        .foregroundColor(Color(white: 0.45))
-                    Text("rememberlive.africa")
-                        .font(.system(size: 12))
-                        .foregroundColor(Color(white: 0.45))
                 }
             }
             .padding(.horizontal, 20)
@@ -2436,8 +2407,8 @@ struct MainView: View {
     private func reachLabel(_ state: ConnectionState) -> String {
         switch state {
         case .checking:    return "Checking..."
-        case .reachable:   return "Reachable"
-        case .unreachable: return "Not set"
+        case .reachable:   return "Connected"
+        case .unreachable: return "Not Connected"
         }
     }
 

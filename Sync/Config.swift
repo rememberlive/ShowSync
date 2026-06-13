@@ -41,6 +41,12 @@ struct Config {
     var mainShowConnectionInfo: Bool = false
     var mainSettingsShowConnection: Bool = false
     var mainSettingsShowBehaviour: Bool = false
+    var mainSettingsShowIdentity: Bool = false
+    var mainSettingsShowAbout: Bool = false
+    var backupSettingsShowConnection: Bool = false
+    var backupSettingsShowIdentity: Bool = false
+    var backupSettingsShowBehaviour: Bool = false
+    var backupSettingsShowAbout: Bool = false
     var sshKeysConfigured: Bool = false
     var sshKeyConfiguredForIP: String = ""
     var sshKeyConfiguredForUsername: String = ""
@@ -97,6 +103,9 @@ private struct MainConfig: Codable {
     var mainShowConnectionInfo: Bool = false
     var mainSettingsShowConnection: Bool = false
     var mainSettingsShowBehaviour: Bool = false
+    // Optional: added later — old config files lack the key (decode must not fail)
+    var mainSettingsShowIdentity: Bool? = nil
+    var mainSettingsShowAbout: Bool? = nil
     var sshKeysConfigured: Bool = false
     var sshKeyConfiguredForIP: String = ""
     var sshKeyConfiguredForUsername: String = ""
@@ -128,6 +137,11 @@ private struct BackupConfig: Codable {
     var minFreeSpaceGB: Int = 2
     var preferredInterface: String = ""
     var preferredInterfaceMAC: String = ""
+    // Optional: added later — old config files lack the keys (decode must not fail)
+    var backupSettingsShowConnection: Bool? = nil
+    var backupSettingsShowIdentity: Bool? = nil
+    var backupSettingsShowBehaviour: Bool? = nil
+    var backupSettingsShowAbout: Bool? = nil
 }
 
 private struct SharedConfig: Codable {
@@ -297,6 +311,8 @@ final class ConfigStore: ObservableObject {
                 mainShowConnectionInfo:     config.mainShowConnectionInfo,
                 mainSettingsShowConnection: config.mainSettingsShowConnection,
                 mainSettingsShowBehaviour:  config.mainSettingsShowBehaviour,
+                mainSettingsShowIdentity:   config.mainSettingsShowIdentity,
+                mainSettingsShowAbout:      config.mainSettingsShowAbout,
                 sshKeysConfigured:          config.sshKeysConfigured,
                 sshKeyConfiguredForIP:      config.sshKeyConfiguredForIP,
                 sshKeyConfiguredForUsername: config.sshKeyConfiguredForUsername,
@@ -335,7 +351,11 @@ final class ConfigStore: ObservableObject {
                 networkDiscoveryName: config.networkDiscoveryName,
                 minFreeSpaceGB:    max(1, config.minFreeSpaceGB),  // Floor of 1GB
                 preferredInterface: config.preferredInterface,
-                preferredInterfaceMAC: config.preferredInterfaceMAC
+                preferredInterfaceMAC: config.preferredInterfaceMAC,
+                backupSettingsShowConnection: config.backupSettingsShowConnection,
+                backupSettingsShowIdentity:   config.backupSettingsShowIdentity,
+                backupSettingsShowBehaviour:  config.backupSettingsShowBehaviour,
+                backupSettingsShowAbout:      config.backupSettingsShowAbout
             )
             do {
                 let data = try JSONEncoder().encode(b)
@@ -622,6 +642,8 @@ final class ConfigStore: ObservableObject {
         c.mainShowConnectionInfo    = m.mainShowConnectionInfo
         c.mainSettingsShowConnection = m.mainSettingsShowConnection
         c.mainSettingsShowBehaviour  = m.mainSettingsShowBehaviour
+        c.mainSettingsShowIdentity   = m.mainSettingsShowIdentity ?? false
+        c.mainSettingsShowAbout      = m.mainSettingsShowAbout ?? false
         c.sshKeysConfigured         = m.sshKeysConfigured
         c.sshKeyConfiguredForIP     = m.sshKeyConfiguredForIP
         c.sshKeyConfiguredForUsername = m.sshKeyConfiguredForUsername
@@ -664,6 +686,10 @@ final class ConfigStore: ObservableObject {
         c.discoveryMode    = b.discoveryMode.isEmpty ? "automatic" : b.discoveryMode
         c.networkDiscoveryName = b.networkDiscoveryName
         c.minFreeSpaceGB   = max(1, b.minFreeSpaceGB)  // Floor of 1GB
+        c.backupSettingsShowConnection = b.backupSettingsShowConnection ?? false
+        c.backupSettingsShowIdentity   = b.backupSettingsShowIdentity ?? false
+        c.backupSettingsShowBehaviour  = b.backupSettingsShowBehaviour ?? false
+        c.backupSettingsShowAbout      = b.backupSettingsShowAbout ?? false
         c.preferredInterface = b.preferredInterface
         c.preferredInterfaceMAC = b.preferredInterfaceMAC
         migrateInterfaceMACIfNeeded(&c)

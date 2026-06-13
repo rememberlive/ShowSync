@@ -143,7 +143,13 @@
       "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_layer4-forget.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
       "Bash(sed -n '135,160p' Sync/SSHKeyWizard.swift)",
       "Bash(sed -n '536,546p' Sync/Config.swift)",
-      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_manual-forget.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_manual-forget.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
+      "Bash(awk 'NR>=801 && NR<=1280 && \\(/sectionHeader\\\\\\(|if !store.config.username|if isAutomatic|interfacePickerSection|if store.trustedPeers|if !isAutomatic/\\)' Sync/SettingsView.swift)",
+      "Bash(sed -n '1130,1135p' Sync/SettingsView.swift)",
+      "Bash(sed -n '1253,1276p' Sync/SettingsView.swift)",
+      "Bash(sed -n '1005,1021p' Sync/BackupView.swift)",
+      "Bash(sed -n '960,966p' Sync/BackupView.swift)",
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_cosmetic-pass-1.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
     ]
   }
 }

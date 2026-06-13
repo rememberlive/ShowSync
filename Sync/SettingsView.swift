@@ -63,7 +63,7 @@ struct SettingsView: View {
     }
 
     private var isMain: Bool { store.config.role == "main" }
-    private var switchLabel: String { isMain ? "Switch to BACKUP" : "Switch to MAIN" }
+    private var switchLabel: String { isMain ? "Switch to Backup" : "Switch to Main" }
     private var switchRole: String  { isMain ? "backup" : "main" }
     private var isAutomatic: Bool   { localDiscoveryMode == "automatic" }
 
@@ -73,7 +73,20 @@ struct SettingsView: View {
             store.config.mainSettingsShowConnection = false
         } else {
             store.config.mainSettingsShowConnection = true
+            store.config.mainSettingsShowIdentity = false
             store.config.mainSettingsShowBehaviour = false
+            store.config.mainSettingsShowAbout = false
+        }
+    }
+
+    private func toggleIdentitySection() {
+        if store.config.mainSettingsShowIdentity {
+            store.config.mainSettingsShowIdentity = false
+        } else {
+            store.config.mainSettingsShowIdentity = true
+            store.config.mainSettingsShowConnection = false
+            store.config.mainSettingsShowBehaviour = false
+            store.config.mainSettingsShowAbout = false
         }
     }
 
@@ -83,6 +96,63 @@ struct SettingsView: View {
         } else {
             store.config.mainSettingsShowBehaviour = true
             store.config.mainSettingsShowConnection = false
+            store.config.mainSettingsShowIdentity = false
+            store.config.mainSettingsShowAbout = false
+        }
+    }
+
+    private func toggleAboutSection() {
+        if store.config.mainSettingsShowAbout {
+            store.config.mainSettingsShowAbout = false
+        } else {
+            store.config.mainSettingsShowAbout = true
+            store.config.mainSettingsShowConnection = false
+            store.config.mainSettingsShowIdentity = false
+            store.config.mainSettingsShowBehaviour = false
+        }
+    }
+
+    private func toggleBackupConnectionSection() {
+        if store.config.backupSettingsShowConnection {
+            store.config.backupSettingsShowConnection = false
+        } else {
+            store.config.backupSettingsShowConnection = true
+            store.config.backupSettingsShowIdentity = false
+            store.config.backupSettingsShowBehaviour = false
+            store.config.backupSettingsShowAbout = false
+        }
+    }
+
+    private func toggleBackupIdentitySection() {
+        if store.config.backupSettingsShowIdentity {
+            store.config.backupSettingsShowIdentity = false
+        } else {
+            store.config.backupSettingsShowIdentity = true
+            store.config.backupSettingsShowConnection = false
+            store.config.backupSettingsShowBehaviour = false
+            store.config.backupSettingsShowAbout = false
+        }
+    }
+
+    private func toggleBackupBehaviourSection() {
+        if store.config.backupSettingsShowBehaviour {
+            store.config.backupSettingsShowBehaviour = false
+        } else {
+            store.config.backupSettingsShowBehaviour = true
+            store.config.backupSettingsShowConnection = false
+            store.config.backupSettingsShowIdentity = false
+            store.config.backupSettingsShowAbout = false
+        }
+    }
+
+    private func toggleBackupAboutSection() {
+        if store.config.backupSettingsShowAbout {
+            store.config.backupSettingsShowAbout = false
+        } else {
+            store.config.backupSettingsShowAbout = true
+            store.config.backupSettingsShowConnection = false
+            store.config.backupSettingsShowIdentity = false
+            store.config.backupSettingsShowBehaviour = false
         }
     }
 
@@ -120,7 +190,7 @@ struct SettingsView: View {
 
             if showRoleConfirm {
                 InlineConfirm(
-                    title: isMain ? "Switch to BACKUP?" : "Switch to MAIN?",
+                    title: isMain ? "Switch to Backup?" : "Switch to Main?",
                     message: "The app will restart in the new role.",
                     confirmLabel: "Switch",
                     confirmColor: .orange,
@@ -232,7 +302,19 @@ struct SettingsView: View {
 
                     Divider()
 
-                    // Section 2: Behaviour
+                    // Section 2: Identity & Trust
+                    groupHeader("Identity & Trust",
+                                expanded: store.config.mainSettingsShowIdentity) {
+                        toggleIdentitySection()
+                    }
+
+                    if store.config.mainSettingsShowIdentity {
+                        identitySectionContent
+                    }
+
+                    Divider()
+
+                    // Section 3: Behaviour
                     Button {
                         toggleBehaviourSection()
                     } label: {
@@ -257,40 +339,64 @@ struct SettingsView: View {
                     }
 
                     Divider()
+
+                    // Section 4: About
+                    groupHeader("About",
+                                expanded: store.config.mainSettingsShowAbout) {
+                        toggleAboutSection()
+                    }
+                    if store.config.mainSettingsShowAbout {
+                        aboutSectionContent
+                    }
+
+                    Divider()
                 } else {
-                    // Backup Settings - No scrolling
-                    backupSettingsContent
-                }
+                    // Backup Settings — same four-group accordion as Main
 
-                // Always visible ABOUT footer
-                sectionHeader("About")
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("Version")
-                            .font(.system(size: 12))
-                            .foregroundColor(labelColor)
-                        Spacer()
-                        Text(appVersion())
-                            .font(.system(size: 12))
-                            .foregroundColor(.white)
+                    // Section 1: Connection
+                    groupHeader("Connection",
+                                expanded: store.config.backupSettingsShowConnection) {
+                        toggleBackupConnectionSection()
+                    }
+                    if store.config.backupSettingsShowConnection {
+                        backupConnectionContent
                     }
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("© RememberLive 2026")
-                            .font(.system(size: 12))
-                            .foregroundColor(labelColor)
-                        Text("Designed and Programmed by Remember Chaitezvi")
-                            .font(.system(size: 12))
-                            .foregroundColor(labelColor)
-                        Text("rememberlive.africa")
-                            .font(.system(size: 12))
-                            .foregroundColor(labelColor)
-                    }
-                }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 16)
+                    Divider()
 
-                Divider()
+                    // Section 2: Identity & Trust
+                    groupHeader("Identity & Trust",
+                                expanded: store.config.backupSettingsShowIdentity) {
+                        toggleBackupIdentitySection()
+                    }
+                    if store.config.backupSettingsShowIdentity {
+                        backupIdentityContent
+                    }
+
+                    Divider()
+
+                    // Section 3: Behaviour
+                    groupHeader("Behaviour",
+                                expanded: store.config.backupSettingsShowBehaviour) {
+                        toggleBackupBehaviourSection()
+                    }
+                    if store.config.backupSettingsShowBehaviour {
+                        backupBehaviourContent
+                    }
+
+                    Divider()
+
+                    // Section 4: About
+                    groupHeader("About",
+                                expanded: store.config.backupSettingsShowAbout) {
+                        toggleBackupAboutSection()
+                    }
+                    if store.config.backupSettingsShowAbout {
+                        aboutSectionContent
+                    }
+
+                    Divider()
+                }
 
                 // Reset to Defaults
                 VStack(alignment: .leading, spacing: 8) {
@@ -549,6 +655,28 @@ struct SettingsView: View {
         return ProcessInfo.processInfo.hostName.replacingOccurrences(of: ".local", with: "")
     }
 
+    // Collapsible-group header row (chevron + title), same style as the
+    // original hand-written Connection/Behaviour headers.
+    @ViewBuilder
+    private func groupHeader(_ title: String, expanded: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(Color(white: 0.4))
+                    .frame(width: 12)
+                Text(title)
+                    .font(.system(size: 12))
+                    .foregroundColor(Color(white: 0.45))
+                Spacer()
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 9)
+    }
+
     @ViewBuilder
     private func sectionHeader(_ title: String) -> some View {
         Text(title.uppercased())
@@ -599,7 +727,7 @@ struct SettingsView: View {
         let chosenPath = url.path
         if tccProtected.contains(where: { chosenPath == $0 || chosenPath.hasPrefix("\($0)/") }) {
             let alert = NSAlert()
-            alert.messageText = "This folder can't receive files over the network"
+            alert.messageText = "This Folder Can't Receive Files Over the Network"
             alert.informativeText = "Documents, Desktop, and Downloads are protected by macOS. Please choose another folder, like a folder in your home directory or an external drive."
             alert.alertStyle = .warning
             alert.addButton(withTitle: "OK")
@@ -617,7 +745,7 @@ struct SettingsView: View {
             BonjourAdvertiser.shared.updateTXTRecord()   // Fast TXT update (no restart)
         } catch {
             let alert = NSAlert()
-            alert.messageText = "Can't back up to this folder"
+            alert.messageText = "Can't Back Up to This Folder"
             alert.informativeText = "It may be protected by macOS, read-only, or disconnected. Choose a folder in your home folder or a writable drive."
             alert.alertStyle = .warning
             alert.addButton(withTitle: "OK")
@@ -804,7 +932,7 @@ struct SettingsView: View {
         sectionHeader("Role")
         VStack(spacing: 8) {
             HStack {
-                Text("MAIN")
+                Text("Main")
                     .font(.system(size: 12))
                     .foregroundColor(.white)
                 Spacer()
@@ -838,66 +966,6 @@ struct SettingsView: View {
 
         Divider()
 
-        sectionHeader("Identity")
-        VStack(spacing: 8) {
-            HStack {
-                Text("BACKUP Username")
-                    .font(.system(size: 12))
-                    .foregroundColor(labelColor)
-                Spacer()
-                if usernameIsBroadcast {
-                    // Automatic mode + Backup broadcasts its account name: the
-                    // broadcast is the truth — nothing to type, nothing to edit.
-                    VStack(alignment: .trailing, spacing: 1) {
-                        Text(store.config.username)
-                            .font(.system(size: 12))
-                            .foregroundColor(.white)
-                            .lineLimit(1)
-                        Text("set by Backup")
-                            .font(.system(size: 9))
-                            .foregroundColor(Color(white: 0.45))
-                    }
-                } else if isEditingUsername {
-                    TextField("Username", text: $editingUsername)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 100)
-                        .multilineTextAlignment(.trailing)
-                    Button("Save") {
-                        let trimmed = editingUsername.trimmingCharacters(in: .whitespaces)
-                        store.config.username = trimmed
-                        store.config.sshKeysConfigured = false
-                        isEditingUsername = false
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 11))
-                    .foregroundColor(editingUsername.trimmingCharacters(in: .whitespaces).isEmpty || editingUsername.trimmingCharacters(in: .whitespaces).contains(" ") ? Color(white: 0.4) : .blue)
-                    .disabled(editingUsername.trimmingCharacters(in: .whitespaces).isEmpty || editingUsername.trimmingCharacters(in: .whitespaces).contains(" "))
-                    Button("Cancel") {
-                        isEditingUsername = false
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 11))
-                    .foregroundColor(Color(white: 0.5))
-                } else {
-                    Text(store.config.username.isEmpty ? "Not set" : store.config.username)
-                        .font(.system(size: 12))
-                        .foregroundColor(store.config.username.isEmpty ? labelColor : .white)
-                        .lineLimit(1)
-                    Button("Edit") {
-                        editingUsername = store.config.username
-                        isEditingUsername = true
-                    }
-                    .buttonStyle(.bordered)
-                    .font(.system(size: 11))
-                    .tint(.blue)
-                }
-            }
-        }
-        .padding(.horizontal, 20)
-        .padding(.bottom, 12)
-
-        Divider()
-
         sectionHeader("Source")
         VStack(spacing: 8) {
             HStack {
@@ -928,7 +996,7 @@ struct SettingsView: View {
             // Auto mode: show live destination from TXT record (non-editable)
             if !store.config.destinationIP.isEmpty {
                 HStack {
-                    Text("FOLDER")
+                    Text("Folder")
                         .font(.system(size: 11))
                         .foregroundColor(labelColor)
                     Spacer()
@@ -959,7 +1027,7 @@ struct SettingsView: View {
         } else {
             VStack(spacing: 8) {
                 HStack {
-                    Text("BACKUP IP")
+                    Text("Backup IP")
                         .font(.system(size: 12))
                         .foregroundColor(labelColor)
                     Spacer()
@@ -1001,7 +1069,7 @@ struct SettingsView: View {
                 // Manual mode: Confirm Destination button + status
                 if !store.config.destinationIP.isEmpty {
                     HStack {
-                        Text("FOLDER")
+                        Text("Folder")
                             .font(.system(size: 11))
                             .foregroundColor(labelColor)
                         Spacer()
@@ -1067,6 +1135,7 @@ struct SettingsView: View {
                                         Text("Couldn't confirm — using last known")
                                             .font(.system(size: 10))
                                             .foregroundColor(labelColor)
+                                            .fixedSize(horizontal: false, vertical: true)
                                     }
                                 }
                                 Button("Retry") { confirmBackupDestination() }
@@ -1081,6 +1150,70 @@ struct SettingsView: View {
             .padding(.horizontal, 20)
             .padding(.bottom, 12)
         }
+
+    }
+
+    // Identity & Trust group: BACKUP Username · Change Backup Name ·
+    // Secure Connection · Pairing (Forget). Blocks moved verbatim from the
+    // old Connection group — layout regrouping only.
+    @ViewBuilder private var identitySectionContent: some View {
+        sectionHeader("Identity")
+        VStack(spacing: 8) {
+            HStack {
+                Text("Backup Username")
+                    .font(.system(size: 12))
+                    .foregroundColor(labelColor)
+                Spacer()
+                if usernameIsBroadcast {
+                    // Automatic mode + Backup broadcasts its account name: the
+                    // broadcast is the truth — nothing to type, nothing to edit.
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text(store.config.username)
+                            .font(.system(size: 12))
+                            .foregroundColor(.white)
+                            .lineLimit(1)
+                        Text("Set by Backup")
+                            .font(.system(size: 9))
+                            .foregroundColor(Color(white: 0.45))
+                    }
+                } else if isEditingUsername {
+                    TextField("Username", text: $editingUsername)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 100)
+                        .multilineTextAlignment(.trailing)
+                    Button("Save") {
+                        let trimmed = editingUsername.trimmingCharacters(in: .whitespaces)
+                        store.config.username = trimmed
+                        store.config.sshKeysConfigured = false
+                        isEditingUsername = false
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundColor(editingUsername.trimmingCharacters(in: .whitespaces).isEmpty || editingUsername.trimmingCharacters(in: .whitespaces).contains(" ") ? Color(white: 0.4) : .blue)
+                    .disabled(editingUsername.trimmingCharacters(in: .whitespaces).isEmpty || editingUsername.trimmingCharacters(in: .whitespaces).contains(" "))
+                    Button("Cancel") {
+                        isEditingUsername = false
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(white: 0.5))
+                } else {
+                    Text(store.config.username.isEmpty ? "Not set" : store.config.username)
+                        .font(.system(size: 12))
+                        .foregroundColor(store.config.username.isEmpty ? labelColor : .white)
+                        .lineLimit(1)
+                    Button("Edit") {
+                        editingUsername = store.config.username
+                        isEditingUsername = true
+                    }
+                    .buttonStyle(.bordered)
+                    .font(.system(size: 11))
+                    .tint(.blue)
+                }
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 12)
 
         // Remote rename section (automatic mode + Backup selected)
         if isAutomatic && !store.config.destinationIP.isEmpty {
@@ -1353,13 +1486,14 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             if interfaceManager.usingFallback {
-                HStack(spacing: 6) {
+                HStack(alignment: .top, spacing: 6) {
                     Circle()
                         .fill(Color.orange)
                         .frame(width: 6, height: 6)
                     Text("Selected network not found — reconnect it or switch to Automatic")
                         .font(.system(size: 11))
                         .foregroundColor(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
@@ -1410,7 +1544,7 @@ struct SettingsView: View {
                 .foregroundColor(.white)
             if store.config.autoSyncEnabled {
                 HStack {
-                    Text("Check every")
+                    Text("Check Every")
                         .font(.system(size: 12))
                         .foregroundColor(labelColor)
                     Spacer()
@@ -1534,7 +1668,7 @@ struct SettingsView: View {
                 .foregroundColor(.white)
             if store.config.versionHistoryEnabled {
                 HStack {
-                    Text("Keep versions")
+                    Text("Keep Versions")
                         .font(.system(size: 12))
                         .foregroundColor(labelColor)
                     Spacer()
@@ -1597,11 +1731,12 @@ struct SettingsView: View {
         .padding(.bottom, 12)
     }
 
-    @ViewBuilder private var backupSettingsContent: some View {
+    // Backup group 1 — Connection: Role · Discovery mode · Interface · Destination
+    @ViewBuilder private var backupConnectionContent: some View {
         sectionHeader("Role")
         VStack(spacing: 8) {
             HStack {
-                Text("BACKUP")
+                Text("Backup")
                     .font(.system(size: 12))
                     .foregroundColor(.white)
                 Spacer()
@@ -1625,49 +1760,6 @@ struct SettingsView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .accentColor(.blue)
-
-            HStack {
-                Text("Network Discovery Name")
-                    .font(.system(size: 12))
-                    .foregroundColor(labelColor)
-                Spacer()
-                if isEditingDiscoveryName {
-                    TextField("Name", text: $editingDiscoveryName)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 100)
-                        .multilineTextAlignment(.trailing)
-                    Button("Save") {
-                        let trimmed = editingDiscoveryName.trimmingCharacters(in: .whitespaces)
-                        store.config.networkDiscoveryName = trimmed
-                        BonjourAdvertiser.shared.restart()
-                        isEditingDiscoveryName = false
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 11))
-                    .foregroundColor(editingDiscoveryName.trimmingCharacters(in: .whitespaces).isEmpty || editingDiscoveryName.utf8.count > 63 ? Color(white: 0.4) : .blue)
-                    .disabled(editingDiscoveryName.trimmingCharacters(in: .whitespaces).isEmpty || editingDiscoveryName.utf8.count > 63)
-                    Button("Cancel") {
-                        isEditingDiscoveryName = false
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 11))
-                    .foregroundColor(Color(white: 0.5))
-                } else {
-                    Text(displayedDiscoveryName)
-                        .font(.system(size: 12))
-                        .foregroundColor(.white)
-                        .lineLimit(1)
-                    Button("Edit") {
-                        editingDiscoveryName = advertiser.confirmedName.isEmpty
-                            ? ProcessInfo.processInfo.hostName.replacingOccurrences(of: ".local", with: "")
-                            : advertiser.confirmedName
-                        isEditingDiscoveryName = true
-                    }
-                    .buttonStyle(.bordered)
-                    .font(.system(size: 11))
-                    .tint(.blue)
-                }
-            }
 
             if isAutomatic {
                 HStack(spacing: 6) {
@@ -1723,7 +1815,7 @@ struct SettingsView: View {
         .padding(.bottom, 12)
 
         HStack {
-            Text("Minimum free space")
+            Text("Minimum Free Space")
                 .font(.system(size: 12))
                 .foregroundColor(labelColor)
             Spacer()
@@ -1748,6 +1840,56 @@ struct SettingsView: View {
             .foregroundColor(labelColor)
             .padding(.horizontal, 20)
             .padding(.bottom, 12)
+    }
+
+    // Backup group 2 — Identity & Trust: Network Discovery Name · Pairing
+    @ViewBuilder private var backupIdentityContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Network Discovery Name")
+                    .font(.system(size: 12))
+                    .foregroundColor(labelColor)
+                Spacer()
+                if isEditingDiscoveryName {
+                    TextField("Name", text: $editingDiscoveryName)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 100)
+                        .multilineTextAlignment(.trailing)
+                    Button("Save") {
+                        let trimmed = editingDiscoveryName.trimmingCharacters(in: .whitespaces)
+                        store.config.networkDiscoveryName = trimmed
+                        BonjourAdvertiser.shared.restart()
+                        isEditingDiscoveryName = false
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundColor(editingDiscoveryName.trimmingCharacters(in: .whitespaces).isEmpty || editingDiscoveryName.utf8.count > 63 ? Color(white: 0.4) : .blue)
+                    .disabled(editingDiscoveryName.trimmingCharacters(in: .whitespaces).isEmpty || editingDiscoveryName.utf8.count > 63)
+                    Button("Cancel") {
+                        isEditingDiscoveryName = false
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(white: 0.5))
+                } else {
+                    Text(displayedDiscoveryName)
+                        .font(.system(size: 12))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                    Button("Edit") {
+                        editingDiscoveryName = advertiser.confirmedName.isEmpty
+                            ? ProcessInfo.processInfo.hostName.replacingOccurrences(of: ".local", with: "")
+                            : advertiser.confirmedName
+                        isEditingDiscoveryName = true
+                    }
+                    .buttonStyle(.bordered)
+                    .font(.system(size: 11))
+                    .tint(.blue)
+                }
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 12)
 
         // Layer 4: trust teardown — visible whenever a Main is paired
         if store.trustedPeers.contains(where: { $0.role == .main }) {
@@ -1765,9 +1907,40 @@ struct SettingsView: View {
             .padding(.horizontal, 20)
             .padding(.bottom, 12)
         }
+    }
 
-        Divider()
+    // About group (shared, both roles): version + credits. Moved verbatim from
+    // the old always-visible footer; the group header supplies the "About" title.
+    @ViewBuilder private var aboutSectionContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Version")
+                    .font(.system(size: 12))
+                    .foregroundColor(labelColor)
+                Spacer()
+                Text(appVersion())
+                    .font(.system(size: 12))
+                    .foregroundColor(.white)
+            }
 
+            VStack(alignment: .leading, spacing: 2) {
+                Text("© RememberLive 2026")
+                    .font(.system(size: 12))
+                    .foregroundColor(labelColor)
+                Text("Designed and Programmed by Remember Chaitezvi")
+                    .font(.system(size: 12))
+                    .foregroundColor(labelColor)
+                Text("rememberlive.africa")
+                    .font(.system(size: 12))
+                    .foregroundColor(labelColor)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 16)
+    }
+
+    // Backup group 3 — Behaviour: the former Options content, unchanged
+    @ViewBuilder private var backupBehaviourContent: some View {
         sectionHeader("Options")
         VStack(alignment: .leading, spacing: 6) {
             Toggle("Launch at Login", isOn: Binding(
@@ -1812,7 +1985,7 @@ struct SettingsView: View {
         switch connectionStatus.state ?? .checking {
         case .checking:    return "Checking..."
         case .reachable:   return "Connected"
-        case .unreachable: return "Not connected"
+        case .unreachable: return "Not Connected"
         }
     }
 
