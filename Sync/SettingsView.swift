@@ -8,6 +8,27 @@ private let sectionHeaderColor = Color(white: 0.45)
 private let labelColor = Color(white: 0.55)
 private let popoverWidth: CGFloat = 360
 
+// MARK: - Update check (manual "Check for Updates" in Settings → About)
+
+private let updateCheckURL = "https://raw.githubusercontent.com/rememberlive/showsync-updates/refs/heads/main/showsync-version.json"
+
+// Tiny version manifest fetched from updateCheckURL.
+private struct AppVersionInfo: Codable {
+    let version: String
+    let build: String
+    let minMacOS: String?
+    let url: String
+    let notes: String?
+}
+
+private enum UpdateState {
+    case idle
+    case checking
+    case upToDate
+    case updateAvailable(version: String, url: String)
+    case failed
+}
+
 struct SettingsView: View {
     @EnvironmentObject var store: ConfigStore
     @ObservedObject private var bonjourBrowser = BonjourBrowser.shared
@@ -31,6 +52,7 @@ struct SettingsView: View {
     @State private var editingUsername = ""
     @State private var isEditingDeviceName = false
     @State private var editingDeviceName = ""
+    @State private var updateState: UpdateState = .idle  // transient — manual update check (About)
     @State private var isEditingIP = false
     @State private var editingIP = ""
     @State private var isEditingBackupName = false
@@ -1948,9 +1970,80 @@ struct SettingsView: View {
                     .font(.system(size: 12))
                     .foregroundColor(labelColor)
             }
+
+            // Manual update check
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Button("Check for Updates") { runUpdateCheck() }
+                        .buttonStyle(.bordered)
+                        .font(.system(size: 12))
+                        .disabled({ if case .checking = updateState { return true }; return false }())
+                    if case .checking = updateState {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+                switch updateState {
+                case .idle:
+                    EmptyView()
+                case .checking:
+                    Text("Checking…")
+                        .font(.system(size: 11))
+                        .foregroundColor(labelColor)
+                case .upToDate:
+                    Text("You're up to date")
+                        .font(.system(size: 11))
+                        .foregroundColor(labelColor)
+                case .updateAvailable(let v, let url):
+                    HStack(spacing: 8) {
+                        Text("Version \(v) available")
+                            .font(.system(size: 11))
+                            .foregroundColor(.white)
+                        Button("Download") {
+                            if let u = URL(string: url) { NSWorkspace.shared.open(u) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .font(.system(size: 11))
+                    }
+                case .failed:
+                    Text("Couldn't check for updates — try again later")
+                        .font(.system(size: 11))
+                        .foregroundColor(labelColor)
+                }
+            }
+            .padding(.top, 4)
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 16)
+    }
+
+    // Manual update check: HTTPS GET the version manifest, compare build numbers.
+    // up-to-date/available is reached ONLY on 200 + valid JSON; every failure
+    // (offline, timeout, non-200, malformed, non-integer build) → .failed.
+    private func runUpdateCheck() {
+        updateState = .checking
+        guard let url = URL(string: updateCheckURL) else { updateState = .failed; return }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 10)
+        request.httpMethod = "GET"
+
+        let localBuild = Int(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "") ?? 0
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            // Compute the result off-main, publish on @MainActor.
+            let result: UpdateState = {
+                guard error == nil,
+                      let http = response as? HTTPURLResponse, http.statusCode == 200,
+                      let data,
+                      let info = try? JSONDecoder().decode(AppVersionInfo.self, from: data),
+                      let remoteBuild = Int(info.build) else {
+                    return .failed
+                }
+                if remoteBuild > localBuild {
+                    return .updateAvailable(version: info.version, url: info.url)
+                }
+                return .upToDate
+            }()
+            Task { @MainActor in updateState = result }
+        }.resume()
     }
 
     // Backup group 3 — Behaviour: the former Options content, unchanged
