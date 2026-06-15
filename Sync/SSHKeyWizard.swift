@@ -199,7 +199,7 @@ extension AppDelegate {
         let alert = NSAlert()
         alert.messageText     = "Secure Connection Established"
         alert.informativeText = "You will never need to enter a password again."
-        alert.addButton(withTitle: "Done")
+        alert.addButton(withTitle: "OK")
         _ = alert.runModal()
     }
 

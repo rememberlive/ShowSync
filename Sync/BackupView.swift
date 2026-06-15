@@ -867,7 +867,7 @@ struct BackupView: View {
     var body: some View {
         if showQuitConfirm {
             InlineConfirm(
-                title: "Quit Sync?",
+                title: "Quit ShowSync?",
                 message: isReceiving
                     ? "A backup is in progress and will be interrupted."
                     : "Any sync in progress will stop.",
@@ -896,7 +896,7 @@ struct BackupView: View {
                 Circle()
                     .fill(headerColor)
                     .frame(width: 8, height: 8)
-                Text("Sync")
+                Text("ShowSync")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(.white)
                 Spacer()

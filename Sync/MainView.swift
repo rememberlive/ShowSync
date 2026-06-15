@@ -1742,7 +1742,7 @@ struct MainView: View {
             .ignoresSafeArea()
         } else if viewState == .confirmQuit {
             InlineConfirm(
-                title: "Quit Sync?",
+                title: "Quit ShowSync?",
                 message: isSyncing
                     ? "A backup is in progress and will be interrupted."
                     : "Any sync in progress will stop.",
@@ -1778,7 +1778,7 @@ struct MainView: View {
                 Circle()
                     .fill(engine.status.color)
                     .frame(width: 8, height: 8)
-                Text("Sync")
+                Text("ShowSync")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(.white)
                 Spacer()

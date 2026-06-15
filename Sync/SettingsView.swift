@@ -1512,7 +1512,7 @@ struct SettingsView: View {
                 }
             }
 
-            Text("Locks Sync to one network connection: discovery, pairing, and backups all use only this interface. Automatic picks the first available.")
+            Text("Locks ShowSync to one network connection: discovery, pairing, and backups all use only this interface. Automatic picks the first available.")
                 .font(.system(size: 10))
                 .foregroundColor(Color(white: 0.45))
                 .fixedSize(horizontal: false, vertical: true)
@@ -1730,7 +1730,7 @@ struct SettingsView: View {
                 .font(.system(size: 10))
                 .foregroundColor(labelColor)
             HStack {
-                Text("Show Sync in")
+                Text("Show ShowSync in")
                     .font(.system(size: 12))
                     .foregroundColor(labelColor)
                 Spacer()
@@ -1970,7 +1970,7 @@ struct SettingsView: View {
                     .foregroundColor(.red)
             }
             HStack {
-                Text("Show Sync in")
+                Text("Show ShowSync in")
                     .font(.system(size: 12))
                     .foregroundColor(labelColor)
                 Spacer()
