@@ -29,6 +29,8 @@ struct SettingsView: View {
     @State private var editingDiscoveryName = ""
     @State private var isEditingUsername = false
     @State private var editingUsername = ""
+    @State private var isEditingDeviceName = false
+    @State private var editingDeviceName = ""
     @State private var isEditingIP = false
     @State private var editingIP = ""
     @State private var isEditingBackupName = false
@@ -802,6 +804,14 @@ struct SettingsView: View {
         return true
     }
 
+    // Same rules as the Backup name: non-empty, ≤63 UTF-8 bytes, no control chars / "/".
+    private var isValidDeviceNameInput: Bool {
+        let t = editingDeviceName.trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty, t.utf8.count <= 63 else { return false }
+        for char in t.unicodeScalars { if char.value < 32 || char == "/" { return false } }
+        return true
+    }
+
     private func sendRemoteRename() {
         let newName = editingBackupName.trimmingCharacters(in: .whitespaces)
         guard isValidRenameInput else { return }
@@ -1116,6 +1126,51 @@ struct SettingsView: View {
     @ViewBuilder private var identitySectionContent: some View {
         sectionHeader("Identity")
         VStack(spacing: 8) {
+            HStack {
+                Text("This Mac's Name")
+                    .font(.system(size: 12))
+                    .foregroundColor(labelColor)
+                Spacer()
+                if isEditingDeviceName {
+                    TextField("Name", text: $editingDeviceName)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 100)
+                        .multilineTextAlignment(.trailing)
+                    Button("Save") {
+                        guard isValidDeviceNameInput else { return }
+                        let trimmed = editingDeviceName.trimmingCharacters(in: .whitespaces)
+                        // Local-only: rename this Mac's identity. deviceId is immutable,
+                        // so existing pairings (matched by ID) are unaffected; the next
+                        // pairing broadcasts the new name (read fresh at startPairing).
+                        store.identity.deviceName = trimmed
+                        store.saveIdentity()
+                        isEditingDeviceName = false
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundColor(isValidDeviceNameInput ? .blue : Color(white: 0.4))
+                    .disabled(!isValidDeviceNameInput)
+                    Button("Cancel") {
+                        isEditingDeviceName = false
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(white: 0.5))
+                } else {
+                    Text(store.identity.deviceName.isEmpty ? "Not set" : store.identity.deviceName)
+                        .font(.system(size: 12))
+                        .foregroundColor(store.identity.deviceName.isEmpty ? labelColor : .white)
+                        .lineLimit(1)
+                    Button("Edit") {
+                        editingDeviceName = store.identity.deviceName
+                        isEditingDeviceName = true
+                    }
+                    .buttonStyle(.bordered)
+                    .font(.system(size: 11))
+                    .tint(.blue)
+                }
+            }
+
             HStack {
                 Text("Backup Username")
                     .font(.system(size: 12))
