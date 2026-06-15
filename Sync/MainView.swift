@@ -5,6 +5,17 @@ import CoreServices
 private let darkBg = Color(red: 0.12, green: 0.12, blue: 0.12)
 private let popoverWidth: CGFloat = 360
 
+// Verbose sync step-tracing. DEBUG-only: the body is compiled out of release
+// builds (#if DEBUG), so these never ship — but the call sites are kept verbatim
+// (same format strings + args as NSLog) for future debugging. Mirrors NSLog via
+// NSLogv so formatting/bridging is identical.
+@inline(__always)
+private func syncTrace(_ format: String, _ args: CVarArg...) {
+    #if DEBUG
+    withVaList(args) { NSLogv(format, $0) }
+    #endif
+}
+
 // MARK: - Types
 
 struct DryRunResult: Equatable {
@@ -193,7 +204,7 @@ final class SyncEngine: ObservableObject {
         }
 
         let mode = config.discoveryMode
-        NSLog("[SyncTrace] 1 sync requested, mode=%@, remotePath='%@', usingFallback=%d, dryRunEnabled=%d, isAuto=%d",
+        syncTrace("[SyncTrace] 1 sync requested, mode=%@, remotePath='%@', usingFallback=%d, dryRunEnabled=%d, isAuto=%d",
               mode, syncRemotePath, usingFallback ? 1 : 0, config.dryRunEnabled ? 1 : 0, isAuto ? 1 : 0)
 
         // Check if this is a "Check Files" preview request
@@ -204,7 +215,7 @@ final class SyncEngine: ObservableObject {
             runDryRunPreview(config: config)
         } else {
             // Normal sync: SKIP dry-run entirely, go straight to write-test and rsync
-            NSLog("[SyncTrace] 2 SKIPPING dry-run (normal sync path)")
+            syncTrace("[SyncTrace] 2 SKIPPING dry-run (normal sync path)")
             syncTotalFiles = 0
             expectedSize   = 0
             syncStartTime  = Date()
@@ -218,14 +229,14 @@ final class SyncEngine: ObservableObject {
 
             // Write-test then rsync
             let originalRemotePath = syncRemotePath
-            NSLog("[SyncTrace] 4 starting write-test, remotePath='%@'", originalRemotePath)
+            syncTrace("[SyncTrace] 4 starting write-test, remotePath='%@'", originalRemotePath)
             runSyncTimeWriteTest(username: config.username, ip: config.destinationIP, remotePath: originalRemotePath) { [weak self] result, _ in
                 guard let self else {
-                    NSLog("[SyncTrace] 5 write-test callback but self is nil")
+                    syncTrace("[SyncTrace] 5 write-test callback but self is nil")
                     return
                 }
                 guard self.status == .preparing else { return }
-                NSLog("[SyncTrace] 5 write-test result=%d (0=writable, 1=unwritable, 2=testFailed)", result == .writable ? 0 : (result == .unwritable ? 1 : 2))
+                syncTrace("[SyncTrace] 5 write-test result=%d (0=writable, 1=unwritable, 2=testFailed)", result == .writable ? 0 : (result == .unwritable ? 1 : 2))
                 switch result {
                 case .writable:
                     break
@@ -237,7 +248,7 @@ final class SyncEngine: ObservableObject {
                 case .testFailed:
                     NSLog("[Sync] Write-test failed (SSH error), proceeding anyway")
                 }
-                NSLog("[SyncTrace] 6 calling continueSyncAfterWriteTest")
+                syncTrace("[SyncTrace] 6 calling continueSyncAfterWriteTest")
                 self.continueSyncAfterWriteTest(config: config, totalBytes: 0, fileCount: 0, dryRunOutput: "")
             }
         }
@@ -255,7 +266,7 @@ final class SyncEngine: ObservableObject {
         let rsyncCandidates = ["/opt/homebrew/bin/rsync", "/usr/local/bin/rsync", "/usr/bin/rsync"]
         let rsyncPath = rsyncCandidates.first { FileManager.default.fileExists(atPath: $0) } ?? "/usr/bin/rsync"
 
-        NSLog("[SyncTrace] 2 starting dry-run PREVIEW, rsyncPath=%@", rsyncPath)
+        syncTrace("[SyncTrace] 2 starting dry-run PREVIEW, rsyncPath=%@", rsyncPath)
         let prepProc = Process()
         prepProc.executableURL = URL(fileURLWithPath: rsyncPath)
         var prepArgs = ["-av", "--dry-run", "--stats"] + RsyncExclusions.args
@@ -312,7 +323,7 @@ final class SyncEngine: ObservableObject {
             let done = completed
             completedLock.unlock()
             if !done, let p = prepProc, p.isRunning {
-                NSLog("[SyncTrace] 2f dry-run PREVIEW TIMEOUT (30s)")
+                syncTrace("[SyncTrace] 2f dry-run PREVIEW TIMEOUT (30s)")
                 p.terminate()
             }
         }
@@ -324,12 +335,12 @@ final class SyncEngine: ObservableObject {
             completed = true
             completedLock.unlock()
             NotificationCenter.default.removeObserver(self as Any, name: .NSFileHandleDataAvailable, object: fileHandle)
-            NSLog("[SyncTrace] 3 dry-run PREVIEW terminated, exit=%d", p.terminationStatus)
+            syncTrace("[SyncTrace] 3 dry-run PREVIEW terminated, exit=%d", p.terminationStatus)
             let output = outputBuffer.getString()
 
             Task { @MainActor [weak self] in
                 guard let self, self.status == .preparing else {
-                    NSLog("[SyncTrace] 3b dry-run guard FAILED")
+                    syncTrace("[SyncTrace] 3b dry-run guard FAILED")
                     return
                 }
 
@@ -355,7 +366,7 @@ final class SyncEngine: ObservableObject {
 
                 let fileCount  = Self.parseDryRunFileCount(output)
                 let totalBytes = Self.parseTotalSize(output) ?? 0
-                NSLog("[SyncTrace] 3c preview parsed: fileCount=%d totalBytes=%lld", fileCount, totalBytes)
+                syncTrace("[SyncTrace] 3c preview parsed: fileCount=%d totalBytes=%lld", fileCount, totalBytes)
 
                 let (previewFiles, _) = Self.parseDryRunOutput(output)
                 if fileCount > 0 && previewFiles.isEmpty {
@@ -375,13 +386,13 @@ final class SyncEngine: ObservableObject {
         }
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            NSLog("[SyncTrace] 2b dry-run PREVIEW dispatch executing")
+            syncTrace("[SyncTrace] 2b dry-run PREVIEW dispatch executing")
             do {
                 try prepProc.run()
-                NSLog("[SyncTrace] 2c dry-run PREVIEW process started")
+                syncTrace("[SyncTrace] 2c dry-run PREVIEW process started")
             } catch {
                 timeoutItem.cancel()
-                NSLog("[SyncTrace] 2d dry-run PREVIEW launch FAILED: %@", error.localizedDescription)
+                syncTrace("[SyncTrace] 2d dry-run PREVIEW launch FAILED: %@", error.localizedDescription)
                 Task { @MainActor [weak self] in
                     self?.handleRsyncLaunchFailure()
                 }
@@ -390,7 +401,7 @@ final class SyncEngine: ObservableObject {
     }
 
     private func continueSyncAfterWriteTest(config: Config, totalBytes: Int64, fileCount: Int, dryRunOutput: String) {
-        NSLog("[SyncTrace] 7 continueSyncAfterWriteTest entered, setting status=syncing")
+        syncTrace("[SyncTrace] 7 continueSyncAfterWriteTest entered, setting status=syncing")
         status = .syncing
         // Use the engine fields, not the caller's values — the concurrent estimate
         // fills them with real totals (the call site passes zeros).
@@ -406,11 +417,11 @@ final class SyncEngine: ObservableObject {
         let rsyncCandidates = ["/opt/homebrew/bin/rsync", "/usr/local/bin/rsync", "/usr/bin/rsync"]
         let rsyncPath = rsyncCandidates.first { FileManager.default.fileExists(atPath: $0) } ?? "/usr/bin/rsync"
 
-        NSLog("[SyncTrace] 8 about to launch rsync, source='%@', dest='%@'", source, dest)
+        syncTrace("[SyncTrace] 8 about to launch rsync, source='%@', dest='%@'", source, dest)
 
                 let launchRsync = { [weak self] in
                     guard let self else { return }
-                    NSLog("[SyncTrace] 9 launchRsync closure executing")
+                    syncTrace("[SyncTrace] 9 launchRsync closure executing")
                     let proc = Process()
                     proc.executableURL = URL(fileURLWithPath: rsyncPath)
                     var rsyncArgs = ["-av", "--stats"] + RsyncExclusions.args
@@ -466,7 +477,7 @@ final class SyncEngine: ObservableObject {
                         let syncTrigger = (self?.isAutoSync ?? false) ? "auto" : ((self?.isPushSync ?? false) ? "push" : "manual")
                         let syncDest = self?.syncRemotePath ?? "~/Sync"
 
-                        NSLog("[SyncTrace] 10 rsync terminated, exit=%d", exitCode)
+                        syncTrace("[SyncTrace] 10 rsync terminated, exit=%d", exitCode)
                         NotificationCenter.default.removeObserver(stdoutObserver)
                         let statsOutput = stdoutBuffer.getString()
                         _ = errPipe.fileHandleForReading.readDataToEndOfFile() // drain stderr
@@ -1108,7 +1119,7 @@ final class SyncEngine: ObservableObject {
            !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
             duArgs.insert(contentsOf: ["-b", bindIP], at: 0)
         }
-        duArgs.append(contentsOf: ["\(username)@\(ip)", "du -sk \"\(escaped)\" 2>/dev/null | cut -f1"])
+        duArgs.append(contentsOf: ["--", "\(username)@\(ip)", "du -sk \"\(escaped)\" 2>/dev/null | cut -f1"])
         proc.arguments = duArgs
         let pipe = Pipe()
         proc.standardOutput = pipe
@@ -1194,7 +1205,7 @@ final class SyncEngine: ObservableObject {
            !config.preferredInterfaceMAC.isEmpty {
             sshArgs.insert(contentsOf: ["-b", bindIP], at: 0)
         }
-        sshArgs.append(contentsOf: ["\(config.username)@\(config.destinationIP)", cmd])
+        sshArgs.append(contentsOf: ["--", "\(config.username)@\(config.destinationIP)", cmd])
         proc.arguments = sshArgs
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError  = FileHandle.nullDevice
@@ -1210,7 +1221,7 @@ final class SyncEngine: ObservableObject {
            !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
             sshArgs.insert(contentsOf: ["-b", bindIP], at: 0)
         }
-        sshArgs.append(contentsOf: ["\(syncUsername)@\(syncIP)", command])
+        sshArgs.append(contentsOf: ["--", "\(syncUsername)@\(syncIP)", command])
         proc.arguments = sshArgs
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError  = FileHandle.nullDevice
@@ -1243,7 +1254,7 @@ final class SyncEngine: ObservableObject {
            !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
             testArgs.insert(contentsOf: ["-b", bindIP], at: 0)
         }
-        testArgs.append(contentsOf: ["\(username)@\(ip)", cmd])
+        testArgs.append(contentsOf: ["--", "\(username)@\(ip)", cmd])
         proc.arguments = testArgs
         let pipe = Pipe()
         proc.standardOutput = pipe
@@ -1313,7 +1324,7 @@ final class SyncEngine: ObservableObject {
            !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
             refuseArgs.insert(contentsOf: ["-b", bindIP], at: 0)
         }
-        refuseArgs.append(contentsOf: ["\(username)@\(ip)", cmd])
+        refuseArgs.append(contentsOf: ["--", "\(username)@\(ip)", cmd])
         proc.arguments = refuseArgs
         let pipe = Pipe()
         proc.standardOutput = pipe
@@ -1620,7 +1631,7 @@ final class SyncEngine: ObservableObject {
            !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
             sshArgs.insert(contentsOf: ["-b", bindIP], at: 0)
         }
-        sshArgs.append(contentsOf: ["\(username)@\(ip)", cmd])
+        sshArgs.append(contentsOf: ["--", "\(username)@\(ip)", cmd])
         proc.arguments = sshArgs
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError = FileHandle.nullDevice
@@ -1670,7 +1681,7 @@ while IFS= read -r f; do rm -rf "$f"; done
            !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
             sshArgs.insert(contentsOf: ["-b", bindIP], at: 0)
         }
-        sshArgs.append(contentsOf: ["\(username)@\(ip)", cmd])
+        sshArgs.append(contentsOf: ["--", "\(username)@\(ip)", cmd])
         proc.arguments = sshArgs
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError = FileHandle.nullDevice

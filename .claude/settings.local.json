@@ -154,7 +154,12 @@
       "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_main-name-editor.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
       "Bash(python3 -m json.tool .claude/settings.local.json)",
       "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_showsync-branding.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
-      "Bash(echo \"count: $\\(git -C ~/Documents/LiveAudioApps/Sync ls-files build/)"
+      "Bash(echo \"count: $\\(git -C ~/Documents/LiveAudioApps/Sync ls-files build/)",
+      "Bash(perl -0pi -e 's/NSLog\\\\\\(\"\\\\[SyncTrace\\\\]/syncTrace\\(\"[SyncTrace]/g' Sync/MainView.swift)",
+      "Bash(ssh -o BatchMode=yes -o ConnectTimeout=2 -- testuser@127.0.0.1 echo hi)",
+      "Bash(echo \"exit: $? \\(0/255=parsed+attempted connect; 'usage:' line = -- rejected\\)\")",
+      "Bash(perl -ni -e 'print unless /^\\\\s*\\\\.tint\\\\\\(\\\\.blue\\\\\\)\\\\s*$/' Sync/SettingsView.swift)",
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_button-consistency.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
     ]
   }
 }

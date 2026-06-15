@@ -126,8 +126,11 @@ extension AppDelegate {
         }
 
         let config = ConfigStore.shared.config
-        // Single-quote the pubkey in the remote command; ed25519 keys never contain single quotes.
-        let remoteCmd = "mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '\(pubKey)' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+        // Single-quote the pubkey in the remote command; escape any literal single
+        // quotes (' -> '\'') as defense-in-depth (ed25519 keys don't contain them,
+        // but never trust the comment field's contents).
+        let escapedPubKey = pubKey.replacingOccurrences(of: "'", with: "'\\''")
+        let remoteCmd = "mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '\(escapedPubKey)' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
 
         var env = ProcessInfo.processInfo.environment
         env["SSH_ASKPASS"]         = tmpScript
@@ -141,7 +144,7 @@ extension AppDelegate {
             "-o", "StrictHostKeyChecking=no",
             "-o", "PasswordAuthentication=yes",
             "-o", "PreferredAuthentications=password",
-            "\(config.username)@\(config.destinationIP)",
+            "--", "\(config.username)@\(config.destinationIP)",
             remoteCmd
         ]
         proc.standardOutput = FileHandle.nullDevice
@@ -174,7 +177,7 @@ extension AppDelegate {
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=5",
             "-o", "StrictHostKeyChecking=no",
-            "\(config.username)@\(config.destinationIP)",
+            "--", "\(config.username)@\(config.destinationIP)",
             "exit"
         ]
         proc.standardOutput = FileHandle.nullDevice

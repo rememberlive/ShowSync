@@ -100,7 +100,7 @@ final class ConnectionStatus: ObservableObject {
                !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
                 manualArgs.insert(contentsOf: ["-b", bindIP], at: 0)
             }
-            manualArgs.append(contentsOf: ["\(username)@\(ip)", cmd])
+            manualArgs.append(contentsOf: ["--", "\(username)@\(ip)", cmd])
             proc.arguments = manualArgs
             let pipe = Pipe()
             proc.standardOutput = pipe
@@ -176,7 +176,7 @@ final class ConnectionStatus: ObservableObject {
                !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
                 autoArgs.insert(contentsOf: ["-b", bindIP], at: 0)
             }
-            autoArgs.append(contentsOf: ["\(username)@\(ip)", "exit"])
+            autoArgs.append(contentsOf: ["--", "\(username)@\(ip)", "exit"])
             proc.arguments = autoArgs
             proc.standardOutput = FileHandle.nullDevice
             proc.standardError = FileHandle.nullDevice

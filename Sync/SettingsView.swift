@@ -840,7 +840,7 @@ struct SettingsView: View {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         proc.arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no",
-                          "\(username)@\(ip)", "echo -n '\(escaped)' > \(safeDestFile)"]
+                          "--", "\(username)@\(ip)", "echo -n '\(escaped)' > \(safeDestFile)"]
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError = FileHandle.nullDevice
         proc.terminationHandler = { p in
@@ -2015,7 +2015,7 @@ struct SettingsView: View {
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=3",
             "-o", "StrictHostKeyChecking=no",
-            "\(username)@\(ip)",
+            "--", "\(username)@\(ip)",
             "cat \"$HOME/Library/Application Support/Sync/config_backup.json\" 2>/dev/null || echo '{}'"
         ]
         let pipe = Pipe()
@@ -2064,7 +2064,7 @@ struct SettingsView: View {
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=3",
             "-o", "StrictHostKeyChecking=no",
-            "\(username)@\(ip)",
+            "--", "\(username)@\(ip)",
             "df -k \"\(escapedPath)\" 2>/dev/null | awk 'NR==2 {print $4}'"
         ]
         let pipe = Pipe()
@@ -2116,11 +2116,14 @@ struct SettingsView: View {
             let pubKey = (try? String(contentsOfFile: pubKeyPath, encoding: .utf8))?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if !pubKey.isEmpty {
-                let remoteCmd = "if [ -f ~/.ssh/authorized_keys ]; then grep -vF '\(pubKey)' ~/.ssh/authorized_keys > ~/.ssh/authorized_keys.tmp; mv ~/.ssh/authorized_keys.tmp ~/.ssh/authorized_keys; chmod 600 ~/.ssh/authorized_keys; fi"
+                // Single-quote-escape the key (' -> '\'') as defense-in-depth before
+                // embedding it in the single-quoted grep pattern.
+                let escapedPubKey = pubKey.replacingOccurrences(of: "'", with: "'\\''")
+                let remoteCmd = "if [ -f ~/.ssh/authorized_keys ]; then grep -vF '\(escapedPubKey)' ~/.ssh/authorized_keys > ~/.ssh/authorized_keys.tmp; mv ~/.ssh/authorized_keys.tmp ~/.ssh/authorized_keys; chmod 600 ~/.ssh/authorized_keys; fi"
                 let proc = Process()
                 proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
                 proc.arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no",
-                                  "\(username)@\(ip)", remoteCmd]
+                                  "--", "\(username)@\(ip)", remoteCmd]
                 proc.standardOutput = FileHandle.nullDevice
                 proc.standardError = FileHandle.nullDevice
                 proc.terminationHandler = { p in
@@ -2150,7 +2153,7 @@ struct SettingsView: View {
             let proc = Process()
             proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
             proc.arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no",
-                              "\(username)@\(ip)",
+                              "--", "\(username)@\(ip)",
                               "echo '{\"mainId\":\"\(myId)\",\"nonce\":\"\(nonce)\"}' > \(safeDestFile)"]
             proc.standardOutput = FileHandle.nullDevice
             proc.standardError = FileHandle.nullDevice
