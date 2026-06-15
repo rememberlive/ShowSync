@@ -374,14 +374,13 @@ struct SettingsView: View {
 
                 // Reset to Defaults
                 VStack(alignment: .leading, spacing: 8) {
-                    Button {
+                    Button("Reset to Defaults") {
                         showResetToDefaultsConfirm = true
-                    } label: {
-                        Text("Reset to Defaults")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(.red)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                    .font(.system(size: 12))
+                    .frame(maxWidth: .infinity)
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 12)
