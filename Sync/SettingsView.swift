@@ -399,7 +399,7 @@ struct SettingsView: View {
                     Button("Reset to Defaults") {
                         showResetToDefaultsConfirm = true
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.borderedProminent)
                     .tint(.red)
                     .font(.system(size: 12))
                     .frame(maxWidth: .infinity)
@@ -927,7 +927,6 @@ struct SettingsView: View {
                 Button(switchLabel) { showRoleConfirm = true }
                     .buttonStyle(.bordered)
                     .font(.system(size: 11))
-                    .tint(.blue)
             }
         }
         .padding(.horizontal, 20)
@@ -968,7 +967,6 @@ struct SettingsView: View {
                 Button("Choose…") { pickFolder(forSource: true) }
                     .buttonStyle(.bordered)
                     .font(.system(size: 11))
-                    .tint(.blue)
             }
         }
         .padding(.horizontal, 20)
@@ -1051,7 +1049,6 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.bordered)
                         .font(.system(size: 11))
-                        .tint(.blue)
                     }
                 }
                 // Manual mode: Confirm Destination button + status
@@ -1066,7 +1063,6 @@ struct SettingsView: View {
                             Button("Confirm Destination") { confirmBackupDestination() }
                                 .buttonStyle(.bordered)
                                 .font(.system(size: 11))
-                                .tint(.blue)
                         case .checking:
                             Text("Checking...")
                                 .font(.system(size: 11))
@@ -1129,7 +1125,6 @@ struct SettingsView: View {
                                 Button("Retry") { confirmBackupDestination() }
                                     .buttonStyle(.bordered)
                                     .font(.system(size: 10))
-                                    .tint(.blue)
                             }
                         }
                     }
@@ -1188,7 +1183,6 @@ struct SettingsView: View {
                     }
                     .buttonStyle(.bordered)
                     .font(.system(size: 11))
-                    .tint(.blue)
                 }
             }
 
@@ -1241,7 +1235,6 @@ struct SettingsView: View {
                     }
                     .buttonStyle(.bordered)
                     .font(.system(size: 11))
-                    .tint(.blue)
                 }
             }
         }
@@ -1282,7 +1275,6 @@ struct SettingsView: View {
                             }
                             .buttonStyle(.bordered)
                             .font(.system(size: 11))
-                            .tint(.blue)
                         case .pending:
                             Text("\(editingBackupName)...")
                                 .font(.system(size: 12))
@@ -1430,7 +1422,7 @@ struct SettingsView: View {
                 Button("Forget This Backup") {
                     showForgetBackupConfirm = true
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.borderedProminent)
                 .tint(.red)
                 .font(.system(size: 12))
                 .frame(maxWidth: .infinity)
@@ -1630,7 +1622,6 @@ struct SettingsView: View {
                     }
                     .buttonStyle(.bordered)
                     .font(.system(size: 11))
-                    .tint(.blue)
                     .disabled(editingAutoInterval.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
@@ -1687,7 +1678,6 @@ struct SettingsView: View {
                     }
                     .buttonStyle(.bordered)
                     .font(.system(size: 11))
-                    .tint(.blue)
                     .disabled(editingPushDebounce.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
@@ -1779,7 +1769,6 @@ struct SettingsView: View {
                 Button(switchLabel) { showRoleConfirm = true }
                     .buttonStyle(.bordered)
                     .font(.system(size: 11))
-                    .tint(.blue)
             }
         }
         .padding(.horizontal, 20)
@@ -1839,7 +1828,6 @@ struct SettingsView: View {
                 Button("Change") { pickDestinationFolder() }
                     .buttonStyle(.bordered)
                     .font(.system(size: 11))
-                    .tint(.blue)
             }
             if ReceiveMonitor.shared.usingFallback {
                 Text("Syncing to ~/Sync until drive returns")
@@ -1920,7 +1908,6 @@ struct SettingsView: View {
                     }
                     .buttonStyle(.bordered)
                     .font(.system(size: 11))
-                    .tint(.blue)
                 }
             }
         }
@@ -1935,7 +1922,7 @@ struct SettingsView: View {
                 Button("Forget Paired Main") {
                     showForgetMainConfirm = true
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.borderedProminent)
                 .tint(.red)
                 .font(.system(size: 12))
                 .frame(maxWidth: .infinity)
