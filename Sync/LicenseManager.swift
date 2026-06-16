@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// Result of a Keygen license activation/validation round-trip.
 enum ActivationResult {
@@ -111,5 +112,52 @@ enum LicenseManager {
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (_, response) = try await URLSession.shared.data(for: req)
         return (response as? HTTPURLResponse)?.statusCode ?? -1
+    }
+}
+
+extension LicenseManager {
+    /// Offline-verify a Keygen ED25519_SIGN license key against the baked-in public key.
+    /// Proves the key is authentically Keygen-signed and untampered. Does NOT check
+    /// expiry or revocation (separate concerns). Returns true iff the signature is valid.
+    static func verifyLicenseKey(_ key: String) -> Bool {
+        // key format: "key/<payloadBase64>.<signatureBase64url>"
+        guard key.hasPrefix("key/") else { return false }
+        let body = String(key.dropFirst("key/".count))           // "<payload>.<sig>"
+        guard let dot = body.firstIndex(of: ".") else { return false }
+        let payloadB64 = String(body[..<dot])
+        let sigB64url  = String(body[body.index(after: dot)...])
+
+        // Signed message = literal "key/<payload>" (prefix INCLUDED), raw UTF-8.
+        let message = Data(("key/" + payloadB64).utf8)
+
+        guard let signature = base64urlDecode(sigB64url),
+              let pubKeyData = hexDecode(KeygenConfig.verifyPublicKeyHex),
+              let pubKey = try? Curve25519.Signing.PublicKey(rawRepresentation: pubKeyData)
+        else { return false }
+
+        return pubKey.isValidSignature(signature, for: message)
+    }
+
+    /// Decode base64url (with or without padding) to Data.
+    private static func base64urlDecode(_ s: String) -> Data? {
+        var b = s.replacingOccurrences(of: "-", with: "+")
+                 .replacingOccurrences(of: "_", with: "/")
+        let pad = b.count % 4
+        if pad != 0 { b += String(repeating: "=", count: 4 - pad) }
+        return Data(base64Encoded: b)
+    }
+
+    /// Decode a hex string to Data (nil if malformed).
+    private static func hexDecode(_ hex: String) -> Data? {
+        guard hex.count % 2 == 0 else { return nil }
+        var data = Data(capacity: hex.count / 2)
+        var idx = hex.startIndex
+        while idx < hex.endIndex {
+            let next = hex.index(idx, offsetBy: 2)
+            guard let byte = UInt8(hex[idx..<next], radix: 16) else { return nil }
+            data.append(byte)
+            idx = next
+        }
+        return data
     }
 }

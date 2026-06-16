@@ -168,7 +168,8 @@
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('valid:',d.get\\('meta',{}\\).get\\('valid'\\),'| code:',d.get\\('meta',{}\\).get\\('detail'\\) or d.get\\('meta',{}\\).get\\('code'\\),'| licenseID:',\\(d.get\\('data'\\) or {}\\).get\\('id'\\)\\)\")",
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('valid:',d.get\\('meta',{}\\).get\\('valid'\\),'| code:',d.get\\('meta',{}\\).get\\('code'\\),'| detail:',d.get\\('meta',{}\\).get\\('detail'\\)\\)\")",
       "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_activation-call.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
-      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_license-persistence.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_license-persistence.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_signature-verify.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
     ]
   }
 }
