@@ -99,7 +99,7 @@ struct SettingsView: View {
         case failed
     }
 
-    private var isMain: Bool { store.config.role == "main" }
+    private var isMain: Bool { store.effectiveRole == "main" }
     private var switchLabel: String { isMain ? "Switch to Backup" : "Switch to Main" }
     private var switchRole: String  { isMain ? "backup" : "main" }
     private var isAutomatic: Bool   { localDiscoveryMode == "automatic" }
@@ -235,7 +235,7 @@ struct SettingsView: View {
                     onConfirm: {
                         showRoleConfirm = false
                         let targetRole = switchRole
-                        let currentRole = store.config.role
+                        let currentRole = store.effectiveRole
 
                         Task { @MainActor in
                             // Handle Bonjour services during role switch
@@ -1792,15 +1792,25 @@ struct SettingsView: View {
     // Backup group 1 — Connection: Role · Discovery mode · Interface · Destination
     @ViewBuilder private var backupConnectionContent: some View {
         sectionHeader("Role")
-        VStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text("Backup")
                     .font(.system(size: 12))
                     .foregroundColor(.white)
                 Spacer()
-                Button(switchLabel) { showRoleConfirm = true }
-                    .buttonStyle(.bordered)
+                // Lock: only offer the Main switch when the license gate is granted.
+                if store.fullModeGranted {
+                    Button(switchLabel) { showRoleConfirm = true }
+                        .buttonStyle(.bordered)
+                        .font(.system(size: 11))
+                }
+            }
+            if !store.fullModeGranted {
+                Text("Backup-only — activate a license to enable Main mode.")
                     .font(.system(size: 11))
+                    .foregroundColor(labelColor)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(.horizontal, 20)
@@ -2016,7 +2026,11 @@ struct SettingsView: View {
                     Text("Activating…").font(.system(size: 11)).foregroundColor(labelColor)
                 }
             case .success:
-                Text("Activated.").font(.system(size: 11)).foregroundColor(.white)
+                Text("Activated — relaunch to enable Main mode.")
+                    .font(.system(size: 11))
+                    .foregroundColor(.white)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             case .failure(let m):
                 Text(m)
                     .font(.system(size: 11))

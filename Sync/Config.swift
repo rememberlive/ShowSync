@@ -178,11 +178,23 @@ final class ConfigStore: ObservableObject {
         didSet { scheduleSave() }
     }
 
+    /// Launch-time license-gate snapshot. Defaults true (fail-open) until evaluated.
+    /// Captured ONCE at launch (evaluateLicenseGate) so the effective role is stable for
+    /// the whole session — activating a license takes effect on the next launch, not live
+    /// (avoids a half-started role swap mid-session). Never persisted.
+    private(set) var fullModeGranted: Bool = true
+
+    /// Evaluate the gate once at launch (call on the main actor, after loadFromStore).
+    @MainActor func evaluateLicenseGate() {
+        fullModeGranted = LicenseController.shared.grantsFullMode
+    }
+
     /// The role the app should ACT as for this launch. When full mode isn't granted,
     /// the app behaves as "backup" WITHOUT ever writing role.json (saved role untouched,
-    /// so reactivation restores it). Nothing reads this yet (wired in step 9b).
-    @MainActor var effectiveRole: String {
-        LicenseController.shared.grantsFullMode ? config.role : "backup"
+    /// so reactivation restores it). Read by service-start + UI decisions; NEVER by
+    /// save()/writeRole/setRole (those keep the REAL config.role so the override can't persist).
+    var effectiveRole: String {
+        fullModeGranted ? config.role : "backup"
     }
 
     // Transient — not persisted. Set by SyncEngine during active rsync.
@@ -281,6 +293,13 @@ final class ConfigStore: ObservableObject {
     // Saves the current role's settings, then loads the new role's settings.
     // Callers must not set config.role directly — always go through this method.
     func setRole(_ role: String) {
+        // Lock: cannot switch INTO Main while the license gate isn't granted. Switching
+        // to Backup is always allowed. Uses the launch-time snapshot so it matches
+        // effectiveRole (a freshly activated license enables Main on the next launch).
+        if role == "main" && !fullModeGranted {
+            NSLog("[Sync] setRole(main) blocked — license gate not granted (backup-only)")
+            return
+        }
         flushPendingSave()   // flush current role before switching
 
         var newConfig = role == "backup"

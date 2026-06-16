@@ -25,7 +25,7 @@ struct PopoverRootView: View {
     var body: some View {
         if showSettings {
             SettingsView(onBack: { showSettings = false })
-        } else if store.config.role == "backup" {
+        } else if store.effectiveRole == "backup" {
             BackupView(onSettingsTapped: { showSettings = true })
         } else {
             MainView(onSettingsTapped: { showSettings = true })
@@ -48,8 +48,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
-        LicenseController.shared.loadFromStore()  // populate license awareness (no gating)
-        if ConfigStore.shared.config.role == "backup" {
+        LicenseController.shared.loadFromStore()  // populate license awareness
+        ConfigStore.shared.evaluateLicenseGate()  // snapshot the gate before any role decision
+        if ConfigStore.shared.effectiveRole == "backup" {
             cleanupStaleSignalFiles()
             ensureSyncFolder()
             if ConfigStore.shared.config.username.isEmpty {
@@ -76,12 +77,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Set initial icon state before subscribing so the first icon render is correct.
         let store = ConfigStore.shared
-        if store.config.role != "backup" {
+        if store.effectiveRole != "backup" {
             store.iconState = store.config.isReadyToSync ? .idle : .notConfigured
         }
         // Backup initial state is .idle; NetworkMonitor will correct it on first path update.
 
-        if store.config.role == "backup" {
+        if store.effectiveRole == "backup" {
             checkRemoteLoginIfNeeded()
         }
 
@@ -117,7 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Registers the global sync hotkey (⌃⌥⌘S) for Main role if enabled.
     func startGlobalHotkeyIfNeeded() {
         let cfg = ConfigStore.shared.config
-        if cfg.role == "main" && cfg.globalHotkeyEnabled {
+        if ConfigStore.shared.effectiveRole == "main" && cfg.globalHotkeyEnabled {
             GlobalHotkey.shared.register()
         }
     }
@@ -125,7 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Starts Auto Sync timer at app launch for Main role with Auto Sync enabled.
     func startAutoSyncIfNeeded() {
         let cfg = ConfigStore.shared.config
-        if cfg.role == "main" && cfg.autoSyncEnabled {
+        if ConfigStore.shared.effectiveRole == "main" && cfg.autoSyncEnabled {
             SyncEngine.shared.startAutoSync()
         }
     }
@@ -142,14 +143,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 SyncEngine.shared.nextPushSyncDate = date
             }
         }
-        if cfg.role == "main" && cfg.pushSyncEnabled && !cfg.sourceFolder.isEmpty {
+        if ConfigStore.shared.effectiveRole == "main" && cfg.pushSyncEnabled && !cfg.sourceFolder.isEmpty {
             FSEventsWatcher.shared.start(path: cfg.sourceFolder, debounceSeconds: cfg.pushSyncDebounce)
         }
     }
 
     // Starts ReceiveMonitor at app launch for Backup role.
     func startReceiveMonitorIfNeeded() {
-        if ConfigStore.shared.config.role == "backup" {
+        if ConfigStore.shared.effectiveRole == "backup" {
             ReceiveMonitor.shared.startMonitoring()
         }
     }
@@ -158,7 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Safe to call repeatedly — BonjourAdvertiser.start() is idempotent.
     func updateBonjourAdvertiser() {
         let cfg = ConfigStore.shared.config
-        if cfg.role == "backup" && cfg.discoveryMode == "automatic" {
+        if ConfigStore.shared.effectiveRole == "backup" && cfg.discoveryMode == "automatic" {
             ConfigStore.shared.reloadIdentityFromDisk()
             BonjourAdvertiser.shared.start()
             // Layer 2b: listen for pairing requests — RE-bind every time this runs
@@ -174,7 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Starts/stops the Main-role Bonjour browser based on current role + discovery mode.
     func updateBonjourBrowser() {
         let cfg = ConfigStore.shared.config
-        if cfg.role == "main" && cfg.discoveryMode == "automatic" {
+        if ConfigStore.shared.effectiveRole == "main" && cfg.discoveryMode == "automatic" {
             BonjourBrowser.shared.start()
         } else {
             BonjourBrowser.shared.stop()
@@ -222,7 +223,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func checkSyncFolderWritability() {
-        guard ConfigStore.shared.config.role == "backup" else { return }
+        guard ConfigStore.shared.effectiveRole == "backup" else { return }
         let syncFolder = URL(fileURLWithPath: ConfigStore.shared.config.destinationFolder)
         DispatchQueue.global(qos: .utility).async {
             let testFile = syncFolder.appendingPathComponent(".syncwritetest")
@@ -237,7 +238,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func rebuildPopover() {
         if popover.isShown { popover.performClose(nil) }
         let store = ConfigStore.shared
-        store.iconState = store.config.role == "backup"
+        store.iconState = store.effectiveRole == "backup"
             ? .idle
             : (store.config.isReadyToSync ? .idle : .notConfigured)
         updateBonjourAdvertiser()
@@ -245,7 +246,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func checkRemoteLoginIfNeeded() {
-        guard ConfigStore.shared.config.role == "backup" else { return }
+        guard ConfigStore.shared.effectiveRole == "backup" else { return }
         // systemsetup -getremotelogin requires admin and outputs an access-denied message
         // on macOS 13+, making string parsing unreliable. A TCP probe of localhost:22 is
         // authoritative: exit 0 = sshd is listening (Remote Login ON), else OFF.
@@ -287,7 +288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Acknowledge persistent success/error/warning icon — revert to grey on open.
             let store = ConfigStore.shared
             if store.iconState == .success || store.iconState == .error || store.iconState == .warning {
-                store.iconState = store.config.role == "backup"
+                store.iconState = store.effectiveRole == "backup"
                     ? .idle
                     : (store.config.isReadyToSync ? .idle : .notConfigured)
             }
@@ -297,7 +298,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Icon rendering
 
     private func applyIconState(_ state: SyncIconState) {
-        let symbolName = ConfigStore.shared.config.role == "backup"
+        let symbolName = ConfigStore.shared.effectiveRole == "backup"
             ? "arrow.down.circle"
             : "arrow.up.circle"
 
@@ -380,7 +381,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             let store = ConfigStore.shared
             if store.iconState == .success || store.iconState == .error || store.iconState == .warning {
-                store.iconState = store.config.role == "backup"
+                store.iconState = store.effectiveRole == "backup"
                     ? .idle
                     : (store.config.isReadyToSync ? .idle : .notConfigured)
             }
@@ -397,7 +398,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         ConfigStore.shared.flushPendingSave()
         GlobalHotkey.shared.unregister()
-        if ConfigStore.shared.config.role == "backup" {
+        if ConfigStore.shared.effectiveRole == "backup" {
             cleanupStaleSignalFiles()
         }
         BonjourAdvertiser.shared.stop()

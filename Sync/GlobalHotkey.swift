@@ -14,7 +14,7 @@ final class GlobalHotkey {
     }
 
     func register() {
-        guard ConfigStore.shared.config.role == "main",
+        guard ConfigStore.shared.effectiveRole == "main",
               ConfigStore.shared.config.globalHotkeyEnabled else { return }
         guard hotkeyRef == nil else { return }
 
@@ -80,7 +80,7 @@ final class GlobalHotkey {
 
     private func handleHotkey() {
         let config = ConfigStore.shared.config
-        guard config.role == "main" else { return }
+        guard ConfigStore.shared.effectiveRole == "main" else { return }
         NSLog("[GlobalHotkey] ⌃⌥⌘S pressed, triggering sync")
         SyncEngine.shared.sync(config: config)
     }

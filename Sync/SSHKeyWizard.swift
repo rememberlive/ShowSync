@@ -14,7 +14,7 @@ extension AppDelegate {
     // Manual trigger path (Settings button): always runs regardless of config state.
     func startSSHKeySetup() {
         let config = ConfigStore.shared.config
-        guard config.role == "main" else { return }
+        guard ConfigStore.shared.effectiveRole == "main" else { return }
         guard !config.destinationIP.isEmpty, !config.username.isEmpty else {
             NSLog("[Sync] SSH setup aborted — IP or username empty"); return
         }
