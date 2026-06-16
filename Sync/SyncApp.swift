@@ -48,6 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
+        LicenseController.shared.loadFromStore()  // populate license awareness (no gating)
         if ConfigStore.shared.config.role == "backup" {
             cleanupStaleSignalFiles()
             ensureSyncFolder()

@@ -2,7 +2,7 @@ import Foundation
 
 /// Result of a Keygen license activation/validation round-trip.
 enum ActivationResult {
-    case activated(licenseID: String, expiry: String?)
+    case activated(key: String, licenseID: String, expiry: String?)
     case expired
     case machineLimit
     case invalid(code: String)
@@ -46,7 +46,9 @@ enum LicenseManager {
 
         let code = first.meta?.code ?? ""
         if (first.meta?.valid ?? false) && code == "VALID" {
-            return .activated(licenseID: first.data?.id ?? "", expiry: first.data?.attributes?.expiry)
+            let lid = first.data?.id ?? "", exp = first.data?.attributes?.expiry
+            await LicenseController.shared.persist(key: key, licenseID: lid, expiry: exp)
+            return .activated(key: key, licenseID: lid, expiry: exp)
         }
 
         switch code {
@@ -64,7 +66,9 @@ enum LicenseManager {
             do { second = try await validateKey(key, fingerprint: fingerprint) }
             catch { return .networkError(error.localizedDescription) }
             if (second.meta?.valid ?? false) && (second.meta?.code ?? "") == "VALID" {
-                return .activated(licenseID: second.data?.id ?? licenseID, expiry: second.data?.attributes?.expiry)
+                let lid = second.data?.id ?? licenseID, exp = second.data?.attributes?.expiry
+                await LicenseController.shared.persist(key: key, licenseID: lid, expiry: exp)
+                return .activated(key: key, licenseID: lid, expiry: exp)
             }
             return .invalid(code: second.meta?.code ?? "REVALIDATE_FAILED")
 
