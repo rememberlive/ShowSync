@@ -159,7 +159,8 @@
       "Bash(ssh -o BatchMode=yes -o ConnectTimeout=2 -- testuser@127.0.0.1 echo hi)",
       "Bash(echo \"exit: $? \\(0/255=parsed+attempted connect; 'usage:' line = -- rejected\\)\")",
       "Bash(perl -ni -e 'print unless /^\\\\s*\\\\.tint\\\\\\(\\\\.blue\\\\\\)\\\\s*$/' Sync/SettingsView.swift)",
-      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_button-consistency.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_button-consistency.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_segmented-consistency.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
     ]
   }
 }

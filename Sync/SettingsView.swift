@@ -942,7 +942,6 @@ struct SettingsView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .accentColor(.blue)
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 12)
@@ -1784,7 +1783,6 @@ struct SettingsView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .accentColor(.blue)
 
             if isAutomatic {
                 HStack(spacing: 6) {
