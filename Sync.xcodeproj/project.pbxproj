@@ -13,6 +13,7 @@
 		A100000F /* KeygenConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000F /* KeygenConfig.swift */; };
 		A1000010 /* MachineFingerprint.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000010 /* MachineFingerprint.swift */; };
 		A1000011 /* LicenseStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000011 /* LicenseStore.swift */; };
+		A1000012 /* LicenseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000012 /* LicenseManager.swift */; };
 		A1000003 /* MainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000003 /* MainView.swift */; };
 		A1000004 /* BackupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000004 /* BackupView.swift */; };
 		A1000005 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000005 /* SettingsView.swift */; };
@@ -34,6 +35,7 @@
 		A200000F /* KeygenConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeygenConfig.swift; sourceTree = "<group>"; };
 		A2000010 /* MachineFingerprint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachineFingerprint.swift; sourceTree = "<group>"; };
 		A2000011 /* LicenseStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LicenseStore.swift; sourceTree = "<group>"; };
+		A2000012 /* LicenseManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LicenseManager.swift; sourceTree = "<group>"; };
 		A2000003 /* MainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainView.swift; sourceTree = "<group>"; };
 		A2000004 /* BackupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupView.swift; sourceTree = "<group>"; };
 		A2000005 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
@@ -77,6 +79,7 @@
 				A200000F /* KeygenConfig.swift */,
 				A2000010 /* MachineFingerprint.swift */,
 				A2000011 /* LicenseStore.swift */,
+				A2000012 /* LicenseManager.swift */,
 				A2000003 /* MainView.swift */,
 				A2000004 /* BackupView.swift */,
 				A2000005 /* SettingsView.swift */,
@@ -179,6 +182,7 @@
 				A100000F /* KeygenConfig.swift in Sources */,
 				A1000010 /* MachineFingerprint.swift in Sources */,
 				A1000011 /* LicenseStore.swift in Sources */,
+				A1000012 /* LicenseManager.swift in Sources */,
 				A1000003 /* MainView.swift in Sources */,
 				A1000004 /* BackupView.swift in Sources */,
 				A1000005 /* SettingsView.swift in Sources */,
