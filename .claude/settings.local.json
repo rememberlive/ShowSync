@@ -160,7 +160,9 @@
       "Bash(echo \"exit: $? \\(0/255=parsed+attempted connect; 'usage:' line = -- rejected\\)\")",
       "Bash(perl -ni -e 'print unless /^\\\\s*\\\\.tint\\\\\\(\\\\.blue\\\\\\)\\\\s*$/' Sync/SettingsView.swift)",
       "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_button-consistency.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
-      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_segmented-consistency.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_segmented-consistency.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
+      "Bash(awk '{print $5, $NF}')",
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_keygen-config.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
     ]
   }
 }
