@@ -102,4 +102,17 @@ final class LicenseController: ObservableObject {
         let isValid = (expiry == nil) || (expiry! > Date())
         return LicenseSummary(kind: kind, expiry: expiry, daysRemaining: days, isValid: isValid)
     }
+
+    /// Whether to grant full (non-gated) mode. FAIL-OPEN: on a Keychain READ ERROR
+    /// (ambiguous), grant full mode (never punish a paying user for a transient glitch).
+    /// Only a CLEANLY-ABSENT or EXPIRED license gates to backup-only.
+    /// Returns true = full mode allowed; false = gate to backup-only.
+    /// Reads loadResult() fresh — intended for launch-time evaluation.
+    var grantsFullMode: Bool {
+        switch LicenseStore.loadResult() {
+        case .error:  return true            // fail OPEN — honor saved role
+        case .absent: return false           // legitimately unlicensed → gate
+        case .found:  return summary.isValid // valid trial/paid → full; expired → gate
+        }
+    }
 }

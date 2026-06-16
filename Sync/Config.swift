@@ -178,6 +178,13 @@ final class ConfigStore: ObservableObject {
         didSet { scheduleSave() }
     }
 
+    /// The role the app should ACT as for this launch. When full mode isn't granted,
+    /// the app behaves as "backup" WITHOUT ever writing role.json (saved role untouched,
+    /// so reactivation restores it). Nothing reads this yet (wired in step 9b).
+    @MainActor var effectiveRole: String {
+        LicenseController.shared.grantsFullMode ? config.role : "backup"
+    }
+
     // Transient — not persisted. Set by SyncEngine during active rsync.
     @Published var isSyncing: Bool = false
 

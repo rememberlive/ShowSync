@@ -26,8 +26,16 @@ enum LicenseStore {
         return status == errSecSuccess
     }
 
-    /// Read the stored license string, or nil if none / on error.
-    static func load() -> String? {
+    /// Precise read outcome — lets the gate distinguish a legitimately-absent
+    /// license (gate to backup) from a transient read failure (fail OPEN).
+    enum LoadResult {
+        case found(String)
+        case absent            // errSecItemNotFound — cleanly no license
+        case error(OSStatus)   // any other failure — ambiguous (read glitch, auth, etc.)
+    }
+
+    /// Read the stored license with the precise outcome (absent vs error distinguished).
+    static func loadResult() -> LoadResult {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -37,12 +45,24 @@ enum LicenseStore {
         ]
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess,
-              let data = item as? Data,
-              let value = String(data: data, encoding: .utf8) else {
-            return nil
+        switch status {
+        case errSecSuccess:
+            if let data = item as? Data, let value = String(data: data, encoding: .utf8) {
+                return .found(value)
+            }
+            return .error(status)   // success but unreadable payload → treat as ambiguous
+        case errSecItemNotFound:
+            return .absent
+        default:
+            return .error(status)
         }
-        return value
+    }
+
+    /// Read the stored license string, or nil if none / on error.
+    /// Thin wrapper over loadResult() so existing callers are unchanged.
+    static func load() -> String? {
+        if case .found(let value) = loadResult() { return value }
+        return nil
     }
 
     /// Remove the stored license item. Returns true if removed or already absent.
