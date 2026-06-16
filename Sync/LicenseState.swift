@@ -49,7 +49,7 @@ struct LicenseSummary: Equatable {
 final class LicenseController: ObservableObject {
     static let shared = LicenseController()
     @Published private(set) var state: LicenseState = .unknown
-    private(set) var stored: StoredLicense?
+    @Published private(set) var stored: StoredLicense?
 
     private init() {}
 

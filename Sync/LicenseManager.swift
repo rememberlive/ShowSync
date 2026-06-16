@@ -20,6 +20,26 @@ enum LicenseManager {
         "Accept": "application/vnd.api+json"
     ]
 
+    // Product-scoped trial endpoint. Not live yet — fetchTrialKey fails gracefully
+    // (returns nil) on any non-200 / network / decode error, so the UI can prompt
+    // the user to enter a key manually.
+    private static let trialURL = "https://rememberlive.africa/showsync/trial"
+
+    /// Fetch a fresh trial license key from the product trial service.
+    /// Returns nil on any failure (offline, timeout, non-200, malformed) so callers
+    /// can degrade gracefully. Does NOT activate — caller passes the key to activate().
+    static func fetchTrialKey() async -> String? {
+        guard let url = URL(string: trialURL) else { return nil }
+        var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 10)
+        req.httpMethod = "GET"
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+            struct TrialKeyResponse: Decodable { let key: String }
+            return try? JSONDecoder().decode(TrialKeyResponse.self, from: data).key
+        } catch { return nil }
+    }
+
     // MARK: Minimal decodable shapes (only fields we use)
 
     private struct ValidateResponse: Decodable {

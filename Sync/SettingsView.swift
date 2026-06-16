@@ -29,6 +29,15 @@ private enum UpdateState {
     case failed
 }
 
+// Transient UI state for License activation / trial fetch (Settings → License).
+private enum ActivationUIState: Equatable {
+    case idle
+    case activating
+    case success
+    case failure(String)
+    case trialUnavailable
+}
+
 struct SettingsView: View {
     @EnvironmentObject var store: ConfigStore
     @ObservedObject private var bonjourBrowser = BonjourBrowser.shared
@@ -37,6 +46,7 @@ struct SettingsView: View {
     @ObservedObject private var interfaceManager = NetworkInterfaceManager.shared
     @ObservedObject private var pairingService = BonjourPairingService.shared
     @ObservedObject private var connectionStatus = ConnectionStatus.shared
+    @ObservedObject private var license = LicenseController.shared
     // Spec §5: callback to return to main dropdown view
     var onBack: () -> Void = {}
 
@@ -53,6 +63,9 @@ struct SettingsView: View {
     @State private var isEditingDeviceName = false
     @State private var editingDeviceName = ""
     @State private var updateState: UpdateState = .idle  // transient — manual update check (About)
+    @State private var showLicense = false               // License section open/closed (not persisted)
+    @State private var licenseKeyInput = ""
+    @State private var activationState: ActivationUIState = .idle  // transient — activate/trial result
     @State private var isEditingIP = false
     @State private var editingIP = ""
     @State private var isEditingBackupName = false
@@ -336,7 +349,17 @@ struct SettingsView: View {
 
                     Divider()
 
-                    // Section 4: About
+                    // Section 4: License
+                    groupHeader("License", expanded: showLicense) {
+                        showLicense.toggle()
+                    }
+                    if showLicense {
+                        licenseSectionContent
+                    }
+
+                    Divider()
+
+                    // Section 5: About
                     groupHeader("About",
                                 expanded: store.config.mainSettingsShowAbout) {
                         toggleAboutSection()
@@ -382,7 +405,17 @@ struct SettingsView: View {
 
                     Divider()
 
-                    // Section 4: About
+                    // Section 4: License
+                    groupHeader("License", expanded: showLicense) {
+                        showLicense.toggle()
+                    }
+                    if showLicense {
+                        licenseSectionContent
+                    }
+
+                    Divider()
+
+                    // Section 5: About
                     groupHeader("About",
                                 expanded: store.config.backupSettingsShowAbout) {
                         toggleBackupAboutSection()
@@ -1927,6 +1960,106 @@ struct SettingsView: View {
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 12)
+        }
+    }
+
+    // License group (shared, both roles): reads LicenseController.summary (status),
+    // and triggers activation / trial fetch. Reads + triggers only — gates nothing.
+    @ViewBuilder private var licenseSectionContent: some View {
+        let summary = license.summary
+        VStack(alignment: .leading, spacing: 8) {
+            // Status line derived from the licensing brain.
+            Text(licenseStatusText(summary))
+                .font(.system(size: 12))
+                .foregroundColor(.white)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            // Start free trial — fetch a trial key, then activate it.
+            Button("Start free trial") {
+                activationState = .activating
+                Task {
+                    if let k = await LicenseManager.fetchTrialKey() {
+                        activationState = mapActivationResult(await LicenseManager.activate(key: k))
+                    } else {
+                        activationState = .trialUnavailable
+                    }
+                }
+            }
+            .buttonStyle(.bordered)
+            .font(.system(size: 12))
+            .disabled(activationState == .activating)
+
+            // Manual key entry + Activate.
+            VStack(alignment: .leading, spacing: 6) {
+                TextField("Enter license key", text: $licenseKeyInput)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12))
+                Button("Activate") {
+                    activationState = .activating
+                    Task {
+                        activationState = mapActivationResult(await LicenseManager.activate(key: licenseKeyInput))
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .font(.system(size: 12))
+                .disabled(licenseKeyInput.isEmpty || activationState == .activating)
+            }
+
+            // Transient feedback.
+            switch activationState {
+            case .idle:
+                EmptyView()
+            case .activating:
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Activating…").font(.system(size: 11)).foregroundColor(labelColor)
+                }
+            case .success:
+                Text("Activated.").font(.system(size: 11)).foregroundColor(.white)
+            case .failure(let m):
+                Text(m)
+                    .font(.system(size: 11))
+                    .foregroundColor(labelColor)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            case .trialUnavailable:
+                Text("Couldn't reach the trial service. Enter a license key instead.")
+                    .font(.system(size: 11))
+                    .foregroundColor(labelColor)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 16)
+    }
+
+    // Human-readable license status from the read-only summary. Display only.
+    private func licenseStatusText(_ s: LicenseSummary) -> String {
+        switch s.kind {
+        case .none:
+            return "No license — start a trial or enter a key."
+        case .trial:
+            return s.isValid ? "Trial — \(s.daysRemaining ?? 0) days remaining" : "Trial expired"
+        case .paid:
+            return "Licensed"
+        }
+    }
+
+    // Map an activation round-trip result to friendly UI feedback.
+    private func mapActivationResult(_ r: ActivationResult) -> ActivationUIState {
+        switch r {
+        case .activated:
+            return .success
+        case .expired:
+            return .failure("This license has expired.")
+        case .machineLimit:
+            return .failure("Already active on the maximum 2 Macs.")
+        case .invalid(let c):
+            return .failure("Invalid license key (\(c)).")
+        case .networkError:
+            return .failure("Couldn't reach the licensing server. Check your connection.")
         }
     }
 
