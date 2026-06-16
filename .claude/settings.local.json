@@ -162,7 +162,8 @@
       "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_button-consistency.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
       "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_segmented-consistency.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
       "Bash(awk '{print $5, $NF}')",
-      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_keygen-config.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_keygen-config.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_machine-fingerprint.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
     ]
   }
 }
