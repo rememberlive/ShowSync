@@ -1,6 +1,21 @@
 import Foundation
 import Combine
 
+/// Tolerant ISO8601 parser for Keygen timestamps (with OR without fractional seconds).
+/// Keygen expiries look like "2026-06-30T02:10:04.719Z" — the default
+/// ISO8601DateFormatter (no fractional seconds) returns nil for those.
+enum LicenseDate {
+    static func parse(_ s: String?) -> Date? {
+        guard let s else { return nil }
+        let withFrac = ISO8601DateFormatter()
+        withFrac.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = withFrac.date(from: s) { return d }
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return plain.date(from: s)
+    }
+}
+
 /// Persisted license record (JSON-encoded into the Keychain via LicenseStore).
 struct StoredLicense: Codable {
     let key: String
@@ -8,6 +23,7 @@ struct StoredLicense: Codable {
     let expiry: String?        // ISO8601 from Keygen, may be nil for perpetual
     var lastValidated: Date
     var status: String         // "valid" | "expired" | etc. (informational for now)
+    var policyID: String?      // Keygen policy id (optional → old records still decode)
 }
 
 /// Runtime license state the app (and later the Settings UI) observes.
@@ -17,6 +33,16 @@ enum LicenseState: Equatable {
     case none             // no stored license (would mean trial/unlicensed later)
     case active(expiry: String?)
     case expired
+}
+
+/// Derived, read-only classification of the stored license. Gates nothing.
+enum LicenseKind: Equatable { case trial, paid, none }
+
+struct LicenseSummary: Equatable {
+    let kind: LicenseKind
+    let expiry: Date?
+    let daysRemaining: Int?
+    let isValid: Bool
 }
 
 @MainActor
@@ -39,9 +65,8 @@ final class LicenseController: ObservableObject {
         }
         stored = lic
         // Informational expiry check only (no enforcement yet).
-        if let expiry = lic.expiry,
-           let date = ISO8601DateFormatter().date(from: expiry),
-           date < Date() {
+        // Uses the tolerant parser so fractional-seconds expiries parse correctly.
+        if let date = LicenseDate.parse(lic.expiry), date < Date() {
             state = .expired
         } else {
             state = .active(expiry: lic.expiry)
@@ -49,14 +74,32 @@ final class LicenseController: ObservableObject {
     }
 
     /// Persist a freshly activated license and update state. Called on activation success.
-    func persist(key: String, licenseID: String, expiry: String?) {
+    func persist(key: String, licenseID: String, expiry: String?, policyID: String?) {
         let lic = StoredLicense(key: key, licenseID: licenseID, expiry: expiry,
-                                lastValidated: Date(), status: "valid")
+                                lastValidated: Date(), status: "valid", policyID: policyID)
         if let data = try? JSONEncoder().encode(lic),
            let json = String(data: data, encoding: .utf8) {
             LicenseStore.save(json)
         }
         stored = lic
         state = .active(expiry: expiry)
+    }
+
+    /// Derived, read-only summary of the current license. Purely informational — gates nothing.
+    var summary: LicenseSummary {
+        guard let lic = stored else {
+            return LicenseSummary(kind: .none, expiry: nil, daysRemaining: nil, isValid: false)
+        }
+        // Classify by policy id (robust); fall back to expiry presence if unknown.
+        let kind: LicenseKind
+        switch lic.policyID {
+        case KeygenConfig.trialPolicyID: kind = .trial
+        case KeygenConfig.paidPolicyID:  kind = .paid
+        default:                          kind = (lic.expiry != nil) ? .trial : .paid
+        }
+        let expiry = LicenseDate.parse(lic.expiry)
+        let days: Int? = expiry.map { max(0, Int(($0.timeIntervalSinceNow / 86400).rounded(.down))) }
+        let isValid = (expiry == nil) || (expiry! > Date())
+        return LicenseSummary(kind: kind, expiry: expiry, daysRemaining: days, isValid: isValid)
     }
 }

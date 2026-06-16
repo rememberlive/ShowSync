@@ -48,7 +48,7 @@ enum LicenseManager {
         let code = first.meta?.code ?? ""
         if (first.meta?.valid ?? false) && code == "VALID" {
             let lid = first.data?.id ?? "", exp = first.data?.attributes?.expiry
-            await LicenseController.shared.persist(key: key, licenseID: lid, expiry: exp)
+            await LicenseController.shared.persist(key: key, licenseID: lid, expiry: exp, policyID: policyID(from: key))
             return .activated(key: key, licenseID: lid, expiry: exp)
         }
 
@@ -68,7 +68,7 @@ enum LicenseManager {
             catch { return .networkError(error.localizedDescription) }
             if (second.meta?.valid ?? false) && (second.meta?.code ?? "") == "VALID" {
                 let lid = second.data?.id ?? licenseID, exp = second.data?.attributes?.expiry
-                await LicenseController.shared.persist(key: key, licenseID: lid, expiry: exp)
+                await LicenseController.shared.persist(key: key, licenseID: lid, expiry: exp, policyID: policyID(from: key))
                 return .activated(key: key, licenseID: lid, expiry: exp)
             }
             return .invalid(code: second.meta?.code ?? "REVALIDATE_FAILED")
@@ -145,6 +145,21 @@ extension LicenseManager {
         let pad = b.count % 4
         if pad != 0 { b += String(repeating: "=", count: 4 - pad) }
         return Data(base64Encoded: b)
+    }
+
+    /// Extract the Keygen policy id from a license key's embedded payload
+    /// ("key/<base64 payload>.<sig>" → payload JSON → policy.id). nil if unreadable.
+    static func policyID(from key: String) -> String? {
+        guard key.hasPrefix("key/") else { return nil }
+        let body = String(key.dropFirst("key/".count))
+        let payloadB64 = String(body.prefix(while: { $0 != "." }))
+        guard let data = Data(base64Encoded: payloadB64),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let policy = json["policy"] as? [String: Any],
+              let id = policy["id"] as? String else {
+            return nil
+        }
+        return id
     }
 
     /// Decode a hex string to Data (nil if malformed).
