@@ -816,9 +816,10 @@ struct SettingsView: View {
 
         // 4. Delete entire App Support/Sync directory
         let fm = FileManager.default
-        let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let syncDir = appSupport.appendingPathComponent("Sync", isDirectory: true)
-        try? fm.removeItem(at: syncDir)
+        if let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            let syncDir = appSupport.appendingPathComponent("Sync", isDirectory: true)
+            try? fm.removeItem(at: syncDir)
+        }
 
         // 5. Clear UserDefaults key
         UserDefaults.standard.removeObject(forKey: "syncRole")
@@ -1540,6 +1541,14 @@ struct SettingsView: View {
                     let mac = macForInterface(name: iface.name)
                     Text(iface.displayLabel).tag(mac)
                 }
+                // If the chosen NIC is temporarily absent (unplugged), keep a tagged option
+                // for its MAC so the selection stays valid (no "invalid selection" warning)
+                // and the choice is preserved — it recovers when the interface returns.
+                let savedMAC = store.config.preferredInterfaceMAC
+                if !savedMAC.isEmpty &&
+                   !interfaceManager.availableInterfaces.contains(where: { macForInterface(name: $0.name) == savedMAC }) {
+                    Text("Chosen interface (not connected)").tag(savedMAC)
+                }
             }
             .pickerStyle(.menu)
             .labelsHidden()
@@ -1741,6 +1750,27 @@ struct SettingsView: View {
                     .frame(width: 100)
                 }
             }
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 12)
+
+        Divider()
+
+        sectionHeader("Verify")
+        VStack(alignment: .leading, spacing: 8) {
+            Picker("", selection: $store.config.fastVerify) {
+                Text("Fast").tag(true)
+                Text("Deep").tag(false)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            Text(store.config.fastVerify
+                 ? "Checks file size and date only. Quick for large files."
+                 : "Checks every file's contents (checksum). Most thorough.")
+                .font(.system(size: 11))
+                .foregroundColor(labelColor)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 12)

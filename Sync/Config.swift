@@ -58,6 +58,7 @@ struct Config {
     var pushSyncDebounce: Int = 10
     var versionHistoryEnabled: Bool = false
     var maxVersionCount: Int = 3
+    var fastVerify: Bool = false   // false = Deep (rsync -avc, checksum); true = Fast (-av, size+modtime)
 
     // Discovery (per-role on disk; one runtime field reflects the active role)
     var discoveryMode: String = "automatic"   // "automatic" | "manual"
@@ -117,6 +118,7 @@ private struct MainConfig: Codable {
     var pushSyncDebounce: Int = 10
     var versionHistoryEnabled: Bool = false
     var maxVersionCount: Int = 3
+    var fastVerify: Bool = false
     var discoveryMode: String = "automatic"
     var backupHostname: String = ""
     var lastBackupDiscoveryName: String = ""
@@ -350,6 +352,7 @@ final class ConfigStore: ObservableObject {
                 pushSyncDebounce:              config.pushSyncDebounce,
                 versionHistoryEnabled:         config.versionHistoryEnabled,
                 maxVersionCount:               config.maxVersionCount,
+                fastVerify:                    config.fastVerify,
                 discoveryMode:                 config.discoveryMode,
                 backupHostname:                config.backupHostname,
                 lastBackupDiscoveryName:       config.lastBackupDiscoveryName,
@@ -688,6 +691,7 @@ final class ConfigStore: ObservableObject {
         // Clamp maxVersionCount: 3-20, migrate 0 (old unlimited) or <3 to 3, >20 to 20
         let verCount = m.maxVersionCount
         c.maxVersionCount               = max(3, min(20, verCount == 0 ? 3 : verCount))
+        c.fastVerify                    = m.fastVerify
         c.discoveryMode                 = m.discoveryMode.isEmpty ? "automatic" : m.discoveryMode
         c.backupHostname                = m.backupHostname
         c.lastBackupDiscoveryName       = m.lastBackupDiscoveryName

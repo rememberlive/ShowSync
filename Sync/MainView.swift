@@ -81,7 +81,7 @@ extension SyncStatus: Equatable {
 enum VerifyStatus: Equatable {
     case idle
     case verifying
-    case verified
+    case verified(deep: Bool)   // deep = checksum (-avc); false = fast size+modtime (-av)
     case differs(Int)  // Number of files that differ
     case failed(String)
 
@@ -99,7 +99,7 @@ enum VerifyStatus: Equatable {
         switch self {
         case .idle:             return ""
         case .verifying:        return "Verifying… (checks every file)"
-        case .verified:         return "Verified — all files match"
+        case .verified(let deep): return deep ? "Verified — all files match" : "Verified — sizes & dates match"
         case .differs(let n):   return "\(n) file\(n == 1 ? "" : "s") differ — re-sync recommended"
         case .failed(let msg):  return msg
         }
@@ -272,7 +272,7 @@ final class SyncEngine: ObservableObject {
         var prepArgs = ["-av", "--dry-run", "--stats"] + RsyncExclusions.args
         if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
            !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
-            prepArgs.insert(contentsOf: ["-e", "ssh -b \(bindIP)"], at: 0)
+            prepArgs.insert(contentsOf: ["-e", "ssh -b \(bindIP) -o ServerAliveInterval=15 -o ServerAliveCountMax=3"], at: 0)
         }
         prepArgs.append(contentsOf: [source, dest])
         prepProc.arguments = prepArgs
@@ -427,7 +427,7 @@ final class SyncEngine: ObservableObject {
                     var rsyncArgs = ["-av", "--stats"] + RsyncExclusions.args
                     if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
                        !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
-                        rsyncArgs.insert(contentsOf: ["-e", "ssh -b \(bindIP)"], at: 0)
+                        rsyncArgs.insert(contentsOf: ["-e", "ssh -b \(bindIP) -o ServerAliveInterval=15 -o ServerAliveCountMax=3"], at: 0)
                     }
                     rsyncArgs.append(contentsOf: [source, dest])
                     proc.arguments = rsyncArgs
@@ -676,7 +676,8 @@ final class SyncEngine: ObservableObject {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: rsyncPath)
 
-        var args = ["-avc", "--dry-run"] + RsyncExclusions.args
+        // Deep (default) checksums every file (-avc); Fast compares size+modtime only (-av).
+        var args = (config.fastVerify ? ["-av", "--dry-run"] : ["-avc", "--dry-run"]) + RsyncExclusions.args
         if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
            !config.preferredInterfaceMAC.isEmpty {
             args.insert(contentsOf: ["-e", "ssh -b \(bindIP)"], at: 0)
@@ -753,7 +754,7 @@ final class SyncEngine: ObservableObject {
                         // Success: count files that would transfer (= differ)
                         let differCount = self.countDifferingFiles(output)
                         if differCount == 0 {
-                            self.verifyStatus = .verified
+                            self.verifyStatus = .verified(deep: !config.fastVerify)
                             resultCode = "ok"
                         } else {
                             self.verifyStatus = .differs(differCount)
