@@ -73,8 +73,12 @@ enum LicenseManager {
         }
 
         switch code {
-        case "NO_MACHINE", "NO_MACHINES":
+        case "NO_MACHINE", "NO_MACHINES", "FINGERPRINT_SCOPE_MISMATCH":
             // Valid key, this machine not activated yet → activate, then re-validate.
+            // FINGERPRINT_SCOPE_MISMATCH is Keygen's "this fingerprint isn't enrolled on
+            // the license yet" under fingerprint-scoped validation when the license already
+            // has another machine — same remedy: enroll this machine. The 2-machine limit
+            // is still enforced server-side (a full license returns 422 → .machineLimit).
             guard let licenseID = first.data?.id else { return .invalid(code: "MISSING_LICENSE_ID") }
             let activateStatus: Int
             do { activateStatus = try await activateMachine(key: key, fingerprint: fingerprint, licenseID: licenseID) }

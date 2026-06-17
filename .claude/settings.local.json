@@ -175,7 +175,8 @@
       "Bash(pkill -f ShowSync.app)",
       "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_license-ui.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
       "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_gate-foundations.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
-      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_gate-enforcement.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_gate-enforcement.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_activation-fix.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
     ]
   }
 }
