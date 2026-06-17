@@ -46,6 +46,9 @@ final class BonjourAdvertiser: ObservableObject {
     private var ackClearWorkItem: DispatchWorkItem?
 
     private var advertiser: Advertiser?
+    /// OS index of the NIC this advertiser is bound to — captured at start, cleared at
+    /// stop. Used by NetworkInterfaceManager to detect interface-index drift on cable replug.
+    private(set) var boundInterfaceIndex: UInt32?
 
     private init() {}
 
@@ -84,6 +87,7 @@ final class BonjourAdvertiser: ObservableObject {
                 }
             }
             advertiser = adv
+            boundInterfaceIndex = iface.index
         } catch {
             DispatchQueue.main.async { self.state = .failed(reason: error.localizedDescription) }
         }
@@ -92,6 +96,7 @@ final class BonjourAdvertiser: ObservableObject {
     func stop() {
         advertiser?.stop()
         advertiser = nil
+        boundInterfaceIndex = nil
         DispatchQueue.main.async { self.state = .idle }
     }
 
@@ -234,6 +239,9 @@ final class BonjourBrowser: ObservableObject {
     var pairingNackCallback: ((String, String) -> Void)?
 
     private var browser: Browser?
+    /// OS index of the NIC this browser is bound to — captured at start, cleared at stop.
+    /// Used by NetworkInterfaceManager to detect interface-index drift on cable replug.
+    private(set) var boundInterfaceIndex: UInt32?
     private var resolvers: [String: Resolver] = [:]
     private var lastHandledVerifyNonce: String = ""
 
@@ -278,6 +286,7 @@ final class BonjourBrowser: ObservableObject {
                 }
             }
             browser = b
+            boundInterfaceIndex = iface.index
         } catch {
             DispatchQueue.main.async {
                 self.state = .failed(reason: error.localizedDescription)
@@ -288,6 +297,7 @@ final class BonjourBrowser: ObservableObject {
     func stop() {
         browser?.stop()
         browser = nil
+        boundInterfaceIndex = nil
         for (_, resolver) in resolvers {
             resolver.stop()
         }
@@ -566,6 +576,10 @@ final class BonjourPairingService: ObservableObject {
     private var isPairingInProgress = false
     private var advertiser: Advertiser?
     private var browser: Browser?
+    /// OS index of the NIC the pairing LISTENER (browser) is bound to — captured in
+    /// startListening, cleared in stopListening. Mirrors the advertiser on the Backup so
+    /// a cable-replug index drift reconstructs the listener alongside the advertiser.
+    private(set) var boundInterfaceIndex: UInt32?
     private var resolvers: [String: Resolver] = [:]
     private var currentNonce: String = ""
     private var targetBackupId: String = ""
@@ -791,6 +805,7 @@ final class BonjourPairingService: ObservableObject {
                 }
             }
             browser = b
+            boundInterfaceIndex = iface.index
             DispatchQueue.main.async { self.state = .browsing }
         } catch {
             // Bind failures must be visible — a silently dead listener means the
@@ -809,6 +824,7 @@ final class BonjourPairingService: ObservableObject {
     func stopListening() {
         browser?.stop()
         browser = nil
+        boundInterfaceIndex = nil
         for (_, resolver) in resolvers {
             resolver.stop()
         }

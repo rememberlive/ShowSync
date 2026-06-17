@@ -98,6 +98,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         startReceiveMonitorIfNeeded()
         updateBonjourAdvertiser()
         updateBonjourBrowser()
+        // Start the interface path monitor now so cable-replug recovery is live in both
+        // roles from launch (its start is otherwise lazy; this is the only start site).
+        NetworkInterfaceManager.shared.refreshAvailability()
         startAutoSyncIfNeeded()
         startPushSyncIfNeeded()
         startGlobalHotkeyIfNeeded()

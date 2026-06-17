@@ -29,6 +29,9 @@ final class NetworkInterfaceManager: ObservableObject {
     private let monitor = NWPathMonitor()
     private let queue = DispatchQueue(label: "com.sync.interfacemanager", qos: .utility)
 
+    // Debounce window for cable-replug discovery reconstruction (collapse rapid up-events).
+    private var lastReconstructAt: Date = .distantPast
+
     private init() {
         monitor.pathUpdateHandler = { [weak self] _ in
             self?.updateInterfaces()
@@ -120,6 +123,56 @@ final class NetworkInterfaceManager: ObservableObject {
                 }
             } else if ConfigStore.shared.iconState == .warning {
                 ConfigStore.shared.iconState = .idle
+            }
+        }
+
+        // Cable-replug recovery: if the chosen NIC returned on a NEW index, reconstruct
+        // discovery for the current role. Same index → do nothing (ShowNetwork self-recovers).
+        checkInterfaceDriftAndReconstruct()
+    }
+
+    // Reconstruct discovery only when the bound interface INDEX has drifted (e.g. a
+    // USB-C adapter re-enumerates on replug). MAC missing/down → wait for return.
+    // Automatic mode (no chosen MAC) and not-yet-started services are left alone.
+    private func checkInterfaceDriftAndReconstruct() {
+        let mac = ConfigStore.shared.config.preferredInterfaceMAC
+        guard !mac.isEmpty else { return }   // Automatic — not bound to a specific NIC
+
+        let resolved: Interface
+        do { resolved = try Interfaces.find(byMAC: mac) }
+        catch {
+            // MAC gone / interface down — do NOT reconstruct or fall back; show traffic
+            // stays on the chosen NIC or nowhere. A later path event (when it returns)
+            // with a found index will catch the drift.
+            NSLog("[Discovery] preferred NIC (mac=%@) not resolvable: %@ — awaiting return",
+                  mac, error.localizedDescription)
+            return
+        }
+
+        // Compare the freshly resolved index against the running service for this role.
+        let role = ConfigStore.shared.effectiveRole
+        let boundIndex: UInt32? = (role == "backup")
+            ? BonjourAdvertiser.shared.boundInterfaceIndex
+            : BonjourBrowser.shared.boundInterfaceIndex
+        guard let bound = boundIndex else { return }   // service not running yet — normal start handles it
+        guard bound != resolved.index else { return }  // same index — ShowNetwork self-recovers; don't thrash
+
+        // Debounce rapid path events (multiple up-events on a single replug).
+        let now = Date()
+        guard now.timeIntervalSince(lastReconstructAt) > 3 else { return }
+        lastReconstructAt = now
+
+        NSLog("[Discovery] interface index drift %u -> %u (mac=%@) — reconstructing discovery for role=%@",
+              bound, resolved.index, mac, role)
+
+        // Role-aware reconstruct via the services' existing restart() (stop→discard→start,
+        // which re-resolves the new index and re-captures boundInterfaceIndex).
+        Task { @MainActor in
+            if ConfigStore.shared.effectiveRole == "backup" {
+                BonjourAdvertiser.shared.restart()
+                BonjourPairingService.shared.restartListening()
+            } else {
+                BonjourBrowser.shared.restart()
             }
         }
     }

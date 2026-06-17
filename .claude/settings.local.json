@@ -176,7 +176,10 @@
       "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_license-ui.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
       "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_gate-foundations.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
       "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_gate-enforcement.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
-      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_activation-fix.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_activation-fix.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
+      "Bash(sed -n '1715,1726p' Sync/MainView.swift)",
+      "Bash(sed -n '23,40p' Sync/BackupView.swift)",
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_cable-recovery.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
     ]
   }
 }
