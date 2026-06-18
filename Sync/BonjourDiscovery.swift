@@ -835,6 +835,9 @@ final class BonjourPairingService: ObservableObject {
     private func handlePairingBrowserEvent(_ event: Browser.Event, interface: Interface) {
         switch event {
         case .added(let name, let type, let domain, _):
+            // Stop any existing resolver for this name before overwriting — a duplicate
+            // .added (advertiser restart) would otherwise orphan a live DNS-SD query.
+            resolvers[name]?.stop()
             let resolver = Resolver(interface: interface, name: name, type: type, domain: domain)
             resolvers[name] = resolver
             do {

@@ -180,7 +180,10 @@
       "Bash(sed -n '1715,1726p' Sync/MainView.swift)",
       "Bash(sed -n '23,40p' Sync/BackupView.swift)",
       "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_cable-recovery.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
-      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_fast-deep-verify.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")"
+      "Bash(zip -r \"Sync_backup_$\\(date +%Y-%m-%d-%H%M\\)_fast-deep-verify.zip\" Sync -x \"*/DerivedData/*\" \"*/.build/*\" \"*/build/*\")",
+      "Bash(sed -n '125,128p' Sources/ShowNetwork/Browser.swift)",
+      "Bash(sed -n '140,143p' Sources/ShowNetwork/Advertiser.swift)",
+      "Bash(sed -n '236,237p;264,265p;277,278p' Sources/ShowNetwork/Resolver.swift)"
     ]
   }
 }
