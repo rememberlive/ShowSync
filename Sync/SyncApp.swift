@@ -1,3 +1,6 @@
+// Copyright © 2026 Remember Chaitezvi. All rights reserved.
+// Part of ShowSync — Remember Live.
+
 import SwiftUI
 import AppKit
 import Combine

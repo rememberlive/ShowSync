@@ -1,3 +1,6 @@
+// Copyright © 2026 Remember Chaitezvi. All rights reserved.
+// Part of ShowSync — Remember Live.
+
 import Foundation
 
 /// Static Keygen.sh account/product/policy configuration for ShowSync licensing.
