@@ -288,6 +288,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             popover.performClose(nil)
         } else {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            // Let the popover appear over another app's full-screen space even when
+            // running as .regular (Menu Bar & Dock). .accessory gets this for free;
+            // .regular needs the flag. Additive — no level/canJoinAllSpaces.
+            if let w = popover.contentViewController?.view.window {
+                w.collectionBehavior.insert(.fullScreenAuxiliary)
+            }
             // In an .accessory-policy app the popover window is not automatically made key,
             // so SwiftUI controls (Toggle/checkbox) don't receive events. Force it here.
             popover.contentViewController?.view.window?.makeKey()
