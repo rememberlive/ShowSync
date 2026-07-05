@@ -219,6 +219,9 @@ struct DiscoveredBackup: Identifiable, Equatable {
     var backupDeviceId: String = ""
     var backupFingerprint: String = ""
     var username: String = ""  // Backup's macOS account name ("" = older Backup, no broadcast)
+    // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
+    // "" = mac Backup (key never advertised by Mac Backups); "windows" = ShowSync-Win Backup.
+    var platform: String = ""
 
     var isUsingFallback: Bool {
         !effectiveDestinationPath.isEmpty && effectiveDestinationPath != destinationPath
@@ -398,6 +401,9 @@ final class BonjourBrowser: ObservableObject {
             let backupId = txt["backupId"] ?? ""
             let backupFP = txt["backupFP"] ?? ""
             let backupUsername = txt["username"] ?? ""  // "" = older Backup
+            // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
+            // Absent key (every Mac Backup) → "" → existing behavior exactly.
+            let peerPlatform = txt["platform"] ?? ""
 
             if let currentIP = getCurrentIP(), resolvedIP == currentIP {
                 return
@@ -413,7 +419,8 @@ final class BonjourBrowser: ObservableObject {
                 isReachableOnSelectedInterface: isReachable,
                 backupDeviceId: backupId,
                 backupFingerprint: backupFP,
-                username: backupUsername
+                username: backupUsername,
+                platform: peerPlatform  // V1.1 Windows-target path
             )
 
             // A different service name resolving to the same IP + hostname is a stale
@@ -494,6 +501,12 @@ final class BonjourBrowser: ObservableObject {
             // would re-render every ConfigStore observer and schedule config saves.
             if ConfigStore.shared.config.backupDestination != backup.destinationPath {
                 ConfigStore.shared.config.backupDestination = backup.destinationPath
+            }
+            // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
+            // Always adopted (absent key → "") so a stale "windows" flag self-heals
+            // the moment a Mac Backup is (re)connected. Write-on-change, same idiom as above.
+            if ConfigStore.shared.config.backupPlatform != backup.platform {
+                ConfigStore.shared.config.backupPlatform = backup.platform
             }
             if SyncEngine.shared.usingFallback != backup.isUsingFallback {
                 SyncEngine.shared.usingFallback = backup.isUsingFallback

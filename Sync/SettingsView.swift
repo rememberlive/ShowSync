@@ -79,6 +79,9 @@ struct SettingsView: View {
     @State private var destinationCheckState: DestinationCheckState = .idle
     @State private var hasConfirmedDestinationThisConnection = false
     @State private var manualModeFreeSpace: Int64 = 0  // Free space read via SSH for manual mode
+    // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
+    @State private var isEditingWindowsPath = false
+    @State private var editingWindowsPath = ""
     @State private var isPairingStarting = false
 
     // Custom timing option editing state
@@ -1087,8 +1090,33 @@ struct SettingsView: View {
                         .font(.system(size: 11))
                     }
                 }
+                // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
+                // Explicit opt-in: a Windows Backup can't be auto-detected in manual mode (no TXT),
+                // and no coupling to ShowSync-Win's config layout in V1.1 (approved §8.1).
+                Toggle(isOn: Binding(
+                    get: { store.config.backupPlatform == "windows" },
+                    set: { on in
+                        store.config.backupPlatform = on ? "windows" : ""
+                        destinationCheckState = .idle
+                        hasConfirmedDestinationThisConnection = false
+                        isEditingWindowsPath = false
+                        connectionStatus.recheck()
+                    }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Windows Backup")
+                            .font(.system(size: 12))
+                            .foregroundColor(.white)
+                        Text("Backup runs ShowSync for Windows (files sent over SFTP)")
+                            .font(.system(size: 10))
+                            .foregroundColor(labelColor)
+                    }
+                }
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+
                 // Manual mode: Confirm Destination button + status
-                if !store.config.destinationIP.isEmpty {
+                if !store.config.destinationIP.isEmpty, store.config.backupPlatform != "windows" {  // V1.1: gated — Windows row below
                     HStack {
                         Text("Folder")
                             .font(.system(size: 11))
@@ -1158,6 +1186,90 @@ struct SettingsView: View {
                                             .fixedSize(horizontal: false, vertical: true)
                                     }
                                 }
+                                Button("Retry") { confirmBackupDestination() }
+                                    .buttonStyle(.bordered)
+                                    .font(.system(size: 10))
+                            }
+                        }
+                    }
+                }
+
+                // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
+                // Windows sibling of the Folder row above: the path is user-entered (forward
+                // slashes, e.g. C:/Users/name/Sync; empty = "Sync" in the sshd home folder),
+                // then write-tested over SFTP via the same Confirm Destination states.
+                if !store.config.destinationIP.isEmpty, store.config.backupPlatform == "windows" {
+                    HStack {
+                        Text("Folder")
+                            .font(.system(size: 11))
+                            .foregroundColor(labelColor)
+                        Spacer()
+                        if isEditingWindowsPath {
+                            TextField("C:/Users/name/Sync", text: $editingWindowsPath)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 170)
+                                .multilineTextAlignment(.trailing)
+                            Button("Save") {
+                                store.config.backupDestination = WindowsTransport.normalizeRemotePath(editingWindowsPath)
+                                isEditingWindowsPath = false
+                                destinationCheckState = .idle
+                            }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 11))
+                            .foregroundColor(.blue)
+                            Button("Cancel") { isEditingWindowsPath = false }
+                                .buttonStyle(.plain)
+                                .font(.system(size: 11))
+                                .foregroundColor(Color(white: 0.5))
+                        } else {
+                            VStack(alignment: .trailing, spacing: 2) {
+                                Text(store.config.backupDestination.isEmpty ? "Sync (home folder)" : store.config.backupDestination)
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.white)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                if engine.manualModeFreeSpace > 0 {
+                                    Text("\(formatBytes(engine.manualModeFreeSpace)) free")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(labelColor)
+                                }
+                            }
+                            Button("Edit") {
+                                editingWindowsPath = store.config.backupDestination
+                                isEditingWindowsPath = true
+                            }
+                            .buttonStyle(.bordered)
+                            .font(.system(size: 11))
+                        }
+                    }
+                    HStack {
+                        Spacer()
+                        switch destinationCheckState {
+                        case .idle:
+                            Button("Confirm Destination") { confirmBackupDestination() }
+                                .buttonStyle(.bordered)
+                                .font(.system(size: 11))
+                        case .checking:
+                            Text("Checking...")
+                                .font(.system(size: 11))
+                                .foregroundColor(labelColor)
+                        case .confirmed:
+                            HStack(spacing: 6) {
+                                Text("Folder is writable")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.green)
+                                Button { confirmBackupDestination() } label: {
+                                    Image(systemName: "arrow.clockwise")
+                                        .font(.system(size: 10))
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundColor(.blue)
+                            }
+                        case .failed:
+                            HStack(spacing: 6) {
+                                Text("Couldn't write — check the path")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.orange)
                                 Button("Retry") { confirmBackupDestination() }
                                     .buttonStyle(.bordered)
                                     .font(.system(size: 10))
@@ -2265,6 +2377,25 @@ struct SettingsView: View {
         let username = store.config.username
         let ip = store.config.destinationIP
         guard !username.isEmpty, !ip.isEmpty else { return }
+
+        // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
+        // No remote config read on Windows (approved §8.1) — the user-entered path is
+        // write-tested over SFTP instead. Gated here so the auto-confirm-on-reachable
+        // callers route correctly too. No-flag path falls through, untouched.
+        if store.config.backupPlatform == "windows" {
+            destinationCheckState = .checking
+            WindowsTransport.shared.probeDestination(
+                username: username,
+                ip: ip,
+                destination: store.config.backupDestination
+            ) { writable in
+                Task { @MainActor in
+                    destinationCheckState = writable ? .confirmed : .failed
+                }
+            }
+            return
+        }
+
         destinationCheckState = .checking
         // Read config and free space in one SSH call
         let proc = Process()

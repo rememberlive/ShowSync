@@ -92,6 +92,41 @@ final class ConnectionStatus: ObservableObject {
         let currentID = checkID
         let isManualMode = ConfigStore.shared.config.discoveryMode == "manual"
 
+        // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
+        // Windows sshd has no POSIX cat/$HOME, so the manual-mode cat pipeline below would read
+        // a live Windows Backup as unreachable. Gated early-exit: reachability + free space +
+        // verify request come from one PowerShell call built by the transport module. The
+        // no-flag path falls through to the existing code, untouched.
+        if isManualMode && ConfigStore.shared.config.backupPlatform == "windows" {
+            let winProc = WindowsTransport.shared.makeManualPollProcess(
+                username: username,
+                ip: ip,
+                destination: ConfigStore.shared.config.backupDestination
+            ) { [weak self] reachable, freeBytes, verifyNonce in
+                Task { @MainActor [weak self] in
+                    guard let self, self.checkID == currentID else { return }
+                    self.process = nil
+                    guard reachable else {
+                        self.publish(.unreachable)
+                        return
+                    }
+                    self.publish(.reachable)
+                    self.markKeysConfigured()
+                    if let freeBytes, SyncEngine.shared.manualModeFreeSpace != freeBytes {
+                        SyncEngine.shared.manualModeFreeSpace = freeBytes
+                    }
+                    if let nonce = verifyNonce, !nonce.isEmpty, nonce != self.lastHandledVerifyNonce {
+                        self.lastHandledVerifyNonce = nonce
+                        NSLog("[ConnectionStatus] Manual mode verify request (Windows): nonce=%@", nonce)
+                        SyncEngine.shared.triggerRemoteVerify()
+                    }
+                }
+            }
+            process = winProc
+            DispatchQueue.global(qos: .utility).async { try? winProc.run() }
+            return
+        }
+
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
 

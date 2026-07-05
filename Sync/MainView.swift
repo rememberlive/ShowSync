@@ -146,7 +146,9 @@ final class SyncEngine: ObservableObject {
     // Verify Now - separate from sync
     @Published var verifyStatus: VerifyStatus = .idle
     private var verifyTask: Process?
-    private var isRemoteVerify: Bool = false  // True when triggered by Backup via Bonjour
+    // V1.1: widened private → internal so the Windows-target verify (WindowsTransport.swift)
+    // can honor Backup-requested verifies and reset the flag. Behavior unchanged.
+    var isRemoteVerify: Bool = false  // True when triggered by Backup via Bonjour
 
     private init() {}
 
@@ -209,6 +211,14 @@ final class SyncEngine: ObservableObject {
         let mode = config.discoveryMode
         syncTrace("[SyncTrace] 1 sync requested, mode=%@, remotePath='%@', usingFallback=%d, dryRunEnabled=%d, isAuto=%d",
               mode, syncRemotePath, usingFallback ? 1 : 0, config.dryRunEnabled ? 1 : 0, isAuto ? 1 : 0)
+
+        // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
+        // platform=windows (TXT key / manual toggle) routes to the scp/sftp transport; the flag
+        // is never set by a Mac Backup, so the fall-through below is today's path, untouched.
+        if config.backupPlatform == "windows" {
+            WindowsTransport.shared.startSync(config: config, isAuto: isAuto, isPush: isPush)
+            return
+        }
 
         // Check if this is a "Check Files" preview request
         let isPreviewOnly = config.dryRunEnabled && !isAuto
@@ -619,6 +629,14 @@ final class SyncEngine: ObservableObject {
     }
 
     func cancel() {
+        // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
+        // A Windows run never populates the private per-run fields below; it carries its own
+        // metadata and cancel/cleanup. isSyncActive is false whenever no Windows transfer runs.
+        if WindowsTransport.shared.isSyncActive {
+            WindowsTransport.shared.cancelSync()
+            return
+        }
+
         let wasActive = status.isActive
         let cancelTrigger = isAutoSync ? "auto" : (isPushSync ? "push" : "manual")
         let cancelDest = syncRemotePath
@@ -665,6 +683,12 @@ final class SyncEngine: ObservableObject {
         guard config.isReadyToSync else { return }
         guard verifyStatus != .verifying else { return }
         guard !status.isActive else { return }  // Verify yields to sync
+
+        // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
+        if config.backupPlatform == "windows" {
+            WindowsTransport.shared.startVerify(config: config)
+            return
+        }
 
         verifyStatus = .verifying
 
@@ -799,6 +823,12 @@ final class SyncEngine: ObservableObject {
     }
 
     func cancelVerify() {
+        // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
+        if WindowsTransport.shared.isVerifyActive {
+            WindowsTransport.shared.cancelVerify()
+            return
+        }
+
         verifyTask?.terminate()
         verifyTask = nil
         verifyStatus = .idle

@@ -24,6 +24,7 @@
 		A100000B /* FSEventsWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000B /* FSEventsWatcher.swift */; };
 		A100000C /* GlobalHotkey.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000C /* GlobalHotkey.swift */; };
 		A100000D /* Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000D /* Helpers.swift */; };
+		A1000014 /* WindowsTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000014 /* WindowsTransport.swift */; };
 		E87125292FC640AB00904BBD /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E87125282FC640AB00904BBD /* Assets.xcassets */; };
 		E8DBDA802FD4C7A000109A85 /* ShowNetwork in Frameworks */ = {isa = PBXBuildFile; productRef = E8DBDA7F2FD4C7A000109A85 /* ShowNetwork */; };
 /* End PBXBuildFile section */
@@ -49,6 +50,7 @@
 		A200000B /* FSEventsWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FSEventsWatcher.swift; sourceTree = "<group>"; };
 		A200000C /* GlobalHotkey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalHotkey.swift; sourceTree = "<group>"; };
 		A200000D /* Helpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Helpers.swift; sourceTree = "<group>"; };
+		A2000014 /* WindowsTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowsTransport.swift; sourceTree = "<group>"; };
 		E87125282FC640AB00904BBD /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -94,6 +96,7 @@
 				A200000B /* FSEventsWatcher.swift */,
 				A200000C /* GlobalHotkey.swift */,
 				A200000D /* Helpers.swift */,
+				A2000014 /* WindowsTransport.swift */,
 				E87125282FC640AB00904BBD /* Assets.xcassets */,
 			);
 			path = Sync;
@@ -196,6 +199,7 @@
 				A100000B /* FSEventsWatcher.swift in Sources */,
 				A100000C /* GlobalHotkey.swift in Sources */,
 				A100000D /* Helpers.swift in Sources */,
+				A1000014 /* WindowsTransport.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

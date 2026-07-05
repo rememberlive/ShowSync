@@ -69,6 +69,10 @@ struct Config {
     var lastBackupDiscoveryName: String = ""  // Auto-reconnect: remembered Backup Mac's name
     var lastBackupIP: String = ""             // Auto-reconnect: remembered Backup Mac's IP
     var backupDestination: String = "~/Sync"  // Main role — Backup's receive folder (from TXT)
+    // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
+    // Runtime-only (never persisted — save() maps fields explicitly and omits it).
+    // "" = mac (today's behavior, exact); "windows" = ShowSync-Win Backup (TXT platform key or manual toggle).
+    var backupPlatform: String = ""
 
     // Backup-role fields
     var mainIP: String = ""
