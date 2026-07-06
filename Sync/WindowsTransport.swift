@@ -364,47 +364,61 @@ final class WindowsTransport {
     private func putSignalFile(name: String, contents: String,
                                removing: [String] = [],
                                completion: ((Bool) -> Void)? = nil) {
+        Self.putSignalFile(username: runUsername, ip: runIP, dest: runDest,
+                           name: name, contents: contents, removing: removing) { status, _ in
+            completion?(status == 0)
+        }
+    }
+
+    // Core signal-write primitive: the same sftp batch shape that lands
+    // .sync_start/.sync_complete on ShowSync-Win. Static so the engine's
+    // writeVerifyResult can use it outside a WindowsTransport-driven run.
+    // Completion receives the sftp exit status and combined stdout/stderr.
+    private static func putSignalFile(username: String, ip: String, dest: String,
+                                      name: String, contents: String,
+                                      removing: [String] = [],
+                                      completion: @escaping (Int32, String) -> Void) {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("showsync_sig_\(UUID().uuidString)")
         do {
             try contents.write(to: tmp, atomically: true, encoding: .utf8)
         } catch {
-            completion?(false); return
+            completion(-1, "local temp write failed: \(error.localizedDescription)"); return
         }
-        var lines = ["-mkdir \(Self.sftpQuote(runDest))",
-                     "put \(Self.sftpQuote(tmp.path)) \(Self.sftpQuote(runDest + "/" + name))"]
-        for r in removing { lines.append("-rm \(Self.sftpQuote(runDest + "/" + r))") }
-        guard let batch = Self.writeBatchFile(lines) else { completion?(false); return }
-        let (proc, pipe) = Self.makeSftpProcess(username: runUsername, ip: runIP,
-                                                batchFile: batch, connectTimeout: 2)
-        Self.run(proc, pipe: pipe) { status, _ in
+        var lines = ["-mkdir \(sftpQuote(dest))",
+                     "put \(sftpQuote(tmp.path)) \(sftpQuote(dest + "/" + name))"]
+        for r in removing { lines.append("-rm \(sftpQuote(dest + "/" + r))") }
+        guard let batch = writeBatchFile(lines) else { completion(-1, "batch file write failed"); return }
+        let (proc, pipe) = makeSftpProcess(username: username, ip: ip,
+                                           batchFile: batch, connectTimeout: 2)
+        run(proc, pipe: pipe) { status, output in
             try? FileManager.default.removeItem(at: tmp)
             try? FileManager.default.removeItem(at: batch)
-            completion?(status == 0)
+            completion(status, output)
         }
     }
 
     // SYNC-SPEC §8.10: standalone .verify_result write for the engine's
     // writeVerifyResult — its POSIX `echo … > file; rm -f …` dies silently in
     // cmd.exe, so a Backup-initiated verify answered by the MAC engine path
-    // never got its outcome. Same JSON payload as the Mac path; delivered as
-    // Set-Content -NoNewline + Remove-Item via -EncodedCommand (the result
-    // JSON's own double quotes would break a plain -Command line through the
-    // default shell — the same silent-failure class this fixes). Static and
-    // stateless: callable outside a WindowsTransport-driven run.
+    // never got its outcome. Same JSON payload as the Mac path, delivered
+    // through the same signal-write primitive that lands .sync_start/
+    // .sync_complete. Outcome is logged either way — a failed verify-result
+    // write must never be silent.
     static func writeVerifyResultSignal(username: String, ip: String, destination: String,
                                         usingFallback: Bool, resultCode: String) {
         let dest = effectiveDest(destination, usingFallback: usingFallback)
         let ts = Int(Date().timeIntervalSince1970)
-        let script = psResolvePreamble(dest: dest) + """
-
-        Set-Content -LiteralPath (Join-Path $r '\(SignalFile.verifyResult)') -Value '{"result":"\(resultCode)","ts":\(ts)}' -NoNewline
-        Remove-Item -LiteralPath (Join-Path $r '\(SignalFile.verifyRequest)') -Force -ErrorAction SilentlyContinue
-        """
-        let (proc, pipe) = makePowerShellProcess(username: username, ip: ip,
-                                                 script: script, connectTimeout: 2)
-        run(proc, pipe: pipe) { status, _ in
-            if status != 0 { NSLog("[V1.1/Win] .verify_result write failed (exit %d)", status) }
+        putSignalFile(username: username, ip: ip, dest: dest,
+                      name: SignalFile.verifyResult,
+                      contents: "{\"result\":\"\(resultCode)\",\"ts\":\(ts)}",
+                      removing: [SignalFile.verifyRequest]) { status, output in
+            if status == 0 {
+                NSLog("[V1.1/Win] .verify_result delivered to '%@' (result=%@)", dest, resultCode)
+            } else {
+                NSLog("[V1.1/Win] .verify_result write FAILED (exit %d) to '%@': %@",
+                      status, dest, output.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
         }
     }
 
@@ -897,13 +911,22 @@ final class WindowsTransport {
             let engine = SyncEngine.shared
             engine.verifyStatus = status
             // Backup-requested verify: write .verify_result + clear the request,
-            // same payload as the Mac engine's writeVerifyResult.
+            // same payload as the Mac engine's writeVerifyResult. Outcome logged
+            // either way — a failed verify-result write must never be silent.
             if engine.isRemoteVerify {
                 engine.isRemoteVerify = false
                 let ts = Int(Date().timeIntervalSince1970)
-                self.putSignalFile(name: SignalFile.verifyResult,
+                Self.putSignalFile(username: self.runUsername, ip: self.runIP, dest: self.runDest,
+                                   name: SignalFile.verifyResult,
                                    contents: "{\"result\":\"\(resultCode)\",\"ts\":\(ts)}",
-                                   removing: [SignalFile.verifyRequest])
+                                   removing: [SignalFile.verifyRequest]) { pStatus, pOutput in
+                    if pStatus == 0 {
+                        NSLog("[V1.1/Win] .verify_result delivered (result=%@)", resultCode)
+                    } else {
+                        NSLog("[V1.1/Win] .verify_result write FAILED (exit %d): %@",
+                              pStatus, pOutput.trimmingCharacters(in: .whitespacesAndNewlines))
+                    }
+                }
             }
             NSLog("[V1.1/Win] verify done: %@", resultCode)
             DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
