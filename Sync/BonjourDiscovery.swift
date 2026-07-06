@@ -443,8 +443,12 @@ final class BonjourBrowser: ObservableObject {
             }
 
             handlePairingFields(txt: txt)
-            handleVerifyRequest(txt: txt, serviceName: serviceName, resolvedIP: resolvedIP, isReachable: isReachable)
+            // Adopt platform (and destination/fallback) BEFORE handling verifyReq:
+            // a verify triggered on the first resolve after launch must see
+            // backupPlatform="windows", or verifyNow runs the rsync path against
+            // a Windows Backup and answers "error" (SYNC-SPEC §8.10 race).
             handleAutoReconnect(backup: backup)
+            handleVerifyRequest(txt: txt, serviceName: serviceName, resolvedIP: resolvedIP, isReachable: isReachable)
 
             // Update reachability for currently-targeted peer; clear stale destinationIP if unreachable
             let currentDestIP = ConfigStore.shared.config.destinationIP
