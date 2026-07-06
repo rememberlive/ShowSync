@@ -370,6 +370,17 @@ final class WindowsTransport {
         }
     }
 
+    // sftp batch path form: the OpenSSH server resolves "C:/…" as HOME-relative
+    // (home prefix gets doubled: "/C:/Users/u/C:/Users/u/…"); a drive-qualified
+    // dest must be written "/C:/…" (hardware-confirmed). Relative dests ("Sync")
+    // pass through untouched — the proven form the sync signals always used.
+    private static func sftpPathForm(_ dest: String) -> String {
+        if dest.range(of: "^[A-Za-z]:", options: .regularExpression) != nil {
+            return "/" + dest
+        }
+        return dest
+    }
+
     // Core signal-write primitive: the same sftp batch shape that lands
     // .sync_start/.sync_complete on ShowSync-Win. Static so the engine's
     // writeVerifyResult can use it outside a WindowsTransport-driven run.
@@ -378,6 +389,7 @@ final class WindowsTransport {
                                       name: String, contents: String,
                                       removing: [String] = [],
                                       completion: @escaping (Int32, String) -> Void) {
+        let dest = sftpPathForm(dest)
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("showsync_sig_\(UUID().uuidString)")
         do {
@@ -423,7 +435,8 @@ final class WindowsTransport {
     }
 
     private func removeSignalFiles(_ names: [String]) {
-        let lines = names.map { "-rm \(Self.sftpQuote(runDest + "/" + $0))" }
+        let dest = Self.sftpPathForm(runDest)
+        let lines = names.map { "-rm \(Self.sftpQuote(dest + "/" + $0))" }
         guard let batch = Self.writeBatchFile(lines) else { return }
         let (proc, pipe) = Self.makeSftpProcess(username: runUsername, ip: runIP,
                                                 batchFile: batch, connectTimeout: 2)
@@ -499,12 +512,13 @@ final class WindowsTransport {
     // → proceed anyway (.testFailed spirit).
     private func runWriteTestThenTransfer(uploads: [LocalFile]) {
         let testName = ".sync_writetest_\(Int.random(in: 1000...9999))"
+        let dest = Self.sftpPathForm(runDest)
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("showsync_wt_\(UUID().uuidString)")
         try? "test".write(to: tmp, atomically: true, encoding: .utf8)
-        let lines = ["-mkdir \(Self.sftpQuote(runDest))",
-                     "put \(Self.sftpQuote(tmp.path)) \(Self.sftpQuote(runDest + "/" + testName))",
-                     "rm \(Self.sftpQuote(runDest + "/" + testName))"]
+        let lines = ["-mkdir \(Self.sftpQuote(dest))",
+                     "put \(Self.sftpQuote(tmp.path)) \(Self.sftpQuote(dest + "/" + testName))",
+                     "rm \(Self.sftpQuote(dest + "/" + testName))"]
         guard let batch = Self.writeBatchFile(lines) else {
             finishSyncFailure(message: "Sync interrupted — files may be incomplete")
             return
@@ -588,15 +602,16 @@ final class WindowsTransport {
         }
 
         // Depth-sorted -mkdir set (ignore already-exists), then mtime-preserving puts.
+        let dest = Self.sftpPathForm(runDest)
         var dirs = Set<String>()
         for f in uploads {
-            var path = runDest
+            var path = dest
             for c in f.rel.split(separator: "/").dropLast() {
                 path += "/" + c
                 dirs.insert(path)
             }
         }
-        var lines = ["-mkdir \(Self.sftpQuote(runDest))"]
+        var lines = ["-mkdir \(Self.sftpQuote(dest))"]
         for d in dirs.sorted(by: { (a, b) in
             let da = a.filter { $0 == "/" }.count, db = b.filter { $0 == "/" }.count
             return da == db ? a < b : da < db
@@ -604,7 +619,7 @@ final class WindowsTransport {
             lines.append("-mkdir \(Self.sftpQuote(d))")
         }
         for f in uploads {
-            lines.append("put -p \(Self.sftpQuote(f.abs)) \(Self.sftpQuote(runDest + "/" + f.rel))")
+            lines.append("put -p \(Self.sftpQuote(f.abs)) \(Self.sftpQuote(dest + "/" + f.rel))")
         }
         guard let batch = Self.writeBatchFile(lines) else {
             finishSyncFailure(message: "Sync interrupted — files may be incomplete")
@@ -954,7 +969,7 @@ final class WindowsTransport {
     // user-entered path (no remote config read in V1.1 — approved §8.1).
     func probeDestination(username: String, ip: String, destination: String,
                           completion: @escaping (Bool) -> Void) {
-        let dest = Self.effectiveDest(destination, usingFallback: false)
+        let dest = Self.sftpPathForm(Self.effectiveDest(destination, usingFallback: false))
         let testName = ".sync_writetest_\(Int.random(in: 1000...9999))"
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("showsync_probe_\(UUID().uuidString)")
