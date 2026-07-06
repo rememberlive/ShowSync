@@ -735,6 +735,16 @@ final class ReceiveMonitor: ObservableObject {
                     self?.isChecking = false
                     guard let self else { return }
                     self.verifyStatus = status
+                    // SYNC-SPEC §8.10: handshake complete — stop advertising the
+                    // request nonce so a Main that (re)appears later doesn't run a
+                    // stale verify. Republish only in auto mode (updateTXTRecord
+                    // would START the advertiser in manual mode).
+                    if !BonjourAdvertiser.shared.verifyRequestNonce.isEmpty {
+                        BonjourAdvertiser.shared.verifyRequestNonce = ""
+                        if ConfigStore.shared.config.discoveryMode == "automatic" {
+                            BonjourAdvertiser.shared.updateTXTRecord()
+                        }
+                    }
                     // Clear after 10 seconds
                     DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
                         guard let self else { return }
@@ -1294,6 +1304,15 @@ struct BackupView: View {
             // Set 90s timeout for response
             DispatchQueue.main.asyncAfter(deadline: .now() + 90) { [weak receiveMonitor] in
                 guard let rm = receiveMonitor, rm.verifyStatus == .requested else { return }
+                // SYNC-SPEC §8.10: request expired — stop advertising the nonce
+                // (mode guard: updateTXTRecord would START the advertiser in
+                // manual mode if the mode changed during the wait).
+                if !BonjourAdvertiser.shared.verifyRequestNonce.isEmpty {
+                    BonjourAdvertiser.shared.verifyRequestNonce = ""
+                    if ConfigStore.shared.config.discoveryMode == "automatic" {
+                        BonjourAdvertiser.shared.updateTXTRecord()
+                    }
+                }
                 rm.verifyStatus = .failed("Verify timed out — Main may not be reachable")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak receiveMonitor] in
                     if receiveMonitor?.verifyStatus == .failed("Verify timed out — Main may not be reachable") {

@@ -1227,6 +1227,16 @@ final class SyncEngine: ObservableObject {
     private func writeVerifyResult(_ result: String) {
         let config = ConfigStore.shared.config
         guard !config.username.isEmpty, !config.destinationIP.isEmpty else { return }
+        // SYNC-SPEC §8.10: a Windows Backup's default shell can't run the POSIX
+        // echo/rm below — route through the Windows transport's PowerShell
+        // signal write instead (same payload; Mac path below untouched).
+        if config.backupPlatform == "windows" {
+            WindowsTransport.writeVerifyResultSignal(
+                username: config.username, ip: config.destinationIP,
+                destination: config.backupDestination,
+                usingFallback: usingFallback, resultCode: result)
+            return
+        }
         let remotePath = usingFallback ? "~/Sync" : (config.backupDestination.isEmpty ? "~/Sync" : config.backupDestination)
         let escaped = shellEscapeForDoubleQuotes(remotePath)
         let timestamp = Int(Date().timeIntervalSince1970)

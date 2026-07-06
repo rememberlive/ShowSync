@@ -384,6 +384,30 @@ final class WindowsTransport {
         }
     }
 
+    // SYNC-SPEC §8.10: standalone .verify_result write for the engine's
+    // writeVerifyResult — its POSIX `echo … > file; rm -f …` dies silently in
+    // cmd.exe, so a Backup-initiated verify answered by the MAC engine path
+    // never got its outcome. Same JSON payload as the Mac path; delivered as
+    // Set-Content -NoNewline + Remove-Item via -EncodedCommand (the result
+    // JSON's own double quotes would break a plain -Command line through the
+    // default shell — the same silent-failure class this fixes). Static and
+    // stateless: callable outside a WindowsTransport-driven run.
+    static func writeVerifyResultSignal(username: String, ip: String, destination: String,
+                                        usingFallback: Bool, resultCode: String) {
+        let dest = effectiveDest(destination, usingFallback: usingFallback)
+        let ts = Int(Date().timeIntervalSince1970)
+        let script = psResolvePreamble(dest: dest) + """
+
+        Set-Content -LiteralPath (Join-Path $r '\(SignalFile.verifyResult)') -Value '{"result":"\(resultCode)","ts":\(ts)}' -NoNewline
+        Remove-Item -LiteralPath (Join-Path $r '\(SignalFile.verifyRequest)') -Force -ErrorAction SilentlyContinue
+        """
+        let (proc, pipe) = makePowerShellProcess(username: username, ip: ip,
+                                                 script: script, connectTimeout: 2)
+        run(proc, pipe: pipe) { status, _ in
+            if status != 0 { NSLog("[V1.1/Win] .verify_result write failed (exit %d)", status) }
+        }
+    }
+
     private func removeSignalFiles(_ names: [String]) {
         let lines = names.map { "-rm \(Self.sftpQuote(runDest + "/" + $0))" }
         guard let batch = Self.writeBatchFile(lines) else { return }
