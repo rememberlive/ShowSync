@@ -131,8 +131,29 @@ final class ConnectionStatus: ObservableObject {
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
 
         if isManualMode {
-            // Manual mode: read config + free space + check for verify request in one call
-            let cmd = "cat \"$HOME/Library/Application Support/Sync/config_backup.json\" 2>/dev/null || echo '{}'; echo '---DF---'; df -k ~ 2>/dev/null | awk 'NR==2 {print $4}'; echo '---VERIFY---'; cat ~/Sync/\(SignalFile.verifyRequest) 2>/dev/null || echo ''"
+            // Manual mode: read config + free space + check for verify request in one call.
+            // The verify request lives in the Backup's CONFIGURED destination (the Backup
+            // writes it to effectiveDestination) — a hardcoded ~/Sync misses it whenever
+            // the destination is elsewhere (e.g. an external drive), so Backup-initiated
+            // verify silently never started. Same fallback rule as writeVerifyResult.
+            // ~-prefixed dests stay unquoted (remote tilde expansion needs it — today's
+            // exact form); absolute dests are quoted+escaped. df now measures the same
+            // path, so free space reflects the real destination volume.
+            let backupDest = ConfigStore.shared.config.backupDestination
+            let catPath: String   // where the Backup writes .verify_request
+            let dfPath: String    // volume to measure free space on
+            if SyncEngine.shared.usingFallback || backupDest.isEmpty {
+                catPath = "~/Sync"   // today's exact form (unquoted → tilde expands)
+                dfPath = "~"
+            } else if backupDest.hasPrefix("~") {
+                catPath = backupDest // home volume either way — keep df -k ~ as today
+                dfPath = "~"
+            } else {
+                let quoted = "\"\(shellEscapeForDoubleQuotes(backupDest))\""
+                catPath = quoted
+                dfPath = quoted
+            }
+            let cmd = "cat \"$HOME/Library/Application Support/Sync/config_backup.json\" 2>/dev/null || echo '{}'; echo '---DF---'; df -k \(dfPath) 2>/dev/null | awk 'NR==2 {print $4}'; echo '---VERIFY---'; cat \(catPath)/\(SignalFile.verifyRequest) 2>/dev/null || echo ''"
             var manualArgs = ["-o", "ConnectTimeout=2", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no"]
             if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
                !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
@@ -196,10 +217,16 @@ final class ConnectionStatus: ObservableObject {
                                let verifyJson = try? JSONSerialization.jsonObject(with: verifyData) as? [String: Any],
                                let nonce = verifyJson["nonce"] as? String, !nonce.isEmpty,
                                nonce != self.lastHandledVerifyNonce {
-                                // Found a new verify request - trigger remote verify
-                                self.lastHandledVerifyNonce = nonce
-                                NSLog("[ConnectionStatus] Manual mode verify request: nonce=%@", nonce)
-                                SyncEngine.shared.triggerRemoteVerify()
+                                // Found a new verify request - trigger remote verify.
+                                // Consume the nonce ONLY if a verify actually started —
+                                // a bailed trigger (engine busy) must stay retryable on
+                                // the next 3 s poll tick instead of being eaten forever.
+                                if SyncEngine.shared.triggerRemoteVerify() {
+                                    self.lastHandledVerifyNonce = nonce
+                                    NSLog("[ConnectionStatus] Manual mode verify request: nonce=%@", nonce)
+                                } else {
+                                    NSLog("[ConnectionStatus] Verify request deferred (engine busy), nonce=%@ — will retry", nonce)
+                                }
                             }
                         }
                     }

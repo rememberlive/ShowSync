@@ -45,6 +45,74 @@ func shellEscapeForDoubleQuotes(_ path: String) -> String {
         .replacingOccurrences(of: "`", with: "\\`")
 }
 
+// Render a remote path for use INSIDE a double-quoted segment of an ssh
+// command. A leading "~/" is rewritten to "$HOME/" — tilde does NOT expand
+// inside double quotes but $HOME does — so fallback-form paths ("~/Sync")
+// actually land in the remote home folder instead of silently failing.
+// The $HOME token must be emitted here, after escaping the remainder:
+// shellEscapeForDoubleQuotes would escape its "$".
+func remoteShellPath(_ path: String) -> String {
+    if path == "~" { return "$HOME" }
+    if path.hasPrefix("~/") {
+        return "$HOME/" + shellEscapeForDoubleQuotes(String(path.dropFirst(2)))
+    }
+    return shellEscapeForDoubleQuotes(path)
+}
+
+// rsync sends its remote path through the remote login shell UNQUOTED when
+// the local binary is openrsync or rsync < 3.2.4 — spaces and shell specials
+// must be backslash-escaped or the remote side splits the argument. rsync
+// >= 3.2.4 protects args itself; pre-escaping there would double-escape.
+// Detected once per binary path and cached (main-thread callers only).
+private var rsyncEscapeCache: [String: Bool] = [:]
+
+func rsyncNeedsRemoteEscaping(_ rsyncPath: String) -> Bool {
+    if let cached = rsyncEscapeCache[rsyncPath] { return cached }
+    var needsEscaping = true   // safe default: openrsync / rsync 2.x
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: rsyncPath)
+    proc.arguments = ["--version"]
+    let pipe = Pipe()
+    proc.standardOutput = pipe
+    proc.standardError = FileHandle.nullDevice
+    do {
+        try proc.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        proc.waitUntilExit()
+        let banner = String(data: data, encoding: .utf8) ?? ""
+        if !banner.lowercased().contains("openrsync"),
+           let match = banner.range(of: #"version\s+(\d+)\.(\d+)\.(\d+)"#, options: .regularExpression) {
+            let nums = banner[match].components(separatedBy: CharacterSet.decimalDigits.inverted)
+                .filter { !$0.isEmpty }.compactMap { Int($0) }
+            if nums.count >= 3,
+               nums[0] > 3 || (nums[0] == 3 && (nums[1] > 2 || (nums[1] == 2 && nums[2] >= 4))) {
+                needsEscaping = false  // GNU rsync with built-in arg protection
+            }
+        }
+    } catch {
+        // Couldn't interrogate the binary — keep the safe default.
+    }
+    rsyncEscapeCache[rsyncPath] = needsEscaping
+    return needsEscaping
+}
+
+// Escape a remote rsync destination path for the remote shell. Leaves
+// [A-Za-z0-9 / . _ ~ -] untouched — a leading "~/" must keep expanding —
+// and backslash-escapes everything else (spaces, quotes, $, parens, …).
+func rsyncEscapedRemotePath(_ path: String, rsyncPath: String) -> String {
+    guard rsyncNeedsRemoteEscaping(rsyncPath) else { return path }
+    let safe = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "/._~-"))
+    var out = ""
+    for scalar in path.unicodeScalars {
+        if safe.contains(scalar) {
+            out.unicodeScalars.append(scalar)
+        } else {
+            out += "\\" + String(scalar)
+        }
+    }
+    return out
+}
+
 enum SignalFile {
     static let start = ".sync_start"
     static let progress = ".sync_progress"

@@ -77,6 +77,9 @@ struct SettingsView: View {
     @State private var renameGeneration: Int = 0
     @State private var pendingRenameNewName = ""  // The name we asked the Backup to take
     @State private var destinationCheckState: DestinationCheckState = .idle
+    // External-drive guidance: set when the Confirm Destination FDA probe finds
+    // sshd denied on a /Volumes destination (TCC) — advisory, never blocks.
+    @State private var externalFDAWarning = false
     @State private var hasConfirmedDestinationThisConnection = false
     @State private var manualModeFreeSpace: Int64 = 0  // Free space read via SSH for manual mode
     // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
@@ -754,7 +757,7 @@ struct SettingsView: View {
         if tccProtected.contains(where: { chosenPath == $0 || chosenPath.hasPrefix("\($0)/") }) {
             let alert = NSAlert()
             alert.messageText = "This Folder Can't Receive Files Over the Network"
-            alert.informativeText = "Documents, Desktop, and Downloads are protected by macOS. Please choose another folder, like a folder in your home directory or an external drive."
+            alert.informativeText = "Documents, Desktop, and Downloads are protected by macOS. Please choose another folder, like a folder in your home directory. External drives work too, but need one extra macOS setting — you'll see instructions when you select one."
             alert.alertStyle = .warning
             alert.addButton(withTitle: "OK")
             alert.runModal()
@@ -769,6 +772,23 @@ struct SettingsView: View {
             store.config.destinationFolder = url.path
             ReceiveMonitor.shared.validateDestination()  // Updates usingFallback state
             BonjourAdvertiser.shared.updateTXTRecord()   // Fast TXT update (no restart)
+
+            // External-drive guidance (advisory — this app CANNOT verify sshd's
+            // access locally: the write-test above ran in the app's own TCC
+            // context, but receiving goes through Remote Login (sshd), whose
+            // /Volumes access is a separate, manual macOS grant).
+            if url.path.hasPrefix("/Volumes/") {
+                let fdaAlert = NSAlert()
+                fdaAlert.messageText = "External Drive: One More Step"
+                fdaAlert.informativeText = "macOS requires Full Disk Access for Remote Login before this Mac can receive files on an external drive.\n\nSystem Settings → Privacy & Security → Full Disk Access → enable sshd-keygen-wrapper (Remote Login).\n\nWithout it, backups will land in the home Sync folder instead — the Main will show why."
+                fdaAlert.alertStyle = .informational
+                fdaAlert.addButton(withTitle: "Open Settings")
+                fdaAlert.addButton(withTitle: "OK")
+                if fdaAlert.runModal() == .alertFirstButtonReturn,
+                   let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
         } catch {
             let alert = NSAlert()
             alert.messageText = "Can't Back Up to This Folder"
@@ -1200,6 +1220,16 @@ struct SettingsView: View {
                             }
                         }
                     }
+                }
+
+                // External-drive FDA guidance (set by the Confirm Destination probe):
+                // receiving goes through Remote Login (sshd), whose /Volumes access is
+                // a manual macOS grant the app can't make for the user.
+                if externalFDAWarning {
+                    Text("Backup Mac needs Full Disk Access for Remote Login to receive on the external drive — on the Backup: System Settings → Privacy & Security → Full Disk Access → sshd-keygen-wrapper.")
+                        .font(.system(size: 10))
+                        .foregroundColor(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
@@ -2434,6 +2464,12 @@ struct SettingsView: View {
                     SyncEngine.shared.usingFallback = isFallback
 
                     destinationCheckState = .confirmed
+                    // External-drive FDA probe — advisory, never blocks confirmation.
+                    if dest.hasPrefix("/Volumes/"), !isFallback {
+                        probeExternalFDA(username: username, ip: ip, remotePath: dest)
+                    } else if externalFDAWarning {
+                        externalFDAWarning = false
+                    }
                     // Read free space for EFFECTIVE destination (reality, not intent)
                     readManualModeFreeSpace(username: username, ip: ip, remotePath: effectivePath)
                 } else {
@@ -2451,6 +2487,38 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    // External-drive FDA probe (advisory): a quick touch inside the confirmed
+    // /Volumes destination through sshd — "Operation not permitted" means the
+    // Backup's Remote Login lacks Full Disk Access (TCC), which no remote write
+    // can bypass. Sets/clears externalFDAWarning; never blocks confirmation.
+    private func probeExternalFDA(username: String, ip: String, remotePath: String) {
+        let escaped = remoteShellPath(remotePath)
+        let testFile = "\(escaped)/.sync_fdaprobe_\(Int.random(in: 1000...9999))"
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        proc.arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3",
+                          "-o", "StrictHostKeyChecking=no",
+                          "--", "\(username)@\(ip)",
+                          "touch \"\(testFile)\" && rm -f \"\(testFile)\" && echo OK || echo FAIL"]
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        proc.standardOutput = outPipe
+        proc.standardError = errPipe
+        proc.terminationHandler = { p in
+            let out = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            Task { @MainActor in
+                if p.terminationStatus == 0, !out.contains("OK"), err.contains("Operation not permitted") {
+                    NSLog("[Sync] Confirm Destination: external drive denied by macOS privacy (TCC) — Remote Login needs Full Disk Access on the Backup")
+                    externalFDAWarning = true
+                } else if out.contains("OK") {
+                    externalFDAWarning = false
+                }
+            }
+        }
+        DispatchQueue.global(qos: .utility).async { try? proc.run() }
     }
 
     private func readManualModeFreeSpace(username: String, ip: String, remotePath: String) {

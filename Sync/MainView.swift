@@ -258,6 +258,13 @@ final class SyncEngine: ObservableObject {
                     self.usingFallback = true
                     self.fallbackNotice = "Couldn't write to the chosen folder — backing up to the default Sync folder instead."
                     NSLog("[Sync] Destination unwritable, falling back to ~/Sync")
+                case .unwritablePermissions:
+                    // Same fallback behavior (a live show must back up somewhere),
+                    // but the REAL cause is named — never silent.
+                    self.syncRemotePath = "~/Sync"
+                    self.usingFallback = true
+                    self.fallbackNotice = "The Backup Mac needs Full Disk Access for Remote Login to write to the external drive — backing up to the default Sync folder instead. On the Backup: System Settings → Privacy & Security → Full Disk Access → enable sshd-keygen-wrapper."
+                    NSLog("[Sync] Destination denied by macOS privacy (TCC) — falling back to ~/Sync; grant Full Disk Access to Remote Login on the Backup Mac")
                 case .testFailed:
                     NSLog("[Sync] Write-test failed (SSH error), proceeding anyway")
                 }
@@ -274,10 +281,10 @@ final class SyncEngine: ObservableObject {
             ? (NSHomeDirectory() as NSString).appendingPathComponent(String(config.sourceFolder.dropFirst()))
             : config.sourceFolder
         let source = rawSource.hasSuffix("/") ? rawSource : rawSource + "/"
-        let dest = "\(syncUsername)@\(syncIP):\(syncRemotePath)/"
-
         let rsyncCandidates = ["/opt/homebrew/bin/rsync", "/usr/local/bin/rsync", "/usr/bin/rsync"]
         let rsyncPath = rsyncCandidates.first { FileManager.default.fileExists(atPath: $0) } ?? "/usr/bin/rsync"
+        // R1: escape the remote path for the remote shell (spaces in dest names)
+        let dest = "\(syncUsername)@\(syncIP):\(rsyncEscapedRemotePath(syncRemotePath, rsyncPath: rsyncPath))/"
 
         syncTrace("[SyncTrace] 2 starting dry-run PREVIEW, rsyncPath=%@", rsyncPath)
         let prepProc = Process()
@@ -425,10 +432,10 @@ final class SyncEngine: ObservableObject {
             ? (NSHomeDirectory() as NSString).appendingPathComponent(String(config.sourceFolder.dropFirst()))
             : config.sourceFolder
         let source = rawSource.hasSuffix("/") ? rawSource : rawSource + "/"
-        let dest = "\(syncUsername)@\(syncIP):\(syncRemotePath)/"
-
         let rsyncCandidates = ["/opt/homebrew/bin/rsync", "/usr/local/bin/rsync", "/usr/bin/rsync"]
         let rsyncPath = rsyncCandidates.first { FileManager.default.fileExists(atPath: $0) } ?? "/usr/bin/rsync"
+        // R1: escape the remote path for the remote shell (spaces in dest names)
+        let dest = "\(syncUsername)@\(syncIP):\(rsyncEscapedRemotePath(syncRemotePath, rsyncPath: rsyncPath))/"
 
         syncTrace("[SyncTrace] 8 about to launch rsync, source='%@', dest='%@'", source, dest)
 
@@ -695,10 +702,10 @@ final class SyncEngine: ObservableObject {
         let rawSource = config.sourceFolder
         let source = rawSource.hasSuffix("/") ? rawSource : rawSource + "/"
         let remotePath = usingFallback ? "~/Sync" : (config.backupDestination.isEmpty ? "~/Sync" : config.backupDestination)
-        let dest = "\(config.username)@\(config.destinationIP):\(remotePath)/"
-
         let rsyncCandidates = ["/opt/homebrew/bin/rsync", "/usr/local/bin/rsync", "/usr/bin/rsync"]
         let rsyncPath = rsyncCandidates.first { FileManager.default.fileExists(atPath: $0) } ?? "/usr/bin/rsync"
+        // R1: escape the remote path for the remote shell (spaces in dest names)
+        let dest = "\(config.username)@\(config.destinationIP):\(rsyncEscapedRemotePath(remotePath, rsyncPath: rsyncPath))/"
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: rsyncPath)
@@ -835,12 +842,24 @@ final class SyncEngine: ObservableObject {
         isRemoteVerify = false
     }
 
-    // Called by BonjourBrowser when Backup requests a verify via TXT record
-    func triggerRemoteVerify() {
-        guard !isRemoteVerify else { return }  // Already handling a remote verify
-        guard !status.isActive else { return }  // Verify yields to sync
+    // Called by BonjourBrowser when Backup requests a verify via TXT record.
+    // Returns true only when a verify actually STARTED. verifyNow() can bail on
+    // its own guards (isReadyToSync / already verifying / active sync); leaving
+    // isRemoteVerify latched true on a bail killed every later Backup request
+    // for the session (the guard below swallowed them). Callers must not
+    // consume the request nonce unless this returns true, so a bailed request
+    // can be retried on the next poll/resolve.
+    @discardableResult
+    func triggerRemoteVerify() -> Bool {
+        guard !isRemoteVerify else { return false }  // Already handling a remote verify
+        guard !status.isActive else { return false }  // Verify yields to sync
         isRemoteVerify = true
         verifyNow(config: ConfigStore.shared.config)
+        // Both engines set their "verifying" state synchronously on start; if
+        // neither did, verifyNow bailed — unlatch so the next request works.
+        let started = verifyStatus == .verifying || WindowsTransport.shared.isVerifyActive
+        if !started { isRemoteVerify = false }
+        return started
     }
 
     private func countDifferingFiles(_ output: String) -> Int {
@@ -1022,10 +1041,10 @@ final class SyncEngine: ObservableObject {
             ? (NSHomeDirectory() as NSString).appendingPathComponent(String(config.sourceFolder.dropFirst()))
             : config.sourceFolder
         let source = rawSource.hasSuffix("/") ? rawSource : rawSource + "/"
-        let dest = "\(syncUsername)@\(syncIP):\(syncRemotePath)/"
-
         let rsyncCandidates = ["/opt/homebrew/bin/rsync", "/usr/local/bin/rsync", "/usr/bin/rsync"]
         let rsyncPath = rsyncCandidates.first { FileManager.default.fileExists(atPath: $0) } ?? "/usr/bin/rsync"
+        // R1: escape the remote path for the remote shell (spaces in dest names)
+        let dest = "\(syncUsername)@\(syncIP):\(rsyncEscapedRemotePath(syncRemotePath, rsyncPath: rsyncPath))/"
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: rsyncPath)
@@ -1145,7 +1164,7 @@ final class SyncEngine: ObservableObject {
     private func runDu(username: String, ip: String, completion: @escaping (Int64) -> Void) {
         guard !duInFlight else { return }
         duInFlight = true
-        let escaped = shellEscapeForDoubleQuotes(syncRemotePath)
+        let escaped = remoteShellPath(syncRemotePath)  // R2: "~/Sync" → "$HOME/Sync" (tilde won't expand in quotes)
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         var duArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no"]
@@ -1202,25 +1221,25 @@ final class SyncEngine: ObservableObject {
     }
 
     private func writeSyncStart(totalBytes: Int64, totalFiles: Int) {
-        let escaped = shellEscapeForDoubleQuotes(syncRemotePath)
-        sshWrite("echo '{\"totalBytes\":\(totalBytes),\"totalFiles\":\(totalFiles)}' > \"\(escaped)/\(SignalFile.start)\"")
+        let escaped = remoteShellPath(syncRemotePath)  // R2: "~/Sync" → "$HOME/Sync" (tilde won't expand in quotes)
+        sshWrite("echo '{\"totalBytes\":\(totalBytes),\"totalFiles\":\(totalFiles)}' > \"\(escaped)/\(SignalFile.start)\"", label: SignalFile.start)
     }
 
     // Extended payload: bytesDone/bytesTotal let the Backup draw a bar + ETA.
     // percent -1 / bytesTotal 0 = delta unknown (estimate pending or failed).
     private func writeSyncProgress(percent: Int, bytesDone: Int64, bytesTotal: Int64) {
-        let escaped = shellEscapeForDoubleQuotes(syncRemotePath)
-        sshWrite("echo '{\"percent\":\(percent),\"bytesDone\":\(bytesDone),\"bytesTotal\":\(bytesTotal)}' > \"\(escaped)/\(SignalFile.progress)\"")
+        let escaped = remoteShellPath(syncRemotePath)  // R2: "~/Sync" → "$HOME/Sync" (tilde won't expand in quotes)
+        sshWrite("echo '{\"percent\":\(percent),\"bytesDone\":\(bytesDone),\"bytesTotal\":\(bytesTotal)}' > \"\(escaped)/\(SignalFile.progress)\"", label: SignalFile.progress)
     }
 
     private func writeSyncComplete(totalFiles: Int, totalBytes: Int64, duration: Int) {
-        let escaped = shellEscapeForDoubleQuotes(syncRemotePath)
-        sshWrite("echo '{\"totalFiles\":\(totalFiles),\"totalBytes\":\(totalBytes),\"duration\":\(duration)}' > \"\(escaped)/\(SignalFile.complete)\"; rm -f \"\(escaped)/\(SignalFile.start)\" \"\(escaped)/\(SignalFile.progress)\"")
+        let escaped = remoteShellPath(syncRemotePath)  // R2: "~/Sync" → "$HOME/Sync" (tilde won't expand in quotes)
+        sshWrite("echo '{\"totalFiles\":\(totalFiles),\"totalBytes\":\(totalBytes),\"duration\":\(duration)}' > \"\(escaped)/\(SignalFile.complete)\"; rm -f \"\(escaped)/\(SignalFile.start)\" \"\(escaped)/\(SignalFile.progress)\"", label: SignalFile.complete)
     }
 
     private func cleanupSignalFiles() {
-        let escaped = shellEscapeForDoubleQuotes(syncRemotePath)
-        sshWrite("rm -f \"\(escaped)/\(SignalFile.start)\" \"\(escaped)/\(SignalFile.progress)\" \"\(escaped)/\(SignalFile.complete)\"")
+        let escaped = remoteShellPath(syncRemotePath)  // R2: "~/Sync" → "$HOME/Sync" (tilde won't expand in quotes)
+        sshWrite("rm -f \"\(escaped)/\(SignalFile.start)\" \"\(escaped)/\(SignalFile.progress)\" \"\(escaped)/\(SignalFile.complete)\"", label: "signal cleanup")
     }
 
     // Write verify result to Backup (for remote-initiated verify)
@@ -1238,7 +1257,7 @@ final class SyncEngine: ObservableObject {
             return
         }
         let remotePath = usingFallback ? "~/Sync" : (config.backupDestination.isEmpty ? "~/Sync" : config.backupDestination)
-        let escaped = shellEscapeForDoubleQuotes(remotePath)
+        let escaped = remoteShellPath(remotePath)  // R2: "~/Sync" → "$HOME/Sync" (tilde won't expand in quotes)
         let timestamp = Int(Date().timeIntervalSince1970)
         let cmd = "echo '{\"result\":\"\(result)\",\"ts\":\(timestamp)}' > \"\(escaped)/\(SignalFile.verifyResult)\"; rm -f \"\(escaped)/\(SignalFile.verifyRequest)\""
 
@@ -1252,11 +1271,27 @@ final class SyncEngine: ObservableObject {
         sshArgs.append(contentsOf: ["--", "\(config.username)@\(config.destinationIP)", cmd])
         proc.arguments = sshArgs
         proc.standardOutput = FileHandle.nullDevice
-        proc.standardError  = FileHandle.nullDevice
+        // Never-silent (R3): a denied/failed .verify_result write was previously
+        // indistinguishable from a delivered one — the exact failure that cost
+        // the external-drive round-trip. Outcome is logged either way.
+        let errPipe = Pipe()
+        proc.standardError = errPipe
+        let target = remotePath
+        proc.terminationHandler = { p in
+            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+            if p.terminationStatus == 0 {
+                NSLog("[Sync/verify] .verify_result delivered to '%@' (result=%@)", target, result)
+            } else {
+                let err = String(data: errData, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                NSLog("[Sync/verify] .verify_result write FAILED to '%@' (exit %d): %@",
+                      target, p.terminationStatus, err)
+            }
+        }
         DispatchQueue.global(qos: .utility).async { try? proc.run() }
     }
 
-    private func sshWrite(_ command: String) {
+    private func sshWrite(_ command: String, label: String = "") {
         guard !syncUsername.isEmpty, !syncIP.isEmpty else { return }
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
@@ -1268,7 +1303,19 @@ final class SyncEngine: ObservableObject {
         sshArgs.append(contentsOf: ["--", "\(syncUsername)@\(syncIP)", command])
         proc.arguments = sshArgs
         proc.standardOutput = FileHandle.nullDevice
-        proc.standardError  = FileHandle.nullDevice
+        // Never-silent (R3): failures are logged with the caller's label —
+        // fire-and-forget behavior unchanged, but no longer invisible.
+        let errPipe = Pipe()
+        proc.standardError = errPipe
+        proc.terminationHandler = { p in
+            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+            if p.terminationStatus != 0 {
+                let err = String(data: errData, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                NSLog("[Sync/signal] %@ write failed (exit %d): %@",
+                      label.isEmpty ? "remote command" : label, p.terminationStatus, err)
+            }
+        }
         DispatchQueue.global(qos: .utility).async { try? proc.run() }
     }
 
@@ -1277,6 +1324,7 @@ final class SyncEngine: ObservableObject {
     enum WriteTestResult {
         case writable
         case unwritable   // clear failure — folder gone or permission denied
+        case unwritablePermissions   // EPERM on /Volumes — Backup's sshd lacks Full Disk Access (TCC)
         case testFailed   // SSH error or timeout — don't block, proceed with sync
     }
 
@@ -1286,7 +1334,7 @@ final class SyncEngine: ObservableObject {
         remotePath: String,
         completion: @escaping (WriteTestResult, String) -> Void
     ) {
-        let escaped = shellEscapeForDoubleQuotes(remotePath)
+        let escaped = remoteShellPath(remotePath)  // R2: "~/Sync" → "$HOME/Sync" (tilde won't expand in quotes)
         let testFile = "\(escaped)/.sync_writetest_\(Int.random(in: 1000...9999))"
         let cmd = "touch \"\(testFile)\" && rm -f \"\(testFile)\" && echo OK || echo FAIL"
 
@@ -1302,7 +1350,10 @@ final class SyncEngine: ObservableObject {
         proc.arguments = testArgs
         let pipe = Pipe()
         proc.standardOutput = pipe
-        proc.standardError = FileHandle.nullDevice
+        // Never-silent (R3): the remote touch's stderr carries the actual cause
+        // ("Operation not permitted" = TCC denial of sshd on /Volumes).
+        let errPipe = Pipe()
+        proc.standardError = errPipe
 
         var completed = false
         let completionLock = NSLock()
@@ -1329,13 +1380,25 @@ final class SyncEngine: ObservableObject {
         proc.terminationHandler = { p in
             timeoutItem.cancel()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
             let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if p.terminationStatus != 0 {
                 safeComplete(.testFailed)
             } else if output.contains("OK") {
                 safeComplete(.writable)
             } else {
-                safeComplete(.unwritable)
+                // Discriminate the cause: EPERM on an external volume means the
+                // Backup's sshd lacks Full Disk Access (a manual macOS setting) —
+                // surface it as its own result instead of a generic unwritable.
+                let err = String(data: errData, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if remotePath.hasPrefix("/Volumes/"), err.contains("Operation not permitted") {
+                    NSLog("[Sync] write-test denied by macOS privacy (TCC) on '%@': %@", remotePath, err)
+                    safeComplete(.unwritablePermissions)
+                } else {
+                    if !err.isEmpty { NSLog("[Sync] write-test unwritable on '%@': %@", remotePath, err) }
+                    safeComplete(.unwritable)
+                }
             }
         }
         DispatchQueue.global(qos: .userInitiated).async {
@@ -1357,7 +1420,7 @@ final class SyncEngine: ObservableObject {
         remotePath: String,
         completion: @escaping (Bool) -> Void
     ) {
-        let escaped = shellEscapeForDoubleQuotes(remotePath)
+        let escaped = remoteShellPath(remotePath)  // R2: "~/Sync" → "$HOME/Sync" (tilde won't expand in quotes)
         let refusedPath = "\(escaped)/\(SignalFile.refused)"
         let cmd = "test -f \"\(refusedPath)\" && echo YES || echo NO"
 
@@ -1393,8 +1456,8 @@ final class SyncEngine: ObservableObject {
     }
 
     private func clearSyncRefused() {
-        let escaped = shellEscapeForDoubleQuotes(syncRemotePath)
-        sshWrite("rm -f \"\(escaped)/\(SignalFile.refused)\"")
+        let escaped = remoteShellPath(syncRemotePath)  // R2: "~/Sync" → "$HOME/Sync" (tilde won't expand in quotes)
+        sshWrite("rm -f \"\(escaped)/\(SignalFile.refused)\"", label: "refused cleanup")
     }
 
     // MARK: - Auto sync
@@ -1552,7 +1615,8 @@ final class SyncEngine: ObservableObject {
             return fmt.string(from: Date())
         }()
 
-        let dest = "\(config.username)@\(config.destinationIP):\(syncRemotePath)/"
+        // R1: escape the remote path for the remote shell (spaces in dest names)
+        let dest = "\(config.username)@\(config.destinationIP):\(rsyncEscapedRemotePath(syncRemotePath, rsyncPath: rsyncPath))/"
 
         // ISOLATION: completion-once guard and process tracking for timeout termination
         let guard_ = VersioningGuard(completion: completion)
@@ -1638,7 +1702,7 @@ final class SyncEngine: ObservableObject {
             return
         }
 
-        let escaped = shellEscapeForDoubleQuotes(remotePath)
+        let escaped = remoteShellPath(remotePath)  // R2: "~/Sync" → "$HOME/Sync" (tilde won't expand in quotes)
 
         var copyCommands: [String] = []
         for file in files {
@@ -1705,7 +1769,7 @@ final class SyncEngine: ObservableObject {
 
     private func pruneVersions(username: String, ip: String, remotePath: String, maxCount: Int) {
         let N = min(max(maxCount, 3), 20)
-        let escaped = shellEscapeForDoubleQuotes(remotePath)
+        let escaped = remoteShellPath(remotePath)  // R2: "~/Sync" → "$HOME/Sync" (tilde won't expand in quotes)
         // BSD-safe prune: newline-based (no awk RS="\0" which BSD awk doesn't support)
         let cmd = """
 cd "\(escaped)" 2>/dev/null || exit 0; \

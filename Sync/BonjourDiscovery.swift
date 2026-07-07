@@ -484,8 +484,12 @@ final class BonjourBrowser: ObservableObject {
         if let service = services.first(where: { $0.id == serviceName }),
            config.destinationIP == service.resolvedIP,
            isReachable {
-            lastHandledVerifyNonce = verifyReq
-            SyncEngine.shared.triggerRemoteVerify()
+            // Consume the nonce ONLY if a verify actually started — a bailed
+            // trigger (engine busy) must stay retryable on the next resolve
+            // instead of being eaten forever (SYNC-SPEC verify-latch fix).
+            if SyncEngine.shared.triggerRemoteVerify() {
+                lastHandledVerifyNonce = verifyReq
+            }
         }
     }
 
