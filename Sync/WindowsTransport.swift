@@ -150,8 +150,10 @@ final class WindowsTransport {
 
     // Remote PowerShell via -EncodedCommand: works whether the account's sshd
     // default shell is cmd.exe or PowerShell (no remote quoting layer at all).
+    // stderr rides its own pipe so remote errors can be logged on failure
+    // instead of collapsing to exit-status-only (audit §1 — never-silent).
     private static func makePowerShellProcess(username: String, ip: String,
-                                              script: String, connectTimeout: Int) -> (Process, Pipe) {
+                                              script: String, connectTimeout: Int) -> (Process, Pipe, Pipe) {
         let b64 = script.data(using: .utf16LittleEndian)?.base64EncodedString() ?? ""
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
@@ -161,8 +163,9 @@ final class WindowsTransport {
         proc.arguments = args
         let pipe = Pipe()
         proc.standardOutput = pipe
-        proc.standardError = FileHandle.nullDevice
-        return (proc, pipe)
+        let errPipe = Pipe()
+        proc.standardError = errPipe
+        return (proc, pipe, errPipe)
     }
 
     private static func makeSftpProcess(username: String, ip: String,
@@ -180,7 +183,11 @@ final class WindowsTransport {
 
     // Run a child, draining stdout concurrently until EOF (no pipe-full deadlock —
     // manifests can be hundreds of KB). Completion fires on a background queue.
+    // errPipe (when given) is drained on its own queue — a full stderr pipe would
+    // deadlock the child just like stdout — and logged on nonzero exit with the
+    // caller-supplied context label (audit §1 — never-silent).
     private static func run(_ proc: Process, pipe: Pipe,
+                            errPipe: Pipe? = nil, context: String = "",
                             completion: @escaping (Int32, String) -> Void) {
         DispatchQueue.global(qos: .utility).async {
             do {
@@ -190,8 +197,27 @@ final class WindowsTransport {
                 completion(-1, "")
                 return
             }
+            var errData = Data()
+            let errGroup = DispatchGroup()
+            if let errPipe {
+                errGroup.enter()
+                DispatchQueue.global(qos: .utility).async {
+                    errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+                    errGroup.leave()
+                }
+            }
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             proc.waitUntilExit()
+            errGroup.wait()
+            if proc.terminationStatus != 0 {
+                let errStr = String(data: errData, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if !errStr.isEmpty {
+                    NSLog("[V1.1/Win] %@ failed (exit %d), stderr: %@",
+                          context.isEmpty ? "remote command" : context,
+                          proc.terminationStatus, errStr)
+                }
+            }
             completion(proc.terminationStatus, String(data: data, encoding: .utf8) ?? "")
         }
     }
@@ -363,9 +389,20 @@ final class WindowsTransport {
     // other signal files in the same session. Fire-and-forget unless completion given.
     private func putSignalFile(name: String, contents: String,
                                removing: [String] = [],
+                               logOutcome: Bool = false,
                                completion: ((Bool) -> Void)? = nil) {
         Self.putSignalFile(username: runUsername, ip: runIP, dest: runDest,
-                           name: name, contents: contents, removing: removing) { status, _ in
+                           name: name, contents: contents, removing: removing) { status, output in
+            // audit §1 — never-silent: .sync_start/.sync_complete opt in; the
+            // throttled .sync_progress stays quiet (3 s cadence would spam).
+            if logOutcome {
+                if status == 0 {
+                    NSLog("[V1.1/Win] %@ delivered", name)
+                } else {
+                    NSLog("[V1.1/Win] %@ write FAILED (exit %d): %@", name, status,
+                          output.trimmingCharacters(in: .whitespacesAndNewlines))
+                }
+            }
             completion?(status == 0)
         }
     }
@@ -440,8 +477,15 @@ final class WindowsTransport {
         guard let batch = Self.writeBatchFile(lines) else { return }
         let (proc, pipe) = Self.makeSftpProcess(username: runUsername, ip: runIP,
                                                 batchFile: batch, connectTimeout: 2)
-        Self.run(proc, pipe: pipe) { _, _ in
+        let joined = names.joined(separator: ", ")
+        Self.run(proc, pipe: pipe) { status, output in
             try? FileManager.default.removeItem(at: batch)
+            // Per-file misses are ignored by design (`-rm`); a nonzero exit here
+            // is connection-level — log it (audit §1 — never-silent).
+            if status != 0 {
+                NSLog("[V1.1/Win] signal cleanup (%@) FAILED (exit %d): %@", joined, status,
+                      output.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
         }
     }
 
@@ -478,11 +522,11 @@ final class WindowsTransport {
                 return
             }
             // Stage 2 — remote manifest.
-            let (proc, pipe) = Self.makePowerShellProcess(
+            let (proc, pipe, errPipe) = Self.makePowerShellProcess(
                 username: self.runUsername, ip: self.runIP,
                 script: Self.manifestScript(dest: self.runDest), connectTimeout: 5)
             DispatchQueue.main.async { self.syncProc = proc }
-            Self.run(proc, pipe: pipe) { [weak self] status, output in
+            Self.run(proc, pipe: pipe, errPipe: errPipe, context: "sync manifest") { [weak self] status, output in
                 guard let self, !self.syncCancelled else { return }
                 guard status == 0 else {
                     if isPreviewOnly {
@@ -563,11 +607,11 @@ final class WindowsTransport {
                 self.finishSyncFailure(message: "Sync interrupted — files may be incomplete")
                 return
             }
-            let (proc, pipe) = Self.makePowerShellProcess(
+            let (proc, pipe, errPipe) = Self.makePowerShellProcess(
                 username: self.runUsername, ip: self.runIP,
                 script: Self.manifestScript(dest: self.runDest), connectTimeout: 5)
             DispatchQueue.main.async { self.syncProc = proc }
-            Self.run(proc, pipe: pipe) { [weak self] status, output in
+            Self.run(proc, pipe: pipe, errPipe: errPipe, context: "fallback re-manifest") { [weak self] status, output in
                 guard let self, !self.syncCancelled else { return }
                 guard status == 0 else {
                     self.finishSyncFailure(message: "Sync interrupted — files may be incomplete")
@@ -593,7 +637,8 @@ final class WindowsTransport {
 
         // Same payload as the Mac engine's writeSyncStart.
         putSignalFile(name: SignalFile.start,
-                      contents: "{\"totalBytes\":\(expectedBytes),\"totalFiles\":\(expectedFiles)}")
+                      contents: "{\"totalBytes\":\(expectedBytes),\"totalFiles\":\(expectedFiles)}",
+                      logOutcome: true)
 
         guard !uploads.isEmpty else {
             // Nothing to transfer — still a successful (empty) sync, like rsync exit 0.
@@ -714,11 +759,11 @@ final class WindowsTransport {
     // Stage 5 — .sync_refused check (same timing as the Mac path: after transfer),
     // then completion bookkeeping.
     private func checkRefusedThenFinish(uploadedFiles: Int, uploadedBytes: Int64) {
-        let (proc, pipe) = Self.makePowerShellProcess(
+        let (proc, pipe, errPipe) = Self.makePowerShellProcess(
             username: runUsername, ip: runIP,
             script: Self.refusedScript(dest: runDest), connectTimeout: 2)
         DispatchQueue.main.async { self.syncProc = proc }
-        Self.run(proc, pipe: pipe) { [weak self] status, output in
+        Self.run(proc, pipe: pipe, errPipe: errPipe, context: "refused check") { [weak self] status, output in
             guard let self, !self.syncCancelled else { return }
             let refused = (status == 0) && output.contains("YES")
             if refused {
@@ -770,7 +815,8 @@ final class WindowsTransport {
         // Same payload as the Mac engine's writeSyncComplete (+ removes start/progress).
         putSignalFile(name: SignalFile.complete,
                       contents: "{\"totalFiles\":\(uploadedFiles),\"totalBytes\":\(uploadedBytes),\"duration\":\(duration)}",
-                      removing: [SignalFile.start, SignalFile.progress])
+                      removing: [SignalFile.start, SignalFile.progress],
+                      logOutcome: true)
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.isSyncActive = false
@@ -885,10 +931,10 @@ final class WindowsTransport {
             }
             let script = fast ? Self.manifestScript(dest: self.runDest)
                               : Self.hashScript(dest: self.runDest)
-            let (proc, pipe) = Self.makePowerShellProcess(
+            let (proc, pipe, errPipe) = Self.makePowerShellProcess(
                 username: self.runUsername, ip: self.runIP, script: script, connectTimeout: 5)
             DispatchQueue.main.async { self.verifyProc = proc }
-            Self.run(proc, pipe: pipe) { [weak self] status, output in
+            Self.run(proc, pipe: pipe, errPipe: errPipe, context: fast ? "fast-verify manifest" : "deep-verify hashes") { [weak self] status, output in
                 guard let self, !self.verifyCancelled else { return }
                 guard status == 0 else {
                     self.finishVerify(.failed("Verify failed — couldn't reach Backup"), resultCode: "error")
@@ -998,20 +1044,32 @@ final class WindowsTransport {
     // proves reachability and returns free space + any pending verify request.
     // The caller owns the Process (stores it so cancelInFlight() can terminate it)
     // and hops to the main actor in the completion.
+    // Poll-failure stderr dedupe: 3 s cadence would flood the log while the PC is
+    // off — log only when the error text changes (best-effort; benign if racy).
+    private static var lastPollStderr = ""
+
     func makeManualPollProcess(username: String, ip: String, destination: String,
                                completion: @escaping (_ reachable: Bool, _ freeBytes: Int64?, _ verifyNonce: String?) -> Void) -> Process {
         let dest = Self.effectiveDest(destination, usingFallback: false)
-        let (proc, pipe) = Self.makePowerShellProcess(
+        let (proc, pipe, errPipe) = Self.makePowerShellProcess(
             username: username, ip: ip,
             script: Self.manualPollScript(dest: dest), connectTimeout: 2)
         proc.terminationHandler = { p in
             // Output is two short lines — safe to drain after termination.
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             let output = String(data: data, encoding: .utf8) ?? ""
+            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
             guard p.terminationStatus == 0 else {
+                let errStr = String(data: errData, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if !errStr.isEmpty, errStr != Self.lastPollStderr {
+                    Self.lastPollStderr = errStr
+                    NSLog("[V1.1/Win] manual poll failed (exit %d), stderr: %@", p.terminationStatus, errStr)
+                }
                 completion(false, nil, nil)
                 return
             }
+            Self.lastPollStderr = ""
             var free: Int64? = nil
             var nonce: String? = nil
             for line in output.components(separatedBy: .newlines) {

@@ -69,10 +69,17 @@ struct Config {
     var lastBackupDiscoveryName: String = ""  // Auto-reconnect: remembered Backup Mac's name
     var lastBackupIP: String = ""             // Auto-reconnect: remembered Backup Mac's IP
     var backupDestination: String = "~/Sync"  // Main role — Backup's receive folder (from TXT)
-    // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
+    // V1.1 Windows-target path.
     // Runtime-only (never persisted — save() maps fields explicitly and omits it).
     // "" = mac (today's behavior, exact); "windows" = ShowSync-Win Backup (TXT platform key or manual toggle).
+    // Auto mode: adopted/self-healed from the Backup's TXT record on every resolve.
+    // Manual mode: derived at load (and on mode switch) from manualWindowsBackup below.
     var backupPlatform: String = ""
+    // V1.1: the persisted manual-mode "Windows Backup" toggle choice. Without it the
+    // runtime flag dies with the process and a manual-mode Windows Backup silently
+    // reverts to the rsync path on relaunch (audit §3). Main role only; a Mac Backup
+    // never reads it and auto mode never consults it.
+    var manualWindowsBackup: Bool = false
 
     // Backup-role fields
     var mainIP: String = ""
@@ -133,6 +140,8 @@ private struct MainConfig: Codable {
     var preferredInterface: String = ""
     var preferredInterfaceMAC: String = ""
     var globalHotkeyEnabled: Bool = true
+    // Optional: added in V1.1 — old config files lack the key (decode must not fail)
+    var manualWindowsBackup: Bool? = nil
 }
 
 private struct BackupConfig: Codable {
@@ -366,7 +375,8 @@ final class ConfigStore: ObservableObject {
                 lastBackupIP:                  config.lastBackupIP,
                 preferredInterface:            config.preferredInterface,
                 preferredInterfaceMAC:         config.preferredInterfaceMAC,
-                globalHotkeyEnabled:           config.globalHotkeyEnabled
+                globalHotkeyEnabled:           config.globalHotkeyEnabled,
+                manualWindowsBackup:           config.manualWindowsBackup
             )
             do {
                 let data = try JSONEncoder().encode(m)
@@ -706,6 +716,12 @@ final class ConfigStore: ObservableObject {
         c.preferredInterface            = m.preferredInterface
         c.preferredInterfaceMAC         = m.preferredInterfaceMAC
         c.globalHotkeyEnabled           = m.globalHotkeyEnabled
+        // V1.1: restore the manual-mode Windows Backup choice across relaunches.
+        // Auto mode ignores this — backupPlatform is adopted from TXT on resolve.
+        c.manualWindowsBackup           = m.manualWindowsBackup ?? false
+        if c.discoveryMode == "manual" && c.manualWindowsBackup {
+            c.backupPlatform = "windows"
+        }
         migrateInterfaceMACIfNeeded(&c)
         return c
     }

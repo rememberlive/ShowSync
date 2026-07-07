@@ -509,6 +509,13 @@ struct SettingsView: View {
         .onChange(of: localDiscoveryMode) { _ in
             Task { @MainActor in
                 store.config.discoveryMode = localDiscoveryMode
+                // V1.1: entering manual mode applies the persisted Windows Backup
+                // choice (both directions — a TXT-adopted "windows" must not leak
+                // into manual mode with the toggle off). Automatic mode is left to
+                // the TXT self-heal on the next resolve.
+                if localDiscoveryMode == "manual" {
+                    store.config.backupPlatform = store.config.manualWindowsBackup ? "windows" : ""
+                }
                 // Reset transient display state for fresh start in new mode
                 SyncEngine.shared.usingFallback = false
                 manualModeFreeSpace = 0
@@ -1096,6 +1103,7 @@ struct SettingsView: View {
                 Toggle(isOn: Binding(
                     get: { store.config.backupPlatform == "windows" },
                     set: { on in
+                        store.config.manualWindowsBackup = on  // persisted — survives relaunch
                         store.config.backupPlatform = on ? "windows" : ""
                         destinationCheckState = .idle
                         hasConfirmedDestinationThisConnection = false

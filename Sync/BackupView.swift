@@ -456,6 +456,11 @@ final class ReceiveMonitor: ObservableObject {
     private var receiveRateSamples: [(time: Date, bytes: Int64)] = []
     @Published var usingFallback: Bool    = false // True when custom folder missing, using ~/Sync
     @Published var verifyStatus: BackupVerifyStatus = .idle  // Backup-initiated verify status
+    // Nonce of the verify request currently awaiting a result. Each request's 90 s
+    // timeout closure captures its own nonce and only fires if it still matches —
+    // a second request within the window must not be timed out by the first's timer
+    // (audit §4). Cleared on result arrival and when a timeout fires.
+    var pendingVerifyNonce: String = ""
     // `lastReceivedTime` now lives on ConfigStore.config so it survives relaunch.
 
     /// The ACTUAL destination path being used right now (fallback ~/Sync or user's chosen folder)
@@ -735,6 +740,7 @@ final class ReceiveMonitor: ObservableObject {
                     self?.isChecking = false
                     guard let self else { return }
                     self.verifyStatus = status
+                    self.pendingVerifyNonce = ""  // audit §4: disarm the 90 s timeout for this request
                     // SYNC-SPEC §8.10: handshake complete — stop advertising the
                     // request nonce so a Main that (re)appears later doesn't run a
                     // stale verify. Republish only in auto mode (updateTXTRecord
@@ -1295,15 +1301,19 @@ struct BackupView: View {
     private func requestVerify() {
         let nonce = UUID().uuidString.prefix(8).lowercased()
         receiveMonitor.verifyStatus = .requested
+        receiveMonitor.pendingVerifyNonce = String(nonce)
 
         if store.config.discoveryMode == "automatic" {
             // AUTO mode: Update Bonjour TXT record with verify request nonce
             BonjourAdvertiser.shared.verifyRequestNonce = String(nonce)
             BonjourAdvertiser.shared.updateTXTRecord()
 
-            // Set 90s timeout for response
+            // Set 90s timeout for response — scoped to THIS request's nonce so a
+            // newer request within the window isn't timed out by this timer.
             DispatchQueue.main.asyncAfter(deadline: .now() + 90) { [weak receiveMonitor] in
-                guard let rm = receiveMonitor, rm.verifyStatus == .requested else { return }
+                guard let rm = receiveMonitor, rm.verifyStatus == .requested,
+                      rm.pendingVerifyNonce == String(nonce) else { return }
+                rm.pendingVerifyNonce = ""
                 // SYNC-SPEC §8.10: request expired — stop advertising the nonce
                 // (mode guard: updateTXTRecord would START the advertiser in
                 // manual mode if the mode changed during the wait).
@@ -1330,10 +1340,11 @@ struct BackupView: View {
             // Show manual mode hint
             receiveMonitor.verifyStatus = .manualHint
 
-            // Set 90s timeout
+            // Set 90s timeout — nonce-scoped, same as the auto branch.
             DispatchQueue.main.asyncAfter(deadline: .now() + 90) { [weak receiveMonitor] in
-                guard let rm = receiveMonitor else { return }
+                guard let rm = receiveMonitor, rm.pendingVerifyNonce == String(nonce) else { return }
                 if rm.verifyStatus == .manualHint || rm.verifyStatus == .requested {
+                    rm.pendingVerifyNonce = ""
                     rm.verifyStatus = .failed("Verify timed out — open Main's Sync window first")
                     DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak receiveMonitor] in
                         if case .failed = receiveMonitor?.verifyStatus {
