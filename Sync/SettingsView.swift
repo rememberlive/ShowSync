@@ -86,6 +86,7 @@ struct SettingsView: View {
     @State private var remoteLoginOn: Bool? = nil      // step-1 live pill: nil = checking
     @State private var guidePollTimer: Timer? = nil    // live Remote Login poll while card open
     @State private var mainExternalReady = false       // Main-side ✓ from the Confirm probe
+    @State private var lastExternalProbeOK: Bool? = nil // change-only gate: last readiness result (nil = unknown)
     @State private var hasConfirmedDestinationThisConnection = false
     @State private var manualModeFreeSpace: Int64 = 0  // Free space read via SSH for manual mode
     // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
@@ -476,6 +477,8 @@ struct SettingsView: View {
                 hasConfirmedDestinationThisConnection = true
                 confirmBackupDestination()
             }
+            // Trigger 1: determine external-drive readiness LIVE on section load.
+            reprobeExternalReadinessIfNeeded()
         }
         .onDisappear {
             connectionStatus.stop("settings")
@@ -485,6 +488,13 @@ struct SettingsView: View {
         // where the popover was closed by the wizard and then reopened by the user.
         .onReceive(NotificationCenter.default.publisher(for: NSPopover.willShowNotification)) { _ in
             connectionStatus.start("settings")
+            // Trigger 5: foreground return (menu-bar app: reopening the popover IS
+            // the return-from-System-Settings event) — re-verify readiness live.
+            reprobeExternalReadinessIfNeeded()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            // Trigger 5 (side-by-side case): app regains active while popover already open.
+            reprobeExternalReadinessIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSPopover.didCloseNotification)) { _ in
             connectionStatus.stop("settings")
@@ -493,6 +503,8 @@ struct SettingsView: View {
             Task { @MainActor in
                 hasConfirmedDestinationThisConnection = false
                 destinationCheckState = .idle
+                lastExternalProbeOK = nil  // new peer → re-evaluate readiness from scratch
+                mainExternalReady = false
                 connectionStatus.recheck()
             }
         }
@@ -500,8 +512,17 @@ struct SettingsView: View {
             Task { @MainActor in
                 hasConfirmedDestinationThisConnection = false
                 destinationCheckState = .idle
+                lastExternalProbeOK = nil
+                mainExternalReady = false
                 connectionStatus.recheck()
             }
+        }
+        // Trigger 3: destination changed (to/from an external path) — reset the
+        // change-only cache and re-probe so the new target is evaluated live.
+        .onChange(of: store.config.backupDestination) { _ in
+            lastExternalProbeOK = nil
+            mainExternalReady = false
+            reprobeExternalReadinessIfNeeded()
         }
         .onChange(of: connectionStatus.state) { newState in
             // Manual mode: confirm destination on reconnect (transition INTO .reachable)
@@ -867,11 +888,15 @@ struct SettingsView: View {
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.blue.opacity(0.10)))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.blue.opacity(0.30)))
-        .onAppear { startGuidePolling() }
-        .onDisappear { stopGuidePolling() }
+        .onAppear { startGuidePolling() }          // Trigger 2: card opens
+        .onDisappear { stopGuidePolling() }         // #6: stop poll the instant it closes
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refreshRemoteLoginPill()                // Trigger 5: foreground return refreshes the pill
+        }
         .onReceive(ReceiveMonitor.shared.$externalWriteConfirmed) { confirmed in
             guard confirmed, showExternalGuide else { return }
             externalDriveReady = true
+            stopGuidePolling()                      // #6: stop poll the instant readiness is confirmed
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { showExternalGuide = false }
         }
     }
@@ -901,11 +926,22 @@ struct SettingsView: View {
         }
     }
 
+    // Change-only pill refresh: update the @State (and thus the view) only when
+    // Remote Login's on/off actually transitions — no flicker, no redundant work.
+    private func refreshRemoteLoginPill() {
+        RemoteLogin.probe { on in
+            if remoteLoginOn != on { remoteLoginOn = on }
+        }
+    }
+
     private func startGuidePolling() {
-        RemoteLogin.probe { remoteLoginOn = $0 }
+        refreshRemoteLoginPill()
         guidePollTimer?.invalidate()
-        guidePollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
-            RemoteLogin.probe { remoteLoginOn = $0 }
+        // #6: light poll ONLY while the card is open (side-by-side case where the
+        // user flips the switch without ShowSync losing focus). Stopped on close
+        // (onDisappear) and the instant readiness is confirmed (externalWriteConfirmed).
+        guidePollTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { _ in
+            refreshRemoteLoginPill()
         }
     }
 
@@ -2640,6 +2676,20 @@ struct SettingsView: View {
     // /Volumes destination through sshd — "Operation not permitted" means the
     // Backup's Remote Login lacks Full Disk Access (TCC), which no remote write
     // can bypass. Sets/clears externalFDAWarning; never blocks confirmation.
+    // Event-driven readiness re-probe (Main side): run the authoritative sshd
+    // throwaway-.probe ONLY when the destination is external, reachable, and
+    // configured. Called on launch/section-open and on foreground return (the
+    // user leaves to flip the switch in System Settings and comes back). Never
+    // polls. Change-only gating in probeExternalFDA suppresses no-op updates.
+    private func reprobeExternalReadinessIfNeeded() {
+        guard isMain else { return }
+        let dest = store.config.backupDestination
+        guard dest.hasPrefix("/Volumes/"), !SyncEngine.shared.usingFallback,
+              !store.config.username.isEmpty, !store.config.destinationIP.isEmpty,
+              connectionStatus.state == .reachable else { return }
+        probeExternalFDA(username: store.config.username, ip: store.config.destinationIP, remotePath: dest)
+    }
+
     private func probeExternalFDA(username: String, ip: String, remotePath: String) {
         let escaped = remoteShellPath(remotePath)
         let testFile = "\(escaped)/.sync_fdaprobe_\(Int.random(in: 1000...9999))"
@@ -2657,13 +2707,28 @@ struct SettingsView: View {
             let out = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
             let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
             Task { @MainActor in
-                if p.terminationStatus == 0, !out.contains("OK"), err.contains("Operation not permitted") {
-                    NSLog("[Sync] Confirm Destination: external drive denied by macOS privacy (TCC) — Backup needs external-drive permission")
+                // Tri-state: OK = ready, EPERM = needs permission, anything else
+                // (unreachable / ssh error) = inconclusive → leave state as-is.
+                let result: Bool?
+                if p.terminationStatus == 0, out.contains("OK") {
+                    result = true
+                } else if p.terminationStatus == 0, err.contains("Operation not permitted") {
+                    result = false
+                } else {
+                    result = nil
+                }
+                guard let ready = result else { return }
+                // Change-only: act solely on a transition — no flicker, no log spam.
+                guard ready != lastExternalProbeOK else { return }
+                lastExternalProbeOK = ready
+                if ready {
+                    externalFDAWarning = false
+                    mainExternalReady = true
+                    NSLog("[Sync] external-drive readiness → READY")
+                } else {
                     externalFDAWarning = true
                     mainExternalReady = false
-                } else if out.contains("OK") {
-                    externalFDAWarning = false
-                    mainExternalReady = true   // ✓ external drive confirmed writable via sshd
+                    NSLog("[Sync] external-drive readiness → needs permission (denied via sshd TCC)")
                 }
             }
         }
