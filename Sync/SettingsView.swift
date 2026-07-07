@@ -87,6 +87,7 @@ struct SettingsView: View {
     @State private var guidePollTimer: Timer? = nil    // live Remote Login poll while card open
     @State private var mainExternalReady = false       // Main-side ✓ from the Confirm probe
     @State private var lastExternalProbeOK: Bool? = nil // change-only gate: last readiness result (nil = unknown)
+    @State private var externalReadinessTimer: Timer? = nil // light re-probe loop while external + not-ready
     @State private var hasConfirmedDestinationThisConnection = false
     @State private var manualModeFreeSpace: Int64 = 0  // Free space read via SSH for manual mode
     // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
@@ -479,9 +480,11 @@ struct SettingsView: View {
             }
             // Trigger 1: determine external-drive readiness LIVE on section load.
             reprobeExternalReadinessIfNeeded()
+            ensureExternalReadinessLoop()
         }
         .onDisappear {
             connectionStatus.stop("settings")
+            stopExternalReadinessLoop()  // loop is view-scoped — never runs with Settings closed
         }
         // onAppear only fires when SettingsView enters the hierarchy (gear tap while popover open).
         // willShowNotification fires every time the popover opens, catching the return-from-wizard case
@@ -523,6 +526,7 @@ struct SettingsView: View {
             lastExternalProbeOK = nil
             mainExternalReady = false
             reprobeExternalReadinessIfNeeded()
+            ensureExternalReadinessLoop()  // starts if now external+not-ready; self-stops otherwise
         }
         .onChange(of: connectionStatus.state) { newState in
             // Manual mode: confirm destination on reconnect (transition INTO .reachable)
@@ -535,6 +539,9 @@ struct SettingsView: View {
                 hasConfirmedDestinationThisConnection = false
                 destinationCheckState = .idle
             }
+            // Readiness loop follows reachability: start on (re)connect if external
+            // + not-ready, stop the instant the Backup disconnects.
+            if newState == .reachable { ensureExternalReadinessLoop() } else { stopExternalReadinessLoop() }
         }
         .onChange(of: localDiscoveryMode) { _ in
             Task { @MainActor in
@@ -2725,14 +2732,63 @@ struct SettingsView: View {
                     externalFDAWarning = false
                     mainExternalReady = true
                     NSLog("[Sync] external-drive readiness → READY")
+                    stopExternalReadinessLoop()          // ready → stop the light loop
+                    relayExternalReadyToBackup(username: username, ip: ip, remotePath: remotePath)
                 } else {
                     externalFDAWarning = true
                     mainExternalReady = false
                     NSLog("[Sync] external-drive readiness → needs permission (denied via sshd TCC)")
+                    ensureExternalReadinessLoop()        // not ready → keep the light loop running
                 }
             }
         }
         DispatchQueue.global(qos: .utility).async { try? proc.run() }
+    }
+
+    // Relay readiness to the Backup: write .external_ready to the external dest
+    // (FDA is proven granted at this point, so the write succeeds) via the same
+    // signal channel the Backup already polls. The Backup flips its card to ✓ and
+    // deletes the file. Fire-and-forget; failure is non-fatal (a sync confirms too).
+    private func relayExternalReadyToBackup(username: String, ip: String, remotePath: String) {
+        let escaped = remoteShellPath(remotePath)
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        var args = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no"]
+        if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
+           !store.config.preferredInterfaceMAC.isEmpty {
+            args.insert(contentsOf: ["-b", bindIP], at: 0)
+        }
+        args.append(contentsOf: ["--", "\(username)@\(ip)",
+                                 "touch \"\(escaped)/\(SignalFile.externalReady)\""])
+        proc.arguments = args
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        DispatchQueue.global(qos: .utility).async { try? proc.run() }
+    }
+
+    // Light readiness loop (Main side): while an external Backup is connected and
+    // NOT yet ready, re-probe every ~3 s so the switch-flip confirms within a
+    // couple seconds. Runs only while Settings is open; stops the instant ready is
+    // confirmed, the dest is no longer external, or the Backup disconnects. Never
+    // runs in steady state (ready / home dest).
+    private func ensureExternalReadinessLoop() {
+        guard isMain,
+              store.config.backupDestination.hasPrefix("/Volumes/"),
+              !SyncEngine.shared.usingFallback,
+              !mainExternalReady,
+              connectionStatus.state == .reachable else {
+            stopExternalReadinessLoop()
+            return
+        }
+        guard externalReadinessTimer == nil else { return }  // already looping
+        externalReadinessTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { _ in
+            reprobeExternalReadinessIfNeeded()
+        }
+    }
+
+    private func stopExternalReadinessLoop() {
+        externalReadinessTimer?.invalidate()
+        externalReadinessTimer = nil
     }
 
     private func readManualModeFreeSpace(username: String, ip: String, remotePath: String) {

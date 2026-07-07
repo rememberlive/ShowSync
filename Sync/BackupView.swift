@@ -570,7 +570,7 @@ final class ReceiveMonitor: ObservableObject {
         let fm = FileManager.default
         let signalFiles = [SignalFile.start, SignalFile.progress, SignalFile.complete, SignalFile.refused,
                            SignalFile.renameRequest, SignalFile.unpairRequest,
-                           SignalFile.verifyRequest, SignalFile.verifyResult]
+                           SignalFile.verifyRequest, SignalFile.verifyResult, SignalFile.externalReady]
         for filename in signalFiles {
             let path = base.appendingPathComponent(filename)
             if fm.fileExists(atPath: path.path) {
@@ -651,6 +651,18 @@ final class ReceiveMonitor: ObservableObject {
             let startPath    = base.appendingPathComponent(SignalFile.start)
             let renamePath   = base.appendingPathComponent(SignalFile.renameRequest)
             let fm           = FileManager.default
+
+            // Main → Backup readiness relay: the Main writes .external_ready to an
+            // external dest the instant its authoritative probe confirms sshd can
+            // write there. Seeing it = proof, so flip the setup card to ✓ (and clean
+            // it up). Same channel as every other signal; no new listener.
+            let externalReadyPath = base.appendingPathComponent(SignalFile.externalReady)
+            if fm.fileExists(atPath: externalReadyPath.path) {
+                try? fm.removeItem(at: externalReadyPath)
+                Task { @MainActor [weak self] in
+                    self?.noteInboundWriteLanded()
+                }
+            }
 
             // Clear low-space error when space recovers (honest self-clear on every poll cycle)
             // Only clear if .sync_refused exists (we wrote it) AND space is now OK
