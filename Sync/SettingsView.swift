@@ -80,6 +80,12 @@ struct SettingsView: View {
     // External-drive guidance: set when the Confirm Destination FDA probe finds
     // sshd denied on a /Volumes destination (TCC) — advisory, never blocks.
     @State private var externalFDAWarning = false
+    // External-drive guided setup (Backup side) + convergence to "ready".
+    @State private var showExternalGuide = false      // the inline setup card is visible
+    @State private var externalDriveReady = false     // ✓ confirmed working (auto-dismiss)
+    @State private var remoteLoginOn: Bool? = nil      // step-1 live pill: nil = checking
+    @State private var guidePollTimer: Timer? = nil    // live Remote Login poll while card open
+    @State private var mainExternalReady = false       // Main-side ✓ from the Confirm probe
     @State private var hasConfirmedDestinationThisConnection = false
     @State private var manualModeFreeSpace: Int64 = 0  // Free space read via SSH for manual mode
     // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
@@ -773,21 +779,16 @@ struct SettingsView: View {
             ReceiveMonitor.shared.validateDestination()  // Updates usingFallback state
             BonjourAdvertiser.shared.updateTXTRecord()   // Fast TXT update (no restart)
 
-            // External-drive guidance (advisory — this app CANNOT verify sshd's
-            // access locally: the write-test above ran in the app's own TCC
-            // context, but receiving goes through Remote Login (sshd), whose
-            // /Volumes access is a separate, manual macOS grant).
+            // External drive: open the inline guided-setup card (replaces the old
+            // one-shot alert). The app's write-test above ran in ITS OWN context;
+            // receiving goes through Remote Login, whose external-drive access is a
+            // separate macOS grant the card walks the user through.
             if url.path.hasPrefix("/Volumes/") {
-                let fdaAlert = NSAlert()
-                fdaAlert.messageText = "External Drive: One More Step"
-                fdaAlert.informativeText = "macOS requires Full Disk Access for Remote Login before this Mac can receive files on an external drive.\n\nSystem Settings → Privacy & Security → Full Disk Access → enable sshd-keygen-wrapper (Remote Login).\n\nWithout it, backups will land in the home Sync folder instead — the Main will show why."
-                fdaAlert.alertStyle = .informational
-                fdaAlert.addButton(withTitle: "Open Settings")
-                fdaAlert.addButton(withTitle: "OK")
-                if fdaAlert.runModal() == .alertFirstButtonReturn,
-                   let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
-                    NSWorkspace.shared.open(url)
-                }
+                externalDriveReady = false
+                ReceiveMonitor.shared.externalWriteConfirmed = false
+                showExternalGuide = true
+            } else {
+                showExternalGuide = false
             }
         } catch {
             let alert = NSAlert()
@@ -797,6 +798,120 @@ struct SettingsView: View {
             alert.addButton(withTitle: "OK")
             alert.runModal()
         }
+    }
+
+    // MARK: - External-drive guided setup card (Backup side)
+
+    @ViewBuilder private var externalDriveGuideCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if externalDriveReady {
+                Label("External drive ready — your backups are protected", systemImage: "checkmark.circle.fill")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.green)
+            } else {
+                Text("Set up your external drive")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.white)
+                Text("To back up to an external drive, macOS needs to let this Mac receive files. It takes about 30 seconds — you'll flip one or two switches in Settings.")
+                    .font(.system(size: 11))
+                    .foregroundColor(labelColor)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                // Step 1 — Remote Login, with the live status pill.
+                HStack(alignment: .top, spacing: 8) {
+                    stepBadge(1)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Turn on Remote Login")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.white)
+                        Text("Lets your other Mac send files to this one.")
+                            .font(.system(size: 10))
+                            .foregroundColor(labelColor)
+                    }
+                    Spacer()
+                    remoteLoginPill
+                }
+
+                // Step 2 — the one switch, with the annotated mockup.
+                HStack(alignment: .top, spacing: 8) {
+                    stepBadge(2)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Turn on “Allow full disk access for remote users”")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.white)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text("This is the switch that lets backups reach your external drive.")
+                            .font(.system(size: 10))
+                            .foregroundColor(labelColor)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                RemoteLoginToggleMockup()
+                    .frame(maxWidth: 320)
+                    .padding(.leading, 26)
+
+                HStack(spacing: 8) {
+                    Button("Open Settings") { RemoteLogin.openSettings() }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    Button("Do this later") { showExternalGuide = false }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    Spacer()
+                }
+                Text("Once it's on, your next backup confirms it automatically.")
+                    .font(.system(size: 10))
+                    .foregroundColor(labelColor)
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.blue.opacity(0.10)))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.blue.opacity(0.30)))
+        .onAppear { startGuidePolling() }
+        .onDisappear { stopGuidePolling() }
+        .onReceive(ReceiveMonitor.shared.$externalWriteConfirmed) { confirmed in
+            guard confirmed, showExternalGuide else { return }
+            externalDriveReady = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { showExternalGuide = false }
+        }
+    }
+
+    private func stepBadge(_ n: Int) -> some View {
+        Text("\(n)")
+            .font(.system(size: 11, weight: .bold))
+            .foregroundColor(.white)
+            .frame(width: 18, height: 18)
+            .background(Circle().fill(Color.blue.opacity(0.7)))
+    }
+
+    @ViewBuilder private var remoteLoginPill: some View {
+        switch remoteLoginOn {
+        case .some(true):
+            Label("On", systemImage: "checkmark")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(.green)
+        case .some(false):
+            Text("Off")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(.orange)
+        case .none:
+            Text("Checking…")
+                .font(.system(size: 10))
+                .foregroundColor(labelColor)
+        }
+    }
+
+    private func startGuidePolling() {
+        RemoteLogin.probe { remoteLoginOn = $0 }
+        guidePollTimer?.invalidate()
+        guidePollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
+            RemoteLogin.probe { remoteLoginOn = $0 }
+        }
+    }
+
+    private func stopGuidePolling() {
+        guidePollTimer?.invalidate()
+        guidePollTimer = nil
     }
 
     private func setLaunchAtLogin(_ enabled: Bool) {
@@ -1222,11 +1337,15 @@ struct SettingsView: View {
                     }
                 }
 
-                // External-drive FDA guidance (set by the Confirm Destination probe):
-                // receiving goes through Remote Login (sshd), whose /Volumes access is
-                // a manual macOS grant the app can't make for the user.
-                if externalFDAWarning {
-                    Text("Backup Mac needs Full Disk Access for Remote Login to receive on the external drive — on the Backup: System Settings → Privacy & Security → Full Disk Access → sshd-keygen-wrapper.")
+                // External-drive status (Main side): the Confirm probe / write-test
+                // converge here — ✓ ready wins, else the honest named warning. The
+                // fix itself is on the Backup (its setup card); this Mac only reports.
+                if mainExternalReady || SyncEngine.shared.externalDriveConfirmed {
+                    Label("External drive ready — your backups are protected", systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 10))
+                        .foregroundColor(.green)
+                } else if externalFDAWarning {
+                    Text("The Backup Mac needs one macOS permission to receive on the external drive. On the Backup: open Sync and tap “Set up external drive”.")
                         .font(.system(size: 10))
                         .foregroundColor(.orange)
                         .fixedSize(horizontal: false, vertical: true)
@@ -2058,6 +2177,32 @@ struct SettingsView: View {
                     .font(.system(size: 10))
                     .foregroundColor(.orange)
             }
+
+            // External-drive guided setup / status (Backup side).
+            if showExternalGuide {
+                externalDriveGuideCard
+                    .padding(.top, 6)
+            } else if externalDriveReady || ReceiveMonitor.shared.externalWriteConfirmed {
+                Label("External drive ready — your backups are protected", systemImage: "checkmark.circle.fill")
+                    .font(.system(size: 11))
+                    .foregroundColor(.green)
+                    .padding(.top, 4)
+            } else if store.config.destinationFolder.hasPrefix("/Volumes/") {
+                HStack(alignment: .top, spacing: 8) {
+                    Text("External drive needs one macOS permission before it can receive backups.")
+                        .font(.system(size: 10))
+                        .foregroundColor(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button("Set up external drive") {
+                        externalDriveReady = false
+                        showExternalGuide = true
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .padding(.top, 4)
+            }
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 12)
@@ -2464,11 +2609,13 @@ struct SettingsView: View {
                     SyncEngine.shared.usingFallback = isFallback
 
                     destinationCheckState = .confirmed
-                    // External-drive FDA probe — advisory, never blocks confirmation.
+                    // External-drive probe — advisory, never blocks confirmation.
                     if dest.hasPrefix("/Volumes/"), !isFallback {
                         probeExternalFDA(username: username, ip: ip, remotePath: dest)
-                    } else if externalFDAWarning {
+                    } else {
+                        // Home/fallback dest: no external permission concerns here.
                         externalFDAWarning = false
+                        mainExternalReady = false
                     }
                     // Read free space for EFFECTIVE destination (reality, not intent)
                     readManualModeFreeSpace(username: username, ip: ip, remotePath: effectivePath)
@@ -2511,10 +2658,12 @@ struct SettingsView: View {
             let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
             Task { @MainActor in
                 if p.terminationStatus == 0, !out.contains("OK"), err.contains("Operation not permitted") {
-                    NSLog("[Sync] Confirm Destination: external drive denied by macOS privacy (TCC) — Remote Login needs Full Disk Access on the Backup")
+                    NSLog("[Sync] Confirm Destination: external drive denied by macOS privacy (TCC) — Backup needs external-drive permission")
                     externalFDAWarning = true
+                    mainExternalReady = false
                 } else if out.contains("OK") {
                     externalFDAWarning = false
+                    mainExternalReady = true   // ✓ external drive confirmed writable via sshd
                 }
             }
         }
@@ -2693,5 +2842,45 @@ private struct GroupHeaderRow: View {
         .background(Color.primary.opacity(hovering ? 0.06 : 0))
         .onHover { hovering = $0 }
         .animation(.easeInOut(duration: 0.12), value: hovering)
+    }
+}
+
+// Vector mockup of the Remote Login settings sheet: two labeled rows, the
+// second ("Allow full disk access for remote users") circled to draw the eye.
+// Drawn in code so it stays crisp at any size, adapts to light/dark, and never
+// mismatches a reworded System Settings screenshot.
+private struct RemoteLoginToggleMockup: View {
+    var body: some View {
+        VStack(spacing: 0) {
+            row(title: "Remote Login", highlight: false)
+            Divider().padding(.leading, 12)
+            row(title: "Allow full disk access for remote users", highlight: true)
+        }
+        .padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.14)))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.30)))
+    }
+
+    private func row(title: String, highlight: Bool) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.system(size: 11))
+                .foregroundColor(.primary.opacity(0.85))
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            ZStack {
+                Capsule()
+                    .fill(Color.green)
+                    .frame(width: 30, height: 18)
+                    .overlay(Circle().fill(.white).padding(2), alignment: .trailing)
+                if highlight {
+                    RoundedRectangle(cornerRadius: 13)
+                        .stroke(Color.orange, lineWidth: 2)
+                        .frame(width: 46, height: 30)
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 }

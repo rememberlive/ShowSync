@@ -278,7 +278,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "Open Settings")
         alert.addButton(withTitle: "Later")
         if alert.runModal() == .alertFirstButtonReturn {
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.sharing?Services_RemoteLogin")!)
+            RemoteLogin.openSettings()  // extension scheme on macOS 26, legacy fallback
         }
     }
 

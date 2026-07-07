@@ -2,6 +2,41 @@
 // Part of ShowSync — Remember Live.
 
 import Foundation
+import AppKit
+
+// Shared Remote Login helpers — used by the Backup's launch alert and the
+// external-drive setup guide. No jargon leaks to the UI from here.
+enum RemoteLogin {
+    // Authoritative on/off: sshd listening on localhost:22 (systemsetup
+    // -getremotelogin needs admin and its output isn't parseable on macOS 13+).
+    // Completion is delivered on the main queue.
+    static func probe(_ completion: @escaping (Bool) -> Void) {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/nc")
+        proc.arguments = ["-z", "-w1", "localhost", "22"]
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        proc.terminationHandler = { p in
+            let on = p.terminationStatus == 0
+            DispatchQueue.main.async { completion(on) }
+        }
+        DispatchQueue.global(qos: .utility).async {
+            do { try proc.run() } catch { DispatchQueue.main.async { completion(false) } }
+        }
+    }
+
+    // Deep-link to System Settings → General → Sharing → Remote Login (where both
+    // the Remote Login switch and "Allow full disk access for remote users" live).
+    // macOS 26 uses the extension scheme; the legacy pane scheme is a fallback for
+    // older systems that don't resolve the extension URL.
+    static func openSettings() {
+        let candidates = [
+            "x-apple.systempreferences:com.apple.Sharing-Settings.extension",
+            "x-apple.systempreferences:com.apple.preference.sharing?Services_RemoteLogin"
+        ]
+        for s in candidates where NSWorkspace.shared.open(URL(string: s)!) { return }
+    }
+}
 
 func appVersion() -> String {
     let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"

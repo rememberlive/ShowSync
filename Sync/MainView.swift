@@ -150,6 +150,11 @@ final class SyncEngine: ObservableObject {
     // can honor Backup-requested verifies and reset the flag. Behavior unchanged.
     var isRemoteVerify: Bool = false  // True when triggered by Backup via Bonjour
 
+    // External-drive setup convergence (Main side): true once a /Volumes write-test
+    // passes; false when it's permission-denied. Observed by Settings to flip to
+    // "✓ External drive ready". Mirrors the Backup's externalWriteConfirmed.
+    @Published var externalDriveConfirmed: Bool = false
+
     private init() {}
 
     deinit {
@@ -252,7 +257,9 @@ final class SyncEngine: ObservableObject {
                 syncTrace("[SyncTrace] 5 write-test result=%d (0=writable, 1=unwritable, 2=testFailed)", result == .writable ? 0 : (result == .unwritable ? 1 : 2))
                 switch result {
                 case .writable:
-                    break
+                    // Convergence signal: a /Volumes destination that writes cleanly
+                    // proves the Backup's external-drive permission is granted.
+                    if originalRemotePath.hasPrefix("/Volumes/") { self.externalDriveConfirmed = true }
                 case .unwritable:
                     self.syncRemotePath = "~/Sync"
                     self.usingFallback = true
@@ -260,11 +267,13 @@ final class SyncEngine: ObservableObject {
                     NSLog("[Sync] Destination unwritable, falling back to ~/Sync")
                 case .unwritablePermissions:
                     // Same fallback behavior (a live show must back up somewhere),
-                    // but the REAL cause is named — never silent.
+                    // but the REAL cause is named — never silent, no jargon. Points
+                    // the user to the in-app guide rather than raw Settings paths.
                     self.syncRemotePath = "~/Sync"
                     self.usingFallback = true
-                    self.fallbackNotice = "The Backup Mac needs Full Disk Access for Remote Login to write to the external drive — backing up to the default Sync folder instead. On the Backup: System Settings → Privacy & Security → Full Disk Access → enable sshd-keygen-wrapper."
-                    NSLog("[Sync] Destination denied by macOS privacy (TCC) — falling back to ~/Sync; grant Full Disk Access to Remote Login on the Backup Mac")
+                    self.externalDriveConfirmed = false
+                    self.fallbackNotice = "The Backup Mac needs one macOS permission to receive on the external drive — backing up to the home Sync folder for now. On the Backup: open Sync and tap “Set up external drive”."
+                    NSLog("[Sync] Destination denied by macOS privacy (TCC) — falling back to ~/Sync; Backup needs external-drive permission")
                 case .testFailed:
                     NSLog("[Sync] Write-test failed (SSH error), proceeding anyway")
                 }
