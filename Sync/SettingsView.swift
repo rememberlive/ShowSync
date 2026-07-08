@@ -390,7 +390,19 @@ struct SettingsView: View {
                         toggleBackupConnectionSection()
                     }
                     if store.config.backupSettingsShowConnection {
-                        backupConnectionContent
+                        // Scope an internal scroller to the Connection content ONLY when
+                        // the tall "Set up your external drive" card is shown, so it
+                        // scrolls internally instead of stretching the whole popup. When
+                        // the card is absent (home/internal dest) the content renders
+                        // directly — identical layout and size to before, no scroller.
+                        if showExternalGuide {
+                            ScrollView {
+                                backupConnectionContent
+                            }
+                            .frame(maxHeight: 420)
+                        } else {
+                            backupConnectionContent
+                        }
                     }
 
                     Divider()
