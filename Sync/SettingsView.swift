@@ -525,8 +525,11 @@ struct SettingsView: View {
         }
         // Sync-driven external-drive ✓: mirror ReceiveMonitor's runtime flag into
         // local @State (emits current value on subscribe, so reopening reflects it).
+        // On confirm, dismiss the setup card so the ✓ (which sits behind it in the
+        // else-if chain) appears live on the first sync — no navigate-away needed.
         .onReceive(ReceiveMonitor.shared.$externalWriteConfirmed) { confirmed in
             externalDriveConfirmedRow = confirmed
+            if confirmed { showExternalGuide = false }
         }
         .onChange(of: store.config.destinationIP) { _ in
             Task { @MainActor in
