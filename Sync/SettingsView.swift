@@ -424,7 +424,11 @@ struct SettingsView: View {
                                     })
                             }
                             .frame(height: min(connContentHeight == 0 ? ceiling : connContentHeight, ceiling))
-                            .onPreferenceChange(ConnContentHeightKey.self) { connContentHeight = $0 }
+                            .onPreferenceChange(ConnContentHeightKey.self) { h in
+                                // Defer out of the layout/update pass — measuring into
+                                // @State during the same render triggers the purple warning.
+                                DispatchQueue.main.async { if connContentHeight != h { connContentHeight = h } }
+                            }
                         } else {
                             backupConnectionContent
                         }
@@ -528,8 +532,13 @@ struct SettingsView: View {
         // On confirm, dismiss the setup card so the ✓ (which sits behind it in the
         // else-if chain) appears live on the first sync — no navigate-away needed.
         .onReceive(ReceiveMonitor.shared.$externalWriteConfirmed) { confirmed in
-            externalDriveConfirmedRow = confirmed
-            if confirmed { showExternalGuide = false }
+            // Defer the @State writes to the next runloop turn so they don't mutate
+            // state mid-render (the publish can be delivered during a view update /
+            // subscription replay). ✓ still appears live, one tick later.
+            DispatchQueue.main.async {
+                externalDriveConfirmedRow = confirmed
+                if confirmed { showExternalGuide = false }
+            }
         }
         .onChange(of: store.config.destinationIP) { _ in
             Task { @MainActor in
