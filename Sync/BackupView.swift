@@ -461,20 +461,7 @@ final class ReceiveMonitor: ObservableObject {
     // a second request within the window must not be timed out by the first's timer
     // (audit §4). Cleared on result arrival and when a timeout fires.
     var pendingVerifyNonce: String = ""
-    // External-drive setup proof: set true when a Main-written signal file lands
-    // on a /Volumes destination while NOT in fallback — i.e. sshd actually wrote
-    // to the external drive, so Full Disk Access for Remote Login is granted.
-    // The setup guide watches this to auto-confirm "External drive ready".
-    @Published var externalWriteConfirmed: Bool = false
     // `lastReceivedTime` now lives on ConfigStore.config so it survives relaunch.
-
-    // Called from the inbound-write handlers: a Main/sshd-written signal file on
-    // an external destination is the only Backup-observable proof that sshd's
-    // Full Disk Access is working (the app's own write-test can't prove it).
-    private func noteInboundWriteLanded() {
-        guard !usingFallback, effectiveDestination.hasPrefix("/Volumes/") else { return }
-        if !externalWriteConfirmed { externalWriteConfirmed = true }
-    }
 
     /// The ACTUAL destination path being used right now (fallback ~/Sync or user's chosen folder)
     var effectiveDestination: String {
@@ -570,7 +557,7 @@ final class ReceiveMonitor: ObservableObject {
         let fm = FileManager.default
         let signalFiles = [SignalFile.start, SignalFile.progress, SignalFile.complete, SignalFile.refused,
                            SignalFile.renameRequest, SignalFile.unpairRequest,
-                           SignalFile.verifyRequest, SignalFile.verifyResult, SignalFile.externalReady]
+                           SignalFile.verifyRequest, SignalFile.verifyResult]
         for filename in signalFiles {
             let path = base.appendingPathComponent(filename)
             if fm.fileExists(atPath: path.path) {
@@ -652,18 +639,6 @@ final class ReceiveMonitor: ObservableObject {
             let renamePath   = base.appendingPathComponent(SignalFile.renameRequest)
             let fm           = FileManager.default
 
-            // Main → Backup readiness relay: the Main writes .external_ready to an
-            // external dest the instant its authoritative probe confirms sshd can
-            // write there. Seeing it = proof, so flip the setup card to ✓ (and clean
-            // it up). Same channel as every other signal; no new listener.
-            let externalReadyPath = base.appendingPathComponent(SignalFile.externalReady)
-            if fm.fileExists(atPath: externalReadyPath.path) {
-                try? fm.removeItem(at: externalReadyPath)
-                Task { @MainActor [weak self] in
-                    self?.noteInboundWriteLanded()
-                }
-            }
-
             // Clear low-space error when space recovers (honest self-clear on every poll cycle)
             // Only clear if .sync_refused exists (we wrote it) AND space is now OK
             let refusedPath = base.appendingPathComponent(SignalFile.refused)
@@ -727,7 +702,6 @@ final class ReceiveMonitor: ObservableObject {
                     self.receiveDetails   = details
                     self.resetProgressFields()
                     self.state            = .done
-                    self.noteInboundWriteLanded()  // sshd wrote .sync_complete here → FDA proven
                     ConfigStore.shared.config.lastReceivedTime = Date()
                     ConfigStore.shared.isSyncing = false
                     ConfigStore.shared.iconState = .success
@@ -845,7 +819,6 @@ final class ReceiveMonitor: ObservableObject {
                     guard let self else { return }
 
                     let now = Date()
-                    self.noteInboundWriteLanded()  // sshd wrote .sync_start here → FDA proven
                     if self.state != .receiving {
                         // First time seeing .sync_start
                         self.state = .receiving

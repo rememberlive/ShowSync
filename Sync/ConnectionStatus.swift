@@ -135,25 +135,21 @@ final class ConnectionStatus: ObservableObject {
             // The verify request lives in the Backup's CONFIGURED destination (the Backup
             // writes it to effectiveDestination) — a hardcoded ~/Sync misses it whenever
             // the destination is elsewhere (e.g. an external drive), so Backup-initiated
-            // verify silently never started. Same fallback rule as writeVerifyResult.
-            // ~-prefixed dests stay unquoted (remote tilde expansion needs it — today's
-            // exact form); absolute dests are quoted+escaped. df now measures the same
-            // path, so free space reflects the real destination volume.
+            // verify silently never started. Same fallback rule as writeVerifyResult:
+            // ~-prefixed dests stay unquoted (remote tilde expansion needs it); absolute
+            // dests are quoted+escaped. Free space is measured on the home volume (df -k ~)
+            // — the original behaviour; measuring an external /Volumes path here regressed
+            // the disk-space display when sshd couldn't traverse it.
             let backupDest = ConfigStore.shared.config.backupDestination
             let catPath: String   // where the Backup writes .verify_request
-            let dfPath: String    // volume to measure free space on
             if SyncEngine.shared.usingFallback || backupDest.isEmpty {
                 catPath = "~/Sync"   // today's exact form (unquoted → tilde expands)
-                dfPath = "~"
             } else if backupDest.hasPrefix("~") {
-                catPath = backupDest // home volume either way — keep df -k ~ as today
-                dfPath = "~"
+                catPath = backupDest
             } else {
-                let quoted = "\"\(shellEscapeForDoubleQuotes(backupDest))\""
-                catPath = quoted
-                dfPath = quoted
+                catPath = "\"\(shellEscapeForDoubleQuotes(backupDest))\""
             }
-            let cmd = "cat \"$HOME/Library/Application Support/Sync/config_backup.json\" 2>/dev/null || echo '{}'; echo '---DF---'; df -k \(dfPath) 2>/dev/null | awk 'NR==2 {print $4}'; echo '---VERIFY---'; cat \(catPath)/\(SignalFile.verifyRequest) 2>/dev/null || echo ''"
+            let cmd = "cat \"$HOME/Library/Application Support/Sync/config_backup.json\" 2>/dev/null || echo '{}'; echo '---DF---'; df -k ~ 2>/dev/null | awk 'NR==2 {print $4}'; echo '---VERIFY---'; cat \(catPath)/\(SignalFile.verifyRequest) 2>/dev/null || echo ''"
             var manualArgs = ["-o", "ConnectTimeout=2", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no"]
             if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
                !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {

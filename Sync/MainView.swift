@@ -150,11 +150,6 @@ final class SyncEngine: ObservableObject {
     // can honor Backup-requested verifies and reset the flag. Behavior unchanged.
     var isRemoteVerify: Bool = false  // True when triggered by Backup via Bonjour
 
-    // External-drive setup convergence (Main side): true once a /Volumes write-test
-    // passes; false when it's permission-denied. Observed by Settings to flip to
-    // "✓ External drive ready". Mirrors the Backup's externalWriteConfirmed.
-    @Published var externalDriveConfirmed: Bool = false
-
     private init() {}
 
     deinit {
@@ -257,23 +252,12 @@ final class SyncEngine: ObservableObject {
                 syncTrace("[SyncTrace] 5 write-test result=%d (0=writable, 1=unwritable, 2=testFailed)", result == .writable ? 0 : (result == .unwritable ? 1 : 2))
                 switch result {
                 case .writable:
-                    // Convergence signal: a /Volumes destination that writes cleanly
-                    // proves the Backup's external-drive permission is granted.
-                    if originalRemotePath.hasPrefix("/Volumes/") { self.externalDriveConfirmed = true }
+                    break
                 case .unwritable:
                     self.syncRemotePath = "~/Sync"
                     self.usingFallback = true
                     self.fallbackNotice = "Couldn't write to the chosen folder — backing up to the default Sync folder instead."
                     NSLog("[Sync] Destination unwritable, falling back to ~/Sync")
-                case .unwritablePermissions:
-                    // Same fallback behavior (a live show must back up somewhere),
-                    // but the REAL cause is named — never silent, no jargon. Points
-                    // the user to the in-app guide rather than raw Settings paths.
-                    self.syncRemotePath = "~/Sync"
-                    self.usingFallback = true
-                    self.externalDriveConfirmed = false
-                    self.fallbackNotice = "The Backup Mac needs one macOS permission to receive on the external drive — backing up to the home Sync folder for now. On the Backup: open Sync and tap “Set up external drive”."
-                    NSLog("[Sync] Destination denied by macOS privacy (TCC) — falling back to ~/Sync; Backup needs external-drive permission")
                 case .testFailed:
                     NSLog("[Sync] Write-test failed (SSH error), proceeding anyway")
                 }
@@ -1333,7 +1317,6 @@ final class SyncEngine: ObservableObject {
     enum WriteTestResult {
         case writable
         case unwritable   // clear failure — folder gone or permission denied
-        case unwritablePermissions   // EPERM on /Volumes — Backup's sshd lacks Full Disk Access (TCC)
         case testFailed   // SSH error or timeout — don't block, proceed with sync
     }
 
@@ -1359,10 +1342,7 @@ final class SyncEngine: ObservableObject {
         proc.arguments = testArgs
         let pipe = Pipe()
         proc.standardOutput = pipe
-        // Never-silent (R3): the remote touch's stderr carries the actual cause
-        // ("Operation not permitted" = TCC denial of sshd on /Volumes).
-        let errPipe = Pipe()
-        proc.standardError = errPipe
+        proc.standardError = FileHandle.nullDevice
 
         var completed = false
         let completionLock = NSLock()
@@ -1389,25 +1369,13 @@ final class SyncEngine: ObservableObject {
         proc.terminationHandler = { p in
             timeoutItem.cancel()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
             let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if p.terminationStatus != 0 {
                 safeComplete(.testFailed)
             } else if output.contains("OK") {
                 safeComplete(.writable)
             } else {
-                // Discriminate the cause: EPERM on an external volume means the
-                // Backup's sshd lacks Full Disk Access (a manual macOS setting) —
-                // surface it as its own result instead of a generic unwritable.
-                let err = String(data: errData, encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                if remotePath.hasPrefix("/Volumes/"), err.contains("Operation not permitted") {
-                    NSLog("[Sync] write-test denied by macOS privacy (TCC) on '%@': %@", remotePath, err)
-                    safeComplete(.unwritablePermissions)
-                } else {
-                    if !err.isEmpty { NSLog("[Sync] write-test unwritable on '%@': %@", remotePath, err) }
-                    safeComplete(.unwritable)
-                }
+                safeComplete(.unwritable)
             }
         }
         DispatchQueue.global(qos: .userInitiated).async {

@@ -79,15 +79,10 @@ struct SettingsView: View {
     @State private var destinationCheckState: DestinationCheckState = .idle
     // External-drive guidance: set when the Confirm Destination FDA probe finds
     // sshd denied on a /Volumes destination (TCC) — advisory, never blocks.
-    @State private var externalFDAWarning = false
-    // External-drive guided setup (Backup side) + convergence to "ready".
+    // External-drive guided setup (Backup side) — instructional only.
     @State private var showExternalGuide = false      // the inline setup card is visible
-    @State private var externalDriveReady = false     // ✓ confirmed working (auto-dismiss)
     @State private var remoteLoginOn: Bool? = nil      // step-1 live pill: nil = checking
     @State private var guidePollTimer: Timer? = nil    // live Remote Login poll while card open
-    @State private var mainExternalReady = false       // Main-side ✓ from the Confirm probe
-    @State private var lastExternalProbeOK: Bool? = nil // change-only gate: last readiness result (nil = unknown)
-    @State private var externalReadinessTimer: Timer? = nil // light re-probe loop while external + not-ready
     @State private var hasConfirmedDestinationThisConnection = false
     @State private var manualModeFreeSpace: Int64 = 0  // Free space read via SSH for manual mode
     // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
@@ -478,26 +473,15 @@ struct SettingsView: View {
                 hasConfirmedDestinationThisConnection = true
                 confirmBackupDestination()
             }
-            // Trigger 1: determine external-drive readiness LIVE on section load.
-            reprobeExternalReadinessIfNeeded()
-            ensureExternalReadinessLoop()
         }
         .onDisappear {
             connectionStatus.stop("settings")
-            stopExternalReadinessLoop()  // loop is view-scoped — never runs with Settings closed
         }
         // onAppear only fires when SettingsView enters the hierarchy (gear tap while popover open).
         // willShowNotification fires every time the popover opens, catching the return-from-wizard case
         // where the popover was closed by the wizard and then reopened by the user.
         .onReceive(NotificationCenter.default.publisher(for: NSPopover.willShowNotification)) { _ in
             connectionStatus.start("settings")
-            // Trigger 5: foreground return (menu-bar app: reopening the popover IS
-            // the return-from-System-Settings event) — re-verify readiness live.
-            reprobeExternalReadinessIfNeeded()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            // Trigger 5 (side-by-side case): app regains active while popover already open.
-            reprobeExternalReadinessIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSPopover.didCloseNotification)) { _ in
             connectionStatus.stop("settings")
@@ -506,8 +490,6 @@ struct SettingsView: View {
             Task { @MainActor in
                 hasConfirmedDestinationThisConnection = false
                 destinationCheckState = .idle
-                lastExternalProbeOK = nil  // new peer → re-evaluate readiness from scratch
-                mainExternalReady = false
                 connectionStatus.recheck()
             }
         }
@@ -515,18 +497,8 @@ struct SettingsView: View {
             Task { @MainActor in
                 hasConfirmedDestinationThisConnection = false
                 destinationCheckState = .idle
-                lastExternalProbeOK = nil
-                mainExternalReady = false
                 connectionStatus.recheck()
             }
-        }
-        // Trigger 3: destination changed (to/from an external path) — reset the
-        // change-only cache and re-probe so the new target is evaluated live.
-        .onChange(of: store.config.backupDestination) { _ in
-            lastExternalProbeOK = nil
-            mainExternalReady = false
-            reprobeExternalReadinessIfNeeded()
-            ensureExternalReadinessLoop()  // starts if now external+not-ready; self-stops otherwise
         }
         .onChange(of: connectionStatus.state) { newState in
             // Manual mode: confirm destination on reconnect (transition INTO .reachable)
@@ -539,9 +511,6 @@ struct SettingsView: View {
                 hasConfirmedDestinationThisConnection = false
                 destinationCheckState = .idle
             }
-            // Readiness loop follows reachability: start on (re)connect if external
-            // + not-ready, stop the instant the Backup disconnects.
-            if newState == .reachable { ensureExternalReadinessLoop() } else { stopExternalReadinessLoop() }
         }
         .onChange(of: localDiscoveryMode) { _ in
             Task { @MainActor in
@@ -812,8 +781,6 @@ struct SettingsView: View {
             // receiving goes through Remote Login, whose external-drive access is a
             // separate macOS grant the card walks the user through.
             if url.path.hasPrefix("/Volumes/") {
-                externalDriveReady = false
-                ReceiveMonitor.shared.externalWriteConfirmed = false
                 showExternalGuide = true
             } else {
                 showExternalGuide = false
@@ -832,80 +799,62 @@ struct SettingsView: View {
 
     @ViewBuilder private var externalDriveGuideCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if externalDriveReady {
-                Label("External drive ready — your backups are protected", systemImage: "checkmark.circle.fill")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.green)
-            } else {
-                Text("Set up your external drive")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.white)
-                Text("To back up to an external drive, macOS needs to let this Mac receive files. It takes about 30 seconds — you'll flip one or two switches in Settings.")
-                    .font(.system(size: 11))
-                    .foregroundColor(labelColor)
-                    .fixedSize(horizontal: false, vertical: true)
+            Text("Set up your external drive")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.white)
+            Text("To back up to an external drive, macOS needs to let this Mac receive files. It takes about 30 seconds — you'll flip one or two switches in Settings.")
+                .font(.system(size: 11))
+                .foregroundColor(labelColor)
+                .fixedSize(horizontal: false, vertical: true)
 
-                // Step 1 — Remote Login, with the live status pill.
-                HStack(alignment: .top, spacing: 8) {
-                    stepBadge(1)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Turn on Remote Login")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(.white)
-                        Text("Lets your other Mac send files to this one.")
-                            .font(.system(size: 10))
-                            .foregroundColor(labelColor)
-                    }
-                    Spacer()
-                    remoteLoginPill
+            // Step 1 — Remote Login, with the live status pill.
+            HStack(alignment: .top, spacing: 8) {
+                stepBadge(1)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Turn on Remote Login")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white)
+                    Text("Lets your other Mac send files to this one.")
+                        .font(.system(size: 10))
+                        .foregroundColor(labelColor)
                 }
+                Spacer()
+                remoteLoginPill
+            }
 
-                // Step 2 — the one switch, with the annotated mockup.
-                HStack(alignment: .top, spacing: 8) {
-                    stepBadge(2)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Turn on “Allow full disk access for remote users”")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(.white)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Text("This is the switch that lets backups reach your external drive.")
-                            .font(.system(size: 10))
-                            .foregroundColor(labelColor)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+            // Step 2 — the one switch, with the annotated mockup.
+            HStack(alignment: .top, spacing: 8) {
+                stepBadge(2)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Turn on “Allow full disk access for remote users”")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("This is the switch that lets backups reach your external drive.")
+                        .font(.system(size: 10))
+                        .foregroundColor(labelColor)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                RemoteLoginToggleMockup()
-                    .frame(maxWidth: 320)
-                    .padding(.leading, 26)
+            }
+            RemoteLoginToggleMockup()
+                .frame(maxWidth: 320)
+                .padding(.leading, 26)
 
-                HStack(spacing: 8) {
-                    Button("Open Settings") { RemoteLogin.openSettings() }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                    Button("Do this later") { showExternalGuide = false }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    Spacer()
-                }
-                Text("Once it's on, your next backup confirms it automatically.")
-                    .font(.system(size: 10))
-                    .foregroundColor(labelColor)
+            HStack(spacing: 8) {
+                Button("Open Settings") { RemoteLogin.openSettings() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                Button("Do this later") { showExternalGuide = false }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                Spacer()
             }
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.blue.opacity(0.10)))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.blue.opacity(0.30)))
-        .onAppear { startGuidePolling() }          // Trigger 2: card opens
-        .onDisappear { stopGuidePolling() }         // #6: stop poll the instant it closes
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            refreshRemoteLoginPill()                // Trigger 5: foreground return refreshes the pill
-        }
-        .onReceive(ReceiveMonitor.shared.$externalWriteConfirmed) { confirmed in
-            guard confirmed, showExternalGuide else { return }
-            externalDriveReady = true
-            stopGuidePolling()                      // #6: stop poll the instant readiness is confirmed
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { showExternalGuide = false }
-        }
+        .onAppear { startGuidePolling() }
+        .onDisappear { stopGuidePolling() }
     }
 
     private func stepBadge(_ n: Int) -> some View {
@@ -933,22 +882,12 @@ struct SettingsView: View {
         }
     }
 
-    // Change-only pill refresh: update the @State (and thus the view) only when
-    // Remote Login's on/off actually transitions — no flicker, no redundant work.
-    private func refreshRemoteLoginPill() {
-        RemoteLogin.probe { on in
-            if remoteLoginOn != on { remoteLoginOn = on }
-        }
-    }
-
+    // Live Remote Login pill: poll only while the setup card is open.
     private func startGuidePolling() {
-        refreshRemoteLoginPill()
+        RemoteLogin.probe { remoteLoginOn = $0 }
         guidePollTimer?.invalidate()
-        // #6: light poll ONLY while the card is open (side-by-side case where the
-        // user flips the switch without ShowSync losing focus). Stopped on close
-        // (onDisappear) and the instant readiness is confirmed (externalWriteConfirmed).
-        guidePollTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { _ in
-            refreshRemoteLoginPill()
+        guidePollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
+            RemoteLogin.probe { remoteLoginOn = $0 }
         }
     }
 
@@ -1378,20 +1317,6 @@ struct SettingsView: View {
                             }
                         }
                     }
-                }
-
-                // External-drive status (Main side): the Confirm probe / write-test
-                // converge here — ✓ ready wins, else the honest named warning. The
-                // fix itself is on the Backup (its setup card); this Mac only reports.
-                if mainExternalReady || SyncEngine.shared.externalDriveConfirmed {
-                    Label("External drive ready — your backups are protected", systemImage: "checkmark.circle.fill")
-                        .font(.system(size: 10))
-                        .foregroundColor(.green)
-                } else if externalFDAWarning {
-                    Text("The Backup Mac needs one macOS permission to receive on the external drive. On the Backup: open Sync and tap “Set up external drive”.")
-                        .font(.system(size: 10))
-                        .foregroundColor(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
@@ -2221,15 +2146,11 @@ struct SettingsView: View {
                     .foregroundColor(.orange)
             }
 
-            // External-drive guided setup / status (Backup side).
+            // External-drive guided setup (Backup side) — instructional card + a
+            // persistent reopen entry when an external dest is configured.
             if showExternalGuide {
                 externalDriveGuideCard
                     .padding(.top, 6)
-            } else if externalDriveReady || ReceiveMonitor.shared.externalWriteConfirmed {
-                Label("External drive ready — your backups are protected", systemImage: "checkmark.circle.fill")
-                    .font(.system(size: 11))
-                    .foregroundColor(.green)
-                    .padding(.top, 4)
             } else if store.config.destinationFolder.hasPrefix("/Volumes/") {
                 HStack(alignment: .top, spacing: 8) {
                     Text("External drive needs one macOS permission before it can receive backups.")
@@ -2238,7 +2159,6 @@ struct SettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer()
                     Button("Set up external drive") {
-                        externalDriveReady = false
                         showExternalGuide = true
                     }
                     .buttonStyle(.bordered)
@@ -2652,14 +2572,6 @@ struct SettingsView: View {
                     SyncEngine.shared.usingFallback = isFallback
 
                     destinationCheckState = .confirmed
-                    // External-drive probe — advisory, never blocks confirmation.
-                    if dest.hasPrefix("/Volumes/"), !isFallback {
-                        probeExternalFDA(username: username, ip: ip, remotePath: dest)
-                    } else {
-                        // Home/fallback dest: no external permission concerns here.
-                        externalFDAWarning = false
-                        mainExternalReady = false
-                    }
                     // Read free space for EFFECTIVE destination (reality, not intent)
                     readManualModeFreeSpace(username: username, ip: ip, remotePath: effectivePath)
                 } else {
@@ -2677,118 +2589,6 @@ struct SettingsView: View {
                 }
             }
         }
-    }
-
-    // External-drive FDA probe (advisory): a quick touch inside the confirmed
-    // /Volumes destination through sshd — "Operation not permitted" means the
-    // Backup's Remote Login lacks Full Disk Access (TCC), which no remote write
-    // can bypass. Sets/clears externalFDAWarning; never blocks confirmation.
-    // Event-driven readiness re-probe (Main side): run the authoritative sshd
-    // throwaway-.probe ONLY when the destination is external, reachable, and
-    // configured. Called on launch/section-open and on foreground return (the
-    // user leaves to flip the switch in System Settings and comes back). Never
-    // polls. Change-only gating in probeExternalFDA suppresses no-op updates.
-    private func reprobeExternalReadinessIfNeeded() {
-        guard isMain else { return }
-        let dest = store.config.backupDestination
-        guard dest.hasPrefix("/Volumes/"), !SyncEngine.shared.usingFallback,
-              !store.config.username.isEmpty, !store.config.destinationIP.isEmpty,
-              connectionStatus.state == .reachable else { return }
-        probeExternalFDA(username: store.config.username, ip: store.config.destinationIP, remotePath: dest)
-    }
-
-    private func probeExternalFDA(username: String, ip: String, remotePath: String) {
-        let escaped = remoteShellPath(remotePath)
-        let testFile = "\(escaped)/.sync_fdaprobe_\(Int.random(in: 1000...9999))"
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        proc.arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3",
-                          "-o", "StrictHostKeyChecking=no",
-                          "--", "\(username)@\(ip)",
-                          "touch \"\(testFile)\" && rm -f \"\(testFile)\" && echo OK || echo FAIL"]
-        let outPipe = Pipe()
-        let errPipe = Pipe()
-        proc.standardOutput = outPipe
-        proc.standardError = errPipe
-        proc.terminationHandler = { p in
-            let out = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            Task { @MainActor in
-                // Tri-state: OK = ready, EPERM = needs permission, anything else
-                // (unreachable / ssh error) = inconclusive → leave state as-is.
-                let result: Bool?
-                if p.terminationStatus == 0, out.contains("OK") {
-                    result = true
-                } else if p.terminationStatus == 0, err.contains("Operation not permitted") {
-                    result = false
-                } else {
-                    result = nil
-                }
-                guard let ready = result else { return }
-                // Change-only: act solely on a transition — no flicker, no log spam.
-                guard ready != lastExternalProbeOK else { return }
-                lastExternalProbeOK = ready
-                if ready {
-                    externalFDAWarning = false
-                    mainExternalReady = true
-                    NSLog("[Sync] external-drive readiness → READY")
-                    stopExternalReadinessLoop()          // ready → stop the light loop
-                    relayExternalReadyToBackup(username: username, ip: ip, remotePath: remotePath)
-                } else {
-                    externalFDAWarning = true
-                    mainExternalReady = false
-                    NSLog("[Sync] external-drive readiness → needs permission (denied via sshd TCC)")
-                    ensureExternalReadinessLoop()        // not ready → keep the light loop running
-                }
-            }
-        }
-        DispatchQueue.global(qos: .utility).async { try? proc.run() }
-    }
-
-    // Relay readiness to the Backup: write .external_ready to the external dest
-    // (FDA is proven granted at this point, so the write succeeds) via the same
-    // signal channel the Backup already polls. The Backup flips its card to ✓ and
-    // deletes the file. Fire-and-forget; failure is non-fatal (a sync confirms too).
-    private func relayExternalReadyToBackup(username: String, ip: String, remotePath: String) {
-        let escaped = remoteShellPath(remotePath)
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        var args = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no"]
-        if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
-           !store.config.preferredInterfaceMAC.isEmpty {
-            args.insert(contentsOf: ["-b", bindIP], at: 0)
-        }
-        args.append(contentsOf: ["--", "\(username)@\(ip)",
-                                 "touch \"\(escaped)/\(SignalFile.externalReady)\""])
-        proc.arguments = args
-        proc.standardOutput = FileHandle.nullDevice
-        proc.standardError = FileHandle.nullDevice
-        DispatchQueue.global(qos: .utility).async { try? proc.run() }
-    }
-
-    // Light readiness loop (Main side): while an external Backup is connected and
-    // NOT yet ready, re-probe every ~3 s so the switch-flip confirms within a
-    // couple seconds. Runs only while Settings is open; stops the instant ready is
-    // confirmed, the dest is no longer external, or the Backup disconnects. Never
-    // runs in steady state (ready / home dest).
-    private func ensureExternalReadinessLoop() {
-        guard isMain,
-              store.config.backupDestination.hasPrefix("/Volumes/"),
-              !SyncEngine.shared.usingFallback,
-              !mainExternalReady,
-              connectionStatus.state == .reachable else {
-            stopExternalReadinessLoop()
-            return
-        }
-        guard externalReadinessTimer == nil else { return }  // already looping
-        externalReadinessTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { _ in
-            reprobeExternalReadinessIfNeeded()
-        }
-    }
-
-    private func stopExternalReadinessLoop() {
-        externalReadinessTimer?.invalidate()
-        externalReadinessTimer = nil
     }
 
     private func readManualModeFreeSpace(username: String, ip: String, remotePath: String) {

@@ -157,11 +157,6 @@ enum SignalFile {
     static let unpairRequest = ".sync_unpair_request"
     static let verifyRequest = ".verify_request"
     static let verifyResult = ".verify_result"
-    // Main → Backup relay: the Main writes this to an external destination the
-    // instant its authoritative readiness probe transitions to ready, so the
-    // Backup's setup card can flip to ✓ without waiting for a full sync. Reuses
-    // the existing signal-file poll channel — no new listener/protocol.
-    static let externalReady = ".external_ready"
 }
 
 // Shared rsync exclusions — the single source of comparison criteria for sync,
