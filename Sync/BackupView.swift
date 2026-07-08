@@ -461,7 +461,21 @@ final class ReceiveMonitor: ObservableObject {
     // a second request within the window must not be timed out by the first's timer
     // (audit §4). Cleared on result arrival and when a timeout fires.
     var pendingVerifyNonce: String = ""
+    // Sync-driven external-drive confirmation: set true when a real inbound sync
+    // signal (.sync_start/.sync_complete, written by the Main's sshd) lands on a
+    // /Volumes destination that is NOT in fallback — i.e. an actual backup reached
+    // the external drive. Drives the "✓ External drive ready" row. Runtime only
+    // (never persisted) — resets to false on restart, re-confirms on the next sync.
+    @Published var externalWriteConfirmed: Bool = false
     // `lastReceivedTime` now lives on ConfigStore.config so it survives relaunch.
+
+    // A real inbound sync write landed on the external destination — the only
+    // Backup-observable proof the external drive is receiving. Pure: no probe, no
+    // relay, no df. No-op for home/~/Sync dests (the /Volumes guard).
+    private func noteInboundWriteLanded() {
+        guard !usingFallback, effectiveDestination.hasPrefix("/Volumes/") else { return }
+        if !externalWriteConfirmed { externalWriteConfirmed = true }
+    }
 
     /// The ACTUAL destination path being used right now (fallback ~/Sync or user's chosen folder)
     var effectiveDestination: String {
@@ -702,6 +716,7 @@ final class ReceiveMonitor: ObservableObject {
                     self.receiveDetails   = details
                     self.resetProgressFields()
                     self.state            = .done
+                    self.noteInboundWriteLanded()  // real .sync_complete landed on external dest → ✓
                     ConfigStore.shared.config.lastReceivedTime = Date()
                     ConfigStore.shared.isSyncing = false
                     ConfigStore.shared.iconState = .success
@@ -819,6 +834,7 @@ final class ReceiveMonitor: ObservableObject {
                     guard let self else { return }
 
                     let now = Date()
+                    self.noteInboundWriteLanded()  // real .sync_start landed on external dest → ✓
                     if self.state != .receiving {
                         // First time seeing .sync_start
                         self.state = .receiving

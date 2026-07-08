@@ -83,6 +83,9 @@ struct SettingsView: View {
     @State private var showExternalGuide = false      // the inline setup card is visible
     @State private var remoteLoginOn: Bool? = nil      // step-1 live pill: nil = checking
     @State private var guidePollTimer: Timer? = nil    // live Remote Login poll while card open
+    // Mirrors ReceiveMonitor.externalWriteConfirmed via .onReceive (local @State for
+    // clean reactivity — ReceiveMonitor is not a broad @ObservedObject here).
+    @State private var externalDriveConfirmedRow = false
     @State private var connContentHeight: CGFloat = 0  // measured Connection content height (scroller sizing)
 
     // Screen-derived ceiling for the Connection scroll region: available screen
@@ -520,6 +523,11 @@ struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSPopover.didCloseNotification)) { _ in
             connectionStatus.stop("settings")
         }
+        // Sync-driven external-drive ✓: mirror ReceiveMonitor's runtime flag into
+        // local @State (emits current value on subscribe, so reopening reflects it).
+        .onReceive(ReceiveMonitor.shared.$externalWriteConfirmed) { confirmed in
+            externalDriveConfirmedRow = confirmed
+        }
         .onChange(of: store.config.destinationIP) { _ in
             Task { @MainActor in
                 hasConfirmedDestinationThisConnection = false
@@ -883,6 +891,9 @@ struct SettingsView: View {
                     .controlSize(.small)
                 Spacer()
             }
+            Text("Your first backup will confirm everything's set.")
+                .font(.system(size: 10))
+                .foregroundColor(labelColor)
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.blue.opacity(0.10)))
@@ -2180,11 +2191,17 @@ struct SettingsView: View {
                     .foregroundColor(.orange)
             }
 
-            // External-drive guided setup (Backup side) — instructional card + a
-            // persistent reopen entry when an external dest is configured.
+            // External-drive guided setup (Backup side): guide card while setting up;
+            // ✓ once a real sync has landed on the external drive this session;
+            // otherwise a persistent reopen entry when an external dest is configured.
             if showExternalGuide {
                 externalDriveGuideCard
                     .padding(.top, 6)
+            } else if externalDriveConfirmedRow {
+                Label("External drive ready — your backups are protected", systemImage: "checkmark.circle.fill")
+                    .font(.system(size: 11))
+                    .foregroundColor(.green)
+                    .padding(.top, 4)
             } else if store.config.destinationFolder.hasPrefix("/Volumes/") {
                 HStack(alignment: .top, spacing: 8) {
                     Text("External drive needs one macOS permission before it can receive backups.")
@@ -2644,15 +2661,7 @@ struct SettingsView: View {
             let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             Task { @MainActor in
                 if p.terminationStatus == 0, let kb = Int64(output) {
-                    // [FreeSpaceTrace c] Main manual-mode @State free space, from df on the
-                    // EFFECTIVE destination path (correct volume) — this is what the Mac
-                    // Backup folder row displays (`if manualModeFreeSpace > 0`).
-                    NSLog("[FreeSpaceTrace/Main-@State-set] readManualModeFreeSpace: df -k '%@' → %lld KB (%.1f GB) → @State manualModeFreeSpace",
-                          remotePath, kb, Double(kb) / 1_048_576)
                     manualModeFreeSpace = kb * 1024  // Convert KB to bytes
-                } else {
-                    NSLog("[FreeSpaceTrace/Main-@State-set] readManualModeFreeSpace df FAILED (exit %d, out='%@') on '%@' — @State manualModeFreeSpace NOT updated (stays %lld)",
-                          p.terminationStatus, output, remotePath, manualModeFreeSpace)
                 }
             }
         }
