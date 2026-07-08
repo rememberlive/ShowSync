@@ -124,6 +124,27 @@ final class SyncEngine: ObservableObject {
     @Published var usingFallback: Bool = false    // True when sync redirected to ~/Sync due to unavailable drive
     @Published var manualModeFreeSpace: Int64 = 0 // Free space from manual-mode config poll (bytes)
 
+    // First-hand write-test verdict for the CURRENT configured real destination.
+    // The Main's own probe of whether it can write the real dest wins over the
+    // Backup's advertised fallback state (both directions) so a stale advertisement
+    // can't force fallback and a "backup says fine" can't clear a genuine fallback.
+    // Keyed to the dest path + refreshed on every sync's write-test, so it never
+    // suppresses a later genuine change. nil = no first-hand result this session.
+    var lastRealDestWriteTest: (path: String, writable: Bool)? = nil
+
+    // Reconcile usingFallback with the Backup's advertised fallback, giving
+    // precedence to the Main's own most-recent write-test verdict for the same
+    // configured dest. No matching first-hand verdict → adopt as before.
+    func reconcileFallback(advertisedFallback: Bool, realDest: String) {
+        let target: Bool
+        if let fh = lastRealDestWriteTest, fh.path == realDest {
+            target = !fh.writable            // first-hand writability wins (both directions)
+        } else {
+            target = advertisedFallback      // no first-hand verdict for this dest → adopt as today
+        }
+        if usingFallback != target { usingFallback = target }
+    }
+
     // Auto Sync - Independent timer system
     @Published var nextAutoSyncDate: Date?
     private var autoSyncTimer: Timer?
@@ -201,12 +222,11 @@ final class SyncEngine: ObservableObject {
         syncTotalFiles = 0
         syncUsername   = config.username
         syncIP         = config.destinationIP
-        // If usingFallback already set (from manual mode config read), sync to ~/Sync directly
-        if usingFallback {
-            syncRemotePath = "~/Sync"
-        } else {
-            syncRemotePath = config.backupDestination.isEmpty ? "~/Sync" : config.backupDestination
-        }
+        // Always target the CONFIGURED real destination so the write-test below
+        // re-probes it every sync (self-heal). Fallback to ~/Sync is decided by
+        // THIS attempt's write-test result, not a cached usingFallback flag — the
+        // old pre-redirect latched onto ~/Sync and never re-probed the real dest.
+        syncRemotePath = config.backupDestination.isEmpty ? "~/Sync" : config.backupDestination
 
         let mode = config.discoveryMode
         syncTrace("[SyncTrace] 1 sync requested, mode=%@, remotePath='%@', usingFallback=%d, dryRunEnabled=%d, isAuto=%d",
@@ -252,13 +272,20 @@ final class SyncEngine: ObservableObject {
                 syncTrace("[SyncTrace] 5 write-test result=%d (0=writable, 1=unwritable, 2=testFailed)", result == .writable ? 0 : (result == .unwritable ? 1 : 2))
                 switch result {
                 case .writable:
-                    break
+                    // First-hand verdict: the Main CAN write the real dest. Record it
+                    // (wins over adoption) and self-heal if we were latched in fallback.
+                    self.lastRealDestWriteTest = (originalRemotePath, true)
+                    if self.usingFallback { self.usingFallback = false }
                 case .unwritable:
+                    // First-hand verdict: the Main CANNOT write the real dest.
+                    self.lastRealDestWriteTest = (originalRemotePath, false)
                     self.syncRemotePath = "~/Sync"
                     self.usingFallback = true
                     self.fallbackNotice = "Couldn't write to the chosen folder — backing up to the default Sync folder instead."
                     NSLog("[Sync] Destination unwritable, falling back to ~/Sync")
                 case .testFailed:
+                    // Ambiguous (SSH error/timeout) — not a writability verdict; leave
+                    // the last first-hand result untouched and proceed.
                     NSLog("[Sync] Write-test failed (SSH error), proceeding anyway")
                 }
                 syncTrace("[SyncTrace] 6 calling continueSyncAfterWriteTest")

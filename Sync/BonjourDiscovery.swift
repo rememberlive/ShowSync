@@ -516,9 +516,11 @@ final class BonjourBrowser: ObservableObject {
             if ConfigStore.shared.config.backupPlatform != backup.platform {
                 ConfigStore.shared.config.backupPlatform = backup.platform
             }
-            if SyncEngine.shared.usingFallback != backup.isUsingFallback {
-                SyncEngine.shared.usingFallback = backup.isUsingFallback
-            }
+            // Symmetric guard: the Main's own most-recent write-test verdict for this
+            // dest wins over the Backup's advertised fallback (both directions); adopt
+            // the advertisement only when there's no first-hand verdict for this dest.
+            SyncEngine.shared.reconcileFallback(advertisedFallback: backup.isUsingFallback,
+                                                realDest: backup.destinationPath)
             // Adopt the advertised name — except while a rename is settling: the old
             // advertisement may still resolve, and re-adopting its name would clobber
             // the optimistic new name (old-name flashback / ping-pong).

@@ -498,6 +498,7 @@ final class ReceiveMonitor: ObservableObject {
     // Volume mount/unmount observers for instant drive detection
     private var mountObserver: NSObjectProtocol?
     private var unmountObserver: NSObjectProtocol?
+    private var revalidateTimer: Timer?   // periodic destination re-validation (self-heal advertised state)
 
     private init() {}
 
@@ -525,6 +526,14 @@ final class ReceiveMonitor: ObservableObject {
         }
         checkSignalFiles()
         setupVolumeObservers()
+        // Periodic re-validation so the advertised effective destination self-heals
+        // without an app restart. validateDestination() self-throttles — it only
+        // re-publishes TXT / re-saves config on an actual fallback transition
+        // (wasFallback change), so a healthy steady state does nothing but a stat.
+        revalidateTimer?.invalidate()
+        revalidateTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
+            self?.validateDestination()
+        }
     }
 
     private func setupVolumeObservers() {
@@ -627,6 +636,8 @@ final class ReceiveMonitor: ObservableObject {
     func stopMonitoring() {
         pollTimer?.invalidate()
         pollTimer      = nil
+        revalidateTimer?.invalidate()
+        revalidateTimer = nil
         isChecking     = false
         state          = .idle
         resetProgressFields()
@@ -637,6 +648,7 @@ final class ReceiveMonitor: ObservableObject {
 
     deinit {
         pollTimer?.invalidate()
+        revalidateTimer?.invalidate()
         removeVolumeObservers()
     }
 

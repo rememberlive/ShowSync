@@ -191,9 +191,11 @@ final class ConnectionStatus: ObservableObject {
                         if ConfigStore.shared.config.backupDestination != dest {
                             ConfigStore.shared.config.backupDestination = dest
                         }
-                        if SyncEngine.shared.usingFallback != isFallback {
-                            SyncEngine.shared.usingFallback = isFallback
-                        }
+                        // Symmetric guard: the Main's own most-recent write-test verdict
+                        // for this dest wins over the Backup's advertised fallback (both
+                        // directions); adopt the advertisement only when there's no
+                        // first-hand verdict for this dest.
+                        SyncEngine.shared.reconcileFallback(advertisedFallback: isFallback, realDest: dest)
                     }
                     // On parse failure: keep last-known values (no else branch needed)
                     // Parse free space (only update if parse succeeds)
