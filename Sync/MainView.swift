@@ -2101,6 +2101,7 @@ struct MainView: View {
                     .font(.system(size: 12))
                     .foregroundColor(color)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 20)
                     .padding(.vertical, 10)
             }
@@ -2112,6 +2113,7 @@ struct MainView: View {
                     .font(.system(size: 11))
                     .foregroundColor(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 20)
                     .padding(.vertical, 8)
             }
@@ -2123,6 +2125,7 @@ struct MainView: View {
                     .font(.system(size: 11))
                     .foregroundColor(.yellow)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 20)
                     .padding(.vertical, 8)
             }
@@ -2134,6 +2137,7 @@ struct MainView: View {
                     .font(.system(size: 11))
                     .foregroundColor(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 20)
                     .padding(.vertical, 8)
             }
@@ -2155,6 +2159,7 @@ struct MainView: View {
                     Text(engine.verifyStatus.label)
                         .font(.system(size: 12))
                         .foregroundColor(engine.verifyStatus.color)
+                        .fixedSize(horizontal: false, vertical: true)
                     Button { engine.cancelVerify() } label: {
                         Text("Cancel Verify")
                             .font(.system(size: 13, weight: .semibold))
@@ -2198,6 +2203,7 @@ struct MainView: View {
                         Text(engine.verifyStatus.label)
                             .font(.system(size: 12))
                             .foregroundColor(engine.verifyStatus.color)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }

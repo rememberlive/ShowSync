@@ -1177,6 +1177,7 @@ struct BackupView: View {
                     Text(receiveMonitor.verifyStatus.label)
                         .font(.system(size: 12))
                         .foregroundColor(receiveMonitor.verifyStatus.color)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .padding(.horizontal, 20)
