@@ -201,9 +201,17 @@ final class ConnectionStatus: ObservableObject {
                         let dfAndVerify = parts[1].components(separatedBy: "---VERIFY---")
                         if let kbStr = dfAndVerify[0].trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: .newlines).first,
                            let kb = Int64(kbStr) {
+                            // [FreeSpaceTrace b2] Main manual-mode df read. NOTE: this measures
+                            // `df -k ~` = the Backup's HOME volume (post-revert), NOT necessarily
+                            // the configured destination volume — if the Backup's dest is an
+                            // external drive, this reports the wrong volume's free space.
+                            NSLog("[FreeSpaceTrace/Main-manual-df] df -k ~ (HOME volume) → %lld KB (%.1f GB) → SyncEngine.manualModeFreeSpace; backupDest='%@' usingFallback=%d",
+                                  kb, Double(kb) / 1_048_576, ConfigStore.shared.config.backupDestination, SyncEngine.shared.usingFallback ? 1 : 0)
                             if SyncEngine.shared.manualModeFreeSpace != kb * 1024 {
                                 SyncEngine.shared.manualModeFreeSpace = kb * 1024
                             }
+                        } else {
+                            NSLog("[FreeSpaceTrace/Main-manual-df] df parse FAILED — free space not updated (dropped)")
                         }
                         // Parse verify request (manual mode only)
                         if dfAndVerify.count > 1 {

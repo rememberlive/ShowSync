@@ -158,6 +158,9 @@ final class BonjourAdvertiser: ObservableObject {
         let intendedDest = ConfigStore.shared.config.destinationFolder
         let effectiveDest = ReceiveMonitor.shared.effectiveDestination
         let freeBytes = Self.getFreeSpace(path: effectiveDest) ?? 0
+        // [FreeSpaceTrace a] Backup publishes free space into its TXT record.
+        NSLog("[FreeSpaceTrace/Backup-publish] effectiveDest='%@' free=%lld bytes (%.1f GB) → TXT 'free'",
+              effectiveDest, freeBytes, Double(freeBytes) / 1_073_741_824)
 
         var txt: [String: String] = [
             "free": String(freeBytes)
@@ -398,6 +401,9 @@ final class BonjourBrowser: ObservableObject {
             let destPath = txt["dest"] ?? "~/Sync"
             let effectivePath = txt["effectiveDest"] ?? destPath
             let freeBytes = Int64(txt["free"] ?? "0") ?? 0
+            // [FreeSpaceTrace b] Main reads free space from the Backup's TXT record.
+            NSLog("[FreeSpaceTrace/Main-TXT-read] service='%@' TXT free raw='%@' → %lld bytes (%.1f GB), effectiveDest='%@'",
+                  serviceName, txt["free"] ?? "<nil>", freeBytes, Double(freeBytes) / 1_073_741_824, effectivePath)
             let backupId = txt["backupId"] ?? ""
             let backupFP = txt["backupFP"] ?? ""
             let backupUsername = txt["username"] ?? ""  // "" = older Backup

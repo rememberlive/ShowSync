@@ -83,6 +83,16 @@ struct SettingsView: View {
     @State private var showExternalGuide = false      // the inline setup card is visible
     @State private var remoteLoginOn: Bool? = nil      // step-1 live pill: nil = checking
     @State private var guidePollTimer: Timer? = nil    // live Remote Login poll while card open
+    @State private var connContentHeight: CGFloat = 0  // measured Connection content height (scroller sizing)
+
+    // Screen-derived ceiling for the Connection scroll region: available screen
+    // height minus room for the popover's other chrome (group headers, Reset
+    // button, menu-bar offset), floored so it's always usable. Keeps the popover
+    // on-screen while letting the full Destination block show when it fits.
+    private static func connectionScrollCeiling() -> CGFloat {
+        let visible = NSScreen.main?.visibleFrame.height ?? 900
+        return max(360, visible - 280)
+    }
     @State private var hasConfirmedDestinationThisConnection = false
     @State private var manualModeFreeSpace: Int64 = 0  // Free space read via SSH for manual mode
     // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
@@ -396,10 +406,22 @@ struct SettingsView: View {
                         // the card is absent (home/internal dest) the content renders
                         // directly — identical layout and size to before, no scroller.
                         if showExternalGuide {
+                            // Fit-to-content, capped by screen height: the region takes the
+                            // content's natural height (so the WHOLE Destination block — label,
+                            // path, setup card, min-free line — shows without scrolling) up to
+                            // a screen-derived ceiling, so the popover never runs off the
+                            // display. Only when content exceeds the ceiling (small screen) does
+                            // it scroll — last resort. Measurement is on the wrapper, not inside
+                            // backupConnectionContent (its internals are untouched).
+                            let ceiling = Self.connectionScrollCeiling()
                             ScrollView {
                                 backupConnectionContent
+                                    .background(GeometryReader { g in
+                                        Color.clear.preference(key: ConnContentHeightKey.self, value: g.size.height)
+                                    })
                             }
-                            .frame(maxHeight: 420)
+                            .frame(height: min(connContentHeight == 0 ? ceiling : connContentHeight, ceiling))
+                            .onPreferenceChange(ConnContentHeightKey.self) { connContentHeight = $0 }
                         } else {
                             backupConnectionContent
                         }
@@ -2622,7 +2644,15 @@ struct SettingsView: View {
             let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             Task { @MainActor in
                 if p.terminationStatus == 0, let kb = Int64(output) {
+                    // [FreeSpaceTrace c] Main manual-mode @State free space, from df on the
+                    // EFFECTIVE destination path (correct volume) — this is what the Mac
+                    // Backup folder row displays (`if manualModeFreeSpace > 0`).
+                    NSLog("[FreeSpaceTrace/Main-@State-set] readManualModeFreeSpace: df -k '%@' → %lld KB (%.1f GB) → @State manualModeFreeSpace",
+                          remotePath, kb, Double(kb) / 1_048_576)
                     manualModeFreeSpace = kb * 1024  // Convert KB to bytes
+                } else {
+                    NSLog("[FreeSpaceTrace/Main-@State-set] readManualModeFreeSpace df FAILED (exit %d, out='%@') on '%@' — @State manualModeFreeSpace NOT updated (stays %lld)",
+                          p.terminationStatus, output, remotePath, manualModeFreeSpace)
                 }
             }
         }
@@ -2775,6 +2805,15 @@ private struct GroupHeaderRow: View {
         .background(Color.primary.opacity(hovering ? 0.06 : 0))
         .onHover { hovering = $0 }
         .animation(.easeInOut(duration: 0.12), value: hovering)
+    }
+}
+
+// Measures the natural height of the Connection content so its internal scroller
+// can size to fit (up to the screen ceiling) rather than a fixed cap.
+private struct ConnContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
