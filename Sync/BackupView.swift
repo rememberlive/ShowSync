@@ -495,6 +495,94 @@ final class ReceiveMonitor: ObservableObject {
     private var lastProgressTime: Date?
     private let staleTimeoutSeconds: TimeInterval = 45  // Clear stale signals after 45s of no progress
 
+    // Stuck-"receiving" self-heal — dead-vs-slow arbiter (suspect mode). A crashed
+    // Main orphans .sync_start/.sync_progress with nobody left to clean them; the
+    // frozen signal alone can't distinguish "Main dead" from "transfer slow" OR
+    // from "Main app dead but its orphaned rsync still landing bytes" (rsync is
+    // posix_spawned — it survives the app and keeps transferring). The arbiter
+    // measures what's actually true LOCALLY: are bytes still arriving in the
+    // destination folder? Growth → alive (stay "receiving" — that's the truth).
+    // No growth across 2 consecutive ~15s checks after the 45s stale window →
+    // dead → clear signals + reset UI. Nothing here can touch a transfer: signal
+    // files are display/coordination only; rsync never reads them, so the worst
+    // false-verdict cost is a cosmetic flap (the Main's next progress write
+    // re-creates the file and "receiving" returns).
+    private var suspectSnapshotBytes: Int64 = -1   // dest byte total at last check (-1 = no baseline)
+    private var suspectSnapshotTime: Date? = nil   // cadence gate for the ~15s checks
+    private var suspectNoGrowthCount = 0           // consecutive no-growth verdicts
+    private var suspectMeasureInFlight = false     // one enumeration at a time
+    // Honest transient note when a dead transfer is cleared (the .done row renders
+    // a green ✓ — wrong for an interruption). Self-clears after 8s.
+    @Published var receiveInterruptedNotice: String? = nil
+
+    private func resetSuspectMode() {
+        suspectSnapshotBytes = -1
+        suspectSnapshotTime = nil
+        suspectNoGrowthCount = 0
+    }
+
+    // Called on the main actor from the signal poll while state == .receiving and
+    // the signal content has been frozen past staleTimeoutSeconds. Enumerates the
+    // destination WITHOUT skipping hidden files — rsync writes in-flight data to
+    // hidden dot-temp files, so during a single huge file transfer ALL local
+    // growth is hidden; skipping them would false-verdict a healthy transfer.
+    private func evaluateSuspectTransfer(destPath: String) {
+        let now = Date()
+        if let last = suspectSnapshotTime, now.timeIntervalSince(last) < 15 { return }
+        guard !suspectMeasureInFlight else { return }
+        suspectMeasureInFlight = true
+        suspectSnapshotTime = now
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            var total: Int64 = 0
+            if let enumerator = FileManager.default.enumerator(
+                at: URL(fileURLWithPath: destPath),
+                includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey]
+            ) {
+                for case let url as URL in enumerator {
+                    guard let res = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                          res.isRegularFile == true else { continue }
+                    total += Int64(res.fileSize ?? 0)
+                }
+            }
+            let measured = total
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.suspectMeasureInFlight = false
+                guard self.state == .receiving else { self.resetSuspectMode(); return }
+                if self.suspectSnapshotBytes < 0 {
+                    self.suspectSnapshotBytes = measured   // baseline — verdicts start next check
+                    return
+                }
+                if measured > self.suspectSnapshotBytes {
+                    // Bytes still landing → ALIVE (slow transfer, or app-dead
+                    // rsync-survivor finishing its work). "Receiving" is the truth.
+                    self.suspectSnapshotBytes = measured
+                    self.suspectNoGrowthCount = 0
+                    self.lastProgressTime = Date()   // reopen the stale window
+                    return
+                }
+                self.suspectSnapshotBytes = measured
+                self.suspectNoGrowthCount += 1
+                guard self.suspectNoGrowthCount >= 2 else { return }
+                // DEAD: frozen signal AND no local growth (~75s total) — clear via
+                // the same actions as the original self-heal, plus an honest note.
+                NSLog("[Backup] Self-heal: transfer presumed dead (no signal change + no local byte growth) — clearing signal files")
+                self.clearStaleSignalFiles()
+                self.state = .idle
+                self.resetProgressFields()
+                self.receivingStartTime = nil
+                self.lastProgressTime = nil
+                self.resetSuspectMode()
+                ConfigStore.shared.isSyncing = false
+                ConfigStore.shared.iconState = .idle
+                self.receiveInterruptedNotice = "Transfer interrupted — the other Mac stopped sending."
+                DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+                    if self?.receiveInterruptedNotice != nil { self?.receiveInterruptedNotice = nil }
+                }
+            }
+        }
+    }
+
     // Volume mount/unmount observers for instant drive detection
     private var mountObserver: NSObjectProtocol?
     private var unmountObserver: NSObjectProtocol?
@@ -517,6 +605,7 @@ final class ReceiveMonitor: ObservableObject {
         clearStaleSignalFiles()  // FIX 4: Clean slate on restart/launch
         state          = .idle
         resetProgressFields()
+        resetSuspectMode()
         receiveDetails = ""
         receivingStartTime = nil
         lastProgressTime = nil
@@ -641,6 +730,7 @@ final class ReceiveMonitor: ObservableObject {
         isChecking     = false
         state          = .idle
         resetProgressFields()
+        resetSuspectMode()
         ConfigStore.shared.isSyncing = false
         removeVolumeObservers()
         // lastReceivedTime preserved across close/open
@@ -727,6 +817,7 @@ final class ReceiveMonitor: ObservableObject {
                     guard let self else { return }
                     self.receiveDetails   = details
                     self.resetProgressFields()
+                    self.resetSuspectMode()
                     self.state            = .done
                     self.noteInboundWriteLanded()  // real .sync_complete landed on external dest → ✓
                     ConfigStore.shared.config.lastReceivedTime = Date()
@@ -796,6 +887,13 @@ final class ReceiveMonitor: ObservableObject {
                 Task { @MainActor [weak self] in
                     self?.isChecking = false
                     guard let self else { return }
+                    // Content-change detection (stuck-"receiving" fix): the OLD code
+                    // refreshed lastProgressTime on file EXISTENCE, so an orphaned
+                    // .sync_progress pinned "receiving" forever — the start-branch
+                    // self-heal was unreachable (this branch returns first).
+                    let contentChanged = self.receivePercent != progress.percent
+                        || self.receivedBytes != progress.bytesDone
+                        || self.expectedBytes != progress.bytesTotal
                     // Write-on-change: 0.5 s poll vs 1 s payload cadence — every other
                     // tick re-reads identical values.
                     if self.receivePercent != progress.percent { self.receivePercent = progress.percent }
@@ -814,12 +912,23 @@ final class ReceiveMonitor: ObservableObject {
                             self.receiveRate = Double(last.bytes - first.bytes) / last.time.timeIntervalSince(first.time)
                         }
                     }
-                    self.lastProgressTime = Date()  // FIX 3: track progress
+                    // FIX 3 (corrected): track progress by CONTENT, not existence.
+                    if contentChanged {
+                        self.lastProgressTime = Date()
+                        self.resetSuspectMode()
+                    }
                     if self.state != .receiving {
                         self.state = .receiving
                         self.receivingStartTime = Date()
+                        self.receiveInterruptedNotice = nil   // new transfer supersedes the note
                         ConfigStore.shared.isSyncing = true
                         ConfigStore.shared.iconState = .receiving
+                    } else if !contentChanged,
+                              let refTime = self.lastProgressTime ?? self.receivingStartTime,
+                              Date().timeIntervalSince(refTime) > self.staleTimeoutSeconds {
+                        // Signal frozen past the stale window → dead-vs-slow arbiter
+                        // (~15s local-growth checks; clears after 2 no-growth verdicts).
+                        self.evaluateSuspectTransfer(destPath: destPath)
                     }
                 }
                 return
@@ -852,21 +961,19 @@ final class ReceiveMonitor: ObservableObject {
                         self.state = .receiving
                         self.receivingStartTime = now
                         self.lastProgressTime = nil
+                        self.receiveInterruptedNotice = nil   // new transfer supersedes the note
                         ConfigStore.shared.isSyncing = true
                         ConfigStore.shared.iconState = .receiving
                     } else if let startTime = self.receivingStartTime {
-                        // Already receiving - check for stale timeout
+                        // FIX 3 (upgraded): stale .sync_start no longer hard-clears at
+                        // 45s — it routes through the same dead-vs-slow arbiter as the
+                        // progress branch. A Main that crashed before its first
+                        // progress write can leave an orphaned rsync still landing
+                        // bytes; local growth keeps "receiving" (the truth), and only
+                        // frozen signal + no growth (~75s total) clears.
                         let refTime = self.lastProgressTime ?? startTime
                         if now.timeIntervalSince(refTime) > self.staleTimeoutSeconds {
-                            NSLog("[Backup] Self-heal: clearing stale signal files after %.0fs timeout", now.timeIntervalSince(startTime))
-                            self.clearStaleSignalFiles()
-                            self.state = .idle
-                            self.resetProgressFields()
-                            self.receivingStartTime = nil
-                            self.lastProgressTime = nil
-                            ConfigStore.shared.isSyncing = false
-                            ConfigStore.shared.iconState = .idle
-                            return
+                            self.evaluateSuspectTransfer(destPath: destPath)
                         }
                     }
                     self.resetProgressFields()
@@ -881,6 +988,7 @@ final class ReceiveMonitor: ObservableObject {
                 if self.state == .receiving {
                     self.state          = .idle
                     self.resetProgressFields()
+                    self.resetSuspectMode()
                     self.receivingStartTime = nil
                     self.lastProgressTime = nil
                     ConfigStore.shared.isSyncing = false
@@ -1175,6 +1283,14 @@ struct BackupView: View {
                         Text("Syncing to ~/Sync until drive returns")
                             .font(.system(size: 10))
                             .foregroundColor(.orange)
+                    }
+                    // Honest transient note when a dead transfer was cleared by the
+                    // self-heal arbiter (the ✓ .done row would wrongly read as success).
+                    if let notice = receiveMonitor.receiveInterruptedNotice {
+                        Text(notice)
+                            .font(.system(size: 10))
+                            .foregroundColor(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 infoRow(label: "Storage", value: storageMonitor.storageString)
