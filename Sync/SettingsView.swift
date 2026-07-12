@@ -685,6 +685,11 @@ struct SettingsView: View {
                 }
                 .padding(.vertical, 2)
                 .task {
+                    // macOS 15+ only: the Local Network permission (and its Privacy
+                    // pane) doesn't exist before Sequoia — on 13/14 the hint would
+                    // point at a pane that isn't there. Sole set-site for the flag,
+                    // so gating here gates the hint row too.
+                    guard #available(macOS 15.0, *) else { return }
                     // Grace period before hinting (normal discovery resolves in ~1-2 s;
                     // slow re-advertise can take ~18 s). SwiftUI cancels this task when
                     // the row leaves the hierarchy (a Backup appeared) — no polling.
