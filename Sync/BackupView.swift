@@ -1282,11 +1282,22 @@ struct BackupView: View {
     // MARK: - Header helpers
 
     private var headerColor: Color {
-        receiveMonitor.state == .receiving ? .yellow : .green
+        // Receiving keeps priority: a direct-IP Main can be mid-transfer while the
+        // Local Network permission is denied — the true receive state must show.
+        if receiveMonitor.state == .receiving { return .yellow }
+        // Denied → degraded (orange), NOT a hard error: manual/direct-IP still works.
+        // isAutomatic gate REQUIRED: nothing clears localNetworkDenied on a mode
+        // switch (updateBonjourAdvertiser's else branch stops without clearing; the
+        // clear lives only in restartListening) — without the gate a manual-mode
+        // Backup would show a stale warning while direct-IP works fine.
+        if isAutomatic && advertiser.localNetworkDenied { return .orange }
+        return .green
     }
 
     private var headerStatus: String {
-        receiveMonitor.state == .receiving ? "Receiving" : "Ready"
+        if receiveMonitor.state == .receiving { return "Receiving" }
+        if isAutomatic && advertiser.localNetworkDenied { return "Not discoverable" }
+        return "Ready"
     }
 
     private var isReceiving: Bool { receiveMonitor.state == .receiving }
