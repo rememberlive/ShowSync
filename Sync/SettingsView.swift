@@ -107,6 +107,12 @@ struct SettingsView: View {
     // denial shows no error). No polling — a .task on the spinner row, auto-
     // cancelled by SwiftUI when the row leaves the hierarchy.
     @State private var searchingHint = false
+    // Three-state Secure Connection badge (twin of the dropdown's): ssh measures
+    // the MACHINE, Bonjour measures the APP. Absence must persist >5 s before
+    // the amber state shows (kills TXT-restart churn flicker). No timers: a
+    // one-shot asyncAfter flips the elapsed flag as the re-render nudge.
+    @State private var peerAbsentSince: Date? = nil
+    @State private var peerAbsenceElapsed = false
 
     // Custom timing option editing state
     @State private var isEditingAutoInterval = false
@@ -641,6 +647,44 @@ struct SettingsView: View {
                 break
             }
         }
+        // Badge absence tracking (separate additive observers — the rename
+        // onChange above is untouched). Initial check on appear covers opening
+        // Settings after the peer already vanished (no services change fires).
+        .onChange(of: bonjourBrowser.services) { _ in updatePeerAbsence() }
+        .onAppear { updatePeerAbsence() }
+    }
+
+    // Three-state badge support: start/clear the absence window for the
+    // currently-targeted peer. On absence start, a one-shot 5 s asyncAfter
+    // confirms it (generation-checked against the recorded date) and flips
+    // peerAbsenceElapsed — the re-render nudge that lets the amber state appear
+    // without any recurring timer in this view.
+    private func updatePeerAbsence() {
+        let absent = isAutomatic && !store.config.destinationIP.isEmpty
+            && !bonjourBrowser.services.contains { $0.resolvedIP == store.config.destinationIP }
+        if absent {
+            guard peerAbsentSince == nil else { return }
+            let started = Date()
+            peerAbsentSince = started
+            peerAbsenceElapsed = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5.1) {
+                if peerAbsentSince == started { peerAbsenceElapsed = true }
+            }
+        } else {
+            if peerAbsentSince != nil { peerAbsentSince = nil }
+            if peerAbsenceElapsed { peerAbsenceElapsed = false }
+        }
+    }
+
+    // Amber composite (twin of MainView.backupAppGone): machine answers ssh,
+    // app absent from Bonjour for >5 s. Automatic mode only — manual mode has
+    // no Bonjour to consult. Live-checks the services list so a returned peer
+    // clears the state instantly.
+    private var backupAppGone: Bool {
+        guard isAutomatic, !store.config.destinationIP.isEmpty, peerAbsenceElapsed,
+              !bonjourBrowser.services.contains(where: { $0.resolvedIP == store.config.destinationIP })
+        else { return false }
+        return true
     }
 
     // MARK: - Discovered Backup Macs list (Main + Automatic)
@@ -1730,6 +1774,14 @@ struct SettingsView: View {
                         .font(.system(size: 12))
                         .foregroundColor(sshStatusDotColor)
                 }
+                // Long-form truth for the amber state: not an error — the
+                // transport works; only app-layer protection is off.
+                if (connectionStatus.state ?? .checking) == .reachable && backupAppGone {
+                    Text("Files still sync, but low-space protection is off.")
+                        .font(.system(size: 10))
+                        .foregroundColor(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 // Layer 2b: Show this Mac's fingerprint for verification during pairing
                 if let fp = getSSHFingerprint() {
@@ -2652,6 +2704,9 @@ struct SettingsView: View {
     // MARK: - SSH connection helpers
 
     private var sshStatusDotColor: Color {
+        // Machine reachable but app gone → amber, not green (three-state badge;
+        // same defect as the dropdown's — machine-layer truth in app-layer words).
+        if (connectionStatus.state ?? .checking) == .reachable && backupAppGone { return .orange }
         switch connectionStatus.state ?? .checking {
         case .checking:    return Color(white: 0.55)
         case .reachable:   return .green
@@ -2660,6 +2715,7 @@ struct SettingsView: View {
     }
 
     private var sshStatusLabel: String {
+        if (connectionStatus.state ?? .checking) == .reachable && backupAppGone { return "Backup app not running" }
         switch connectionStatus.state ?? .checking {
         case .checking:    return "Checking..."
         case .reachable:   return "Connected"

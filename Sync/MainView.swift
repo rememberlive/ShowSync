@@ -1838,6 +1838,12 @@ struct MainView: View {
     @State private var syncEtaText = ""  // smoothed ETA; frozen on stall, never bounces
     @State private var sourceFolderSummary: String? = nil  // "N files · X" — computed on popover open / sync done, never polled
     @State private var connectionInfoHovering = false  // hover highlight on the Connection Info disclosure row
+    // Three-state connection badge: ssh measures the MACHINE (sshd survives the
+    // app quitting), Bonjour measures the APP. When the targeted peer's
+    // advertisement has been absent >5 s (grace kills the TXT-restart churn
+    // flicker) while ssh still answers, the truth is "machine up, Backup app not
+    // running". Maintained by the existing 1 s clockTick — no new timers.
+    @State private var peerAbsentSince: Date? = nil
     var onSettingsTapped: () -> Void = {}
 
     var body: some View {
@@ -1993,6 +1999,15 @@ struct MainView: View {
                             Text(reachLabel(rs))
                                 .font(.system(size: 11))
                                 .foregroundColor(reachDotColor(rs))
+                        }
+                        // Long-form truth for the amber state: not an error —
+                        // the transport works; only app-layer protection is off.
+                        if rs == .reachable && backupAppGone {
+                            Text("Files still sync, but low-space protection is off.")
+                                .font(.system(size: 10))
+                                .foregroundColor(.orange)
+                                .multilineTextAlignment(.center)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
 
@@ -2321,6 +2336,20 @@ struct MainView: View {
                 refreshSourceSummary()  // source may have grown during the sync
             }
         }
+        .onChange(of: clockTick) { _ in
+            // Badge absence tracking (popover-scoped: the tick only runs while
+            // open). Sets the date on the first tick the targeted peer's Bonjour
+            // entry is missing; clears it the moment it's back — the 5 s grace
+            // comparison lives in backupAppGone.
+            let absent = store.config.discoveryMode == "automatic"
+                && !store.config.destinationIP.isEmpty
+                && !bonjourBrowser.services.contains { $0.resolvedIP == store.config.destinationIP }
+            if absent {
+                if peerAbsentSince == nil { peerAbsentSince = Date() }
+            } else if peerAbsentSince != nil {
+                peerAbsentSince = nil
+            }
+        }
         .onChange(of: store.config.pushSyncEnabled) { enabled in
             if enabled {
                 startPushSyncIfNeeded()
@@ -2539,7 +2568,24 @@ struct MainView: View {
         }
     }
 
+    // Amber composite for the three-state badge: ssh reachable = the MACHINE
+    // answers; Bonjour absence (persisted >5 s, via clockTick re-evaluation) =
+    // the Backup APP is not advertising. Automatic mode only — manual mode has
+    // no Bonjour to consult, so pure ssh truth stays correct there. Live-checks
+    // the services list so a returned peer clears the state instantly even if
+    // the tick hasn't cleared the date yet.
+    private var backupAppGone: Bool {
+        guard store.config.discoveryMode == "automatic",
+              !store.config.destinationIP.isEmpty,
+              !bonjourBrowser.services.contains(where: { $0.resolvedIP == store.config.destinationIP }),
+              let since = peerAbsentSince else { return false }
+        return clockTick.timeIntervalSince(since) > 5
+    }
+
     private func reachDotColor(_ state: ConnectionState) -> Color {
+        // Machine reachable but app gone → amber, not green: "Connected" in
+        // app-layer words was overstating a machine-layer truth.
+        if state == .reachable && backupAppGone { return .orange }
         switch state {
         case .checking:    return Color(white: 0.55)
         case .reachable:   return .green
@@ -2548,6 +2594,7 @@ struct MainView: View {
     }
 
     private func reachLabel(_ state: ConnectionState) -> String {
+        if state == .reachable && backupAppGone { return "Backup app not running" }
         switch state {
         case .checking:    return "Checking..."
         case .reachable:   return "Connected"
