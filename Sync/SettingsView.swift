@@ -102,6 +102,11 @@ struct SettingsView: View {
     @State private var isEditingWindowsPath = false
     @State private var editingWindowsPath = ""
     @State private var isPairingStarting = false
+    // Time-based hint under the "Searching for Backup Macs..." spinner: set true
+    // after a grace period of continuous empty searching (silent Local Network
+    // denial shows no error). No polling — a .task on the spinner row, auto-
+    // cancelled by SwiftUI when the row leaves the hierarchy.
+    @State private var searchingHint = false
 
     // Custom timing option editing state
     @State private var isEditingAutoInterval = false
@@ -642,10 +647,35 @@ struct SettingsView: View {
 
     @ViewBuilder private var discoveredBackupsList: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if case .failed = bonjourBrowser.state {
-                Text("Network discovery unavailable")
-                    .font(.system(size: 11))
-                    .foregroundColor(.red)
+            if case .failed(let reason) = bonjourBrowser.state {
+                if reason == localNetworkDeniedReason {
+                    // Local Network permission denied (macOS 15+) — named state with
+                    // guided recovery. Retry reuses the interface-picker rebuild path
+                    // (BonjourBrowser.restart) since granting alone does not self-heal.
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(localNetworkDeniedReason)
+                            .font(.system(size: 11))
+                            .foregroundColor(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 8) {
+                            Button("Open Privacy Settings") { LocalNetworkPermission.openSettings() }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                            Button("Retry") { BonjourBrowser.shared.restart() }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                        }
+                        Text("Workaround: switch Discovery to Manual and connect by IP — direct connections still work.")
+                            .font(.system(size: 10))
+                            .foregroundColor(labelColor)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.vertical, 2)
+                } else {
+                    Text("Network discovery unavailable")
+                        .font(.system(size: 11))
+                        .foregroundColor(.red)
+                }
             } else if bonjourBrowser.services.isEmpty && store.config.destinationIP.isEmpty {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
@@ -654,6 +684,26 @@ struct SettingsView: View {
                         .foregroundColor(labelColor)
                 }
                 .padding(.vertical, 2)
+                .task {
+                    // Grace period before hinting (normal discovery resolves in ~1-2 s;
+                    // slow re-advertise can take ~18 s). SwiftUI cancels this task when
+                    // the row leaves the hierarchy (a Backup appeared) — no polling.
+                    try? await Task.sleep(nanoseconds: 20_000_000_000)
+                    if !Task.isCancelled { searchingHint = true }
+                }
+                .onDisappear { searchingHint = false }
+                if searchingHint {
+                    HStack(alignment: .top, spacing: 8) {
+                        Text("Still looking — if nothing appears, allow Local Network access for ShowSync in Privacy & Security.")
+                            .font(.system(size: 10))
+                            .foregroundColor(labelColor)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                        Button("Open") { LocalNetworkPermission.openSettings() }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
+                }
             } else if bonjourBrowser.services.isEmpty {
                 // Fallback: live discovery empty but a saved connection exists — show it
                 let savedName = store.config.lastBackupDiscoveryName.isEmpty
@@ -734,6 +784,9 @@ struct SettingsView: View {
     // MARK: - Bonjour status (Backup + Automatic)
 
     private var bonjourDotColor: Color {
+        // Local Network denied wins over .advertising: registration can confirm
+        // daemon-locally while the service is invisible on the wire (false green).
+        if advertiser.localNetworkDenied { return .orange }
         switch advertiser.state {
         case .idle:        return Color(white: 0.55)
         case .advertising: return .green
@@ -742,6 +795,9 @@ struct SettingsView: View {
     }
 
     private var bonjourLabel: String {
+        // Short form for the one-line status row (full message + recovery buttons
+        // render below it); never "Advertising as X" while denied.
+        if advertiser.localNetworkDenied { return "Local network access blocked by macOS" }
         switch advertiser.state {
         case .idle:                  return "Starting..."
         case .advertising(let name): return "Advertising as \"\(name)\""
@@ -2164,6 +2220,26 @@ struct SettingsView: View {
                         .foregroundColor(bonjourDotColor)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                }
+                // Local Network denied: guided recovery under the status line. Retry
+                // reuses the interface-picker rebuild path (advertiser restart +
+                // pairing listener re-bind) — granting alone does not self-heal.
+                if advertiser.localNetworkDenied {
+                    Text(localNetworkDeniedReason)
+                        .font(.system(size: 10))
+                        .foregroundColor(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 8) {
+                        Button("Open Privacy Settings") { LocalNetworkPermission.openSettings() }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                        Button("Retry") {
+                            BonjourAdvertiser.shared.restart()
+                            BonjourPairingService.shared.restartListening()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
                 }
             }
         }

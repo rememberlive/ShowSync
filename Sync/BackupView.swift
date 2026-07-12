@@ -1015,7 +1015,30 @@ struct BackupView: View {
                     Text("Network Discovery")
                         .font(.system(size: 11))
                         .foregroundColor(Color(white: 0.45))
-                    if case .advertising(let name) = advertiser.state {
+                    if advertiser.localNetworkDenied {
+                        // Local Network permission denied (macOS 15+): registration
+                        // confirms daemon-locally while the service is invisible on
+                        // the wire — never show the false green "Advertising as X".
+                        // Retry reuses the interface-picker rebuild path (granting
+                        // alone does not self-heal).
+                        Text(localNetworkDeniedReason)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(.orange)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 8) {
+                            Button("Open Privacy Settings") { LocalNetworkPermission.openSettings() }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                            Button("Retry") {
+                                BonjourAdvertiser.shared.restart()
+                                BonjourPairingService.shared.restartListening()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                        .padding(.top, 2)
+                    } else if case .advertising(let name) = advertiser.state {
                         Text(name)
                             .font(.system(size: 22, weight: .bold))
                             .foregroundColor(.white)

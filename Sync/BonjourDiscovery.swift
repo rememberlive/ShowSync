@@ -19,6 +19,23 @@ import ShowNetwork
 private let serviceType = "_rememberlivesync._tcp"
 private let pairingServiceType = "_syncpair._tcp"
 
+// macOS Local Network privacy denial (macOS 15+). When the user (or an MDM
+// profile) denies the Local Network permission, the mDNS daemon answers DNS-SD
+// calls with kDNSServiceErr_PolicyDenied (-65570). The .failed sinks map that
+// code to this canonical reason so the UI names the state and guides recovery
+// (Privacy Settings deep-link + Retry) instead of printing a generic error.
+let localNetworkDeniedReason = "macOS is blocking local network access for ShowSync"
+
+private func isLocalNetworkDenied(_ err: ShowNetworkError) -> Bool {
+    switch err {
+    case .registrationFailed(let code), .browseFailed(let code),
+         .resolveFailed(let code), .addressLookupFailed(let code):
+        return code == -65570  // kDNSServiceErr_PolicyDenied
+    default:
+        return false
+    }
+}
+
 func resolvePreferredInterface() -> Interface? {
     let mac = ConfigStore.shared.config.preferredInterfaceMAC
     if mac.isEmpty {
@@ -41,6 +58,15 @@ final class BonjourAdvertiser: ObservableObject {
     @Published var state: AdvertiserState = .idle
     @Published var confirmedName: String = ""
     @Published var verifyRequestNonce: String = ""
+
+    // Local Network denial (kDNSServiceErr_PolicyDenied). AUTHORITATIVE UI gate on
+    // the Backup: DNSServiceRegister can confirm daemon-locally while the service is
+    // invisible on the wire (empirically confirmed false green), so this flag — not
+    // `state` — decides whether "Advertising as X" may render. Set by either error
+    // sink that hears -65570 (this advertiser, or the pairing listener's browse —
+    // the reliable receiver); cleared when a fresh listen cycle begins
+    // (restartListening), so a re-grant + Retry recovers without a relaunch.
+    @Published var localNetworkDenied: Bool = false
 
     var pairAckDeviceId: String = ""
     var pairAckNonce: String = ""
@@ -85,7 +111,15 @@ final class BonjourAdvertiser: ObservableObject {
                         self.confirmedName = name
                         self.state = .advertising(name: name)
                     case .error(let err):
-                        self.state = .failed(reason: err.description)
+                        // Local Network denial → named state (belt-and-braces: the
+                        // register callback usually confirms even when denied; the
+                        // pairing listener's browse is the reliable receiver).
+                        if isLocalNetworkDenied(err) {
+                            self.localNetworkDenied = true
+                            self.state = .failed(reason: localNetworkDeniedReason)
+                        } else {
+                            self.state = .failed(reason: err.description)
+                        }
                     }
                 }
             }
@@ -334,7 +368,10 @@ final class BonjourBrowser: ObservableObject {
             resolvers.removeValue(forKey: name)
             services.removeAll { $0.id == name }
         case .error(let err):
-            state = .failed(reason: err.description)
+            // Local Network denial → named state (empirically confirmed: the browse
+            // callback DOES deliver kDNSServiceErr_PolicyDenied to this sink).
+            state = .failed(reason: isLocalNetworkDenied(err)
+                ? localNetworkDeniedReason : err.description)
         }
     }
 
@@ -843,6 +880,16 @@ final class BonjourPairingService: ObservableObject {
     // Fresh bind to the CURRENT preferred interface. startListening alone is
     // bind-once (guard browser == nil), so interface changes need this.
     func restartListening() {
+        // Fresh detection cycle for the Local Network denial flag: clear it here —
+        // if the permission is still denied, the new listener's browse error re-sets
+        // it on the first callback; if the user just granted it, this is what lets
+        // Retry recover without cycling adapters or relaunching (denial does not
+        // self-heal on grant). Deferred to the next runloop tick per repo idiom.
+        DispatchQueue.main.async {
+            if BonjourAdvertiser.shared.localNetworkDenied {
+                BonjourAdvertiser.shared.localNetworkDenied = false
+            }
+        }
         stopListening()
         startListening()
     }
@@ -878,8 +925,15 @@ final class BonjourPairingService: ObservableObject {
         case .removed(let name, _, _, _):
             resolvers[name]?.stop()
             resolvers.removeValue(forKey: name)
-        case .error:
-            break
+        case .error(let err):
+            // Backup-side Local Network denial detection: the advertiser's register
+            // callback confirms daemon-locally even when denied (false green), but
+            // this listener's browse — the same DNSServiceBrowse machinery as the
+            // Main's confirmed detection — receives kDNSServiceErr_PolicyDenied.
+            // Surface it on the advertiser flag that gates the Backup UI.
+            if isLocalNetworkDenied(err) {
+                BonjourAdvertiser.shared.localNetworkDenied = true
+            }
         }
     }
 

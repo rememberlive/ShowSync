@@ -38,6 +38,20 @@ enum RemoteLogin {
     }
 }
 
+// Local Network privacy (macOS 15+) — deep-link to System Settings → Privacy &
+// Security → Local Network, where the user re-enables ShowSync after a denial.
+// Extension scheme first (modern), legacy pane anchor as fallback — the same
+// candidates idiom as RemoteLogin.openSettings above.
+enum LocalNetworkPermission {
+    static func openSettings() {
+        let candidates = [
+            "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_LocalNetwork",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork"
+        ]
+        for s in candidates where NSWorkspace.shared.open(URL(string: s)!) { return }
+    }
+}
+
 func appVersion() -> String {
     let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
     let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
