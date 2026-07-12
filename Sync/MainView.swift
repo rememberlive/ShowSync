@@ -2024,6 +2024,16 @@ struct MainView: View {
                             Text("\(formatBytes(connectedBackup.freeSpaceBytes)) free")
                                 .font(.system(size: 10))
                                 .foregroundColor(isLow ? .orange : Color(white: 0.45))
+                        } else if store.config.discoveryMode == "automatic", !store.config.destinationIP.isEmpty {
+                            // Free space is TXT-only (live) — when the Backup's
+                            // advertisement is gone (quit/offline) the value is
+                            // UNKNOWN, not zero: show "?" per the honesty invariant
+                            // instead of silently dropping the row. Automatic mode
+                            // only — manual mode never had this row (its free space
+                            // lives in Settings via the ssh poll).
+                            Text("? free")
+                                .font(.system(size: 10))
+                                .foregroundColor(Color(white: 0.45))
                         }
                     }
 

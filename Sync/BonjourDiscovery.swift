@@ -366,6 +366,20 @@ final class BonjourBrowser: ObservableObject {
         case .removed(let name, _, _, _):
             resolvers[name]?.stop()
             resolvers.removeValue(forKey: name)
+            // Stale-flag fix: a goodbye for the currently-targeted peer means it is
+            // gone (the daemon sends goodbyes even on force-quit/crash) — clear
+            // reachability so the Sync gate and the "not reachable" hint tell the
+            // truth instead of staying armed against a dead peer. Routine advertiser
+            // restarts (TXT updates) also pass here: the matched re-resolve seconds
+            // later re-sets the flag (handleAutoReconnect), and while the popover is
+            // open the live ssh probe keeps the button armed, so a healthy peer never
+            // shows a false "unreachable". Config memory (name/IP/folder) is
+            // untouched — auto-reconnect adopts the peer again when it returns.
+            if isCurrentPeerReachable,
+               let removedIP = services.first(where: { $0.id == name })?.resolvedIP,
+               removedIP == ConfigStore.shared.config.destinationIP {
+                isCurrentPeerReachable = false
+            }
             services.removeAll { $0.id == name }
         case .error(let err):
             // Local Network denial → named state (empirically confirmed: the browse

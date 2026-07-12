@@ -715,14 +715,18 @@ struct SettingsView: View {
                     ? store.config.backupHostname
                     : store.config.lastBackupDiscoveryName
                 HStack(spacing: 8) {
-                    Image(systemName: "largecircle.fill.circle")
+                    // Grey dot, NOT the blue filled radio: this is a REMEMBERED
+                    // Backup that is not currently visible on the network (quit,
+                    // offline, or not yet re-discovered) — a live-selected look
+                    // here read as "present and selected" after the Backup quit.
+                    Image(systemName: "circle")
                         .font(.system(size: 12))
-                        .foregroundColor(.blue)
+                        .foregroundColor(Color(white: 0.45))
                     VStack(alignment: .leading, spacing: 1) {
                         Text(savedName.isEmpty ? "Saved Backup" : savedName)
                             .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(.white)
-                        Text(store.config.destinationIP)
+                            .foregroundColor(Color(white: 0.7))
+                        Text("\(store.config.destinationIP) · offline")
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundColor(labelColor)
                     }
