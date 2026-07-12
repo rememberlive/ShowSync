@@ -143,13 +143,19 @@ extension AppDelegate {
         let proc = Process()
         proc.environment   = env
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        proc.arguments = [
+        var copyArgs = [
             "-o", "StrictHostKeyChecking=no",
             "-o", "PasswordAuthentication=yes",
-            "-o", "PreferredAuthentications=password",
-            "--", "\(config.username)@\(config.destinationIP)",
-            remoteCmd
+            "-o", "PreferredAuthentications=password"
         ]
+        // Interface isolation: bind to the pinned NIC like every engine call —
+        // an unbound install could succeed over the wrong route.
+        if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
+           !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
+            copyArgs.insert(contentsOf: ["-b", bindIP], at: 0)
+        }
+        copyArgs.append(contentsOf: ["--", "\(config.username)@\(config.destinationIP)", remoteCmd])
+        proc.arguments = copyArgs
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError  = FileHandle.nullDevice
         proc.terminationHandler = { p in
@@ -176,13 +182,20 @@ extension AppDelegate {
         let config = ConfigStore.shared.config
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        proc.arguments = [
+        var verifyArgs = [
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=5",
-            "-o", "StrictHostKeyChecking=no",
-            "--", "\(config.username)@\(config.destinationIP)",
-            "exit"
+            "-o", "StrictHostKeyChecking=no"
         ]
+        // Interface isolation: VERDICT-PRODUCING call — an unbound probe could
+        // succeed over an unpinned route and mark the connection configured
+        // while the pinned route is broken. Bind like every engine call.
+        if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
+           !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
+            verifyArgs.insert(contentsOf: ["-b", bindIP], at: 0)
+        }
+        verifyArgs.append(contentsOf: ["--", "\(config.username)@\(config.destinationIP)", "exit"])
+        proc.arguments = verifyArgs
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError  = FileHandle.nullDevice
         proc.terminationHandler = { p in

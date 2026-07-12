@@ -249,7 +249,10 @@ struct DiscoveredBackup: Identifiable, Equatable {
     let destinationPath: String
     let effectiveDestinationPath: String
     let freeSpaceBytes: Int64
-    var isReachableOnSelectedInterface: Bool = true
+    // Default FALSE — unknown ≠ reachable. Always explicitly computed at
+    // construction (resolver branches), so this default never survives; it
+    // exists only so an accidental future construction path fails safe.
+    var isReachableOnSelectedInterface: Bool = false
     var backupDeviceId: String = ""
     var backupFingerprint: String = ""
     var username: String = ""  // Backup's macOS account name ("" = older Backup, no broadcast)
@@ -273,7 +276,16 @@ final class BonjourBrowser: ObservableObject {
 
     @Published var services: [DiscoveredBackup] = []
     @Published var state: BrowserState = .idle
-    @Published var isCurrentPeerReachable: Bool = true
+    // Default FALSE — unknown ≠ reachable. Reachability must be PROVEN by a live
+    // signal: a matched on-interface resolve (handleAutoReconnect sets true) or
+    // the live ssh probe (ORed into the sync gate and peerReachableForSync). The
+    // old factory-true default armed Sync at launch against a persisted address
+    // that never resolved (wrong network, dead cable session, peer off) — the
+    // same stale-true class as the goodbye fix, one level earlier. Accepted
+    // cost: a few-second arming window after launch/popover-open while the
+    // first resolve (~1-2s) or ssh probe (~2-3s) lands. Manual mode unaffected
+    // (the gate is automatic-only).
+    @Published var isCurrentPeerReachable: Bool = false
 
     var pairingAckCallback: ((String, String) -> Void)?
     var pairingNackCallback: ((String, String) -> Void)?

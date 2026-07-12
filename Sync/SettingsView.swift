@@ -1191,8 +1191,14 @@ struct SettingsView: View {
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        proc.arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no",
-                          "--", "\(username)@\(ip)", "echo -n '\(escaped)' > \(safeDestFile)"]
+        var renameArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no"]
+        // Interface isolation: bind to the pinned NIC like every engine call.
+        if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
+           !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
+            renameArgs.insert(contentsOf: ["-b", bindIP], at: 0)
+        }
+        renameArgs.append(contentsOf: ["--", "\(username)@\(ip)", "echo -n '\(escaped)' > \(safeDestFile)"])
+        proc.arguments = renameArgs
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError = FileHandle.nullDevice
         proc.terminationHandler = { p in
@@ -2750,13 +2756,23 @@ struct SettingsView: View {
         // Read config and free space in one SSH call
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        proc.arguments = [
+        var confirmArgs = [
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=3",
-            "-o", "StrictHostKeyChecking=no",
+            "-o", "StrictHostKeyChecking=no"
+        ]
+        // Interface isolation: VERDICT-PRODUCING call — an unbound confirm could
+        // succeed over an unpinned route and declare the destination confirmed
+        // while the pinned route is broken. Bind like every engine call.
+        if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
+           !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
+            confirmArgs.insert(contentsOf: ["-b", bindIP], at: 0)
+        }
+        confirmArgs.append(contentsOf: [
             "--", "\(username)@\(ip)",
             "cat \"$HOME/Library/Application Support/Sync/config_backup.json\" 2>/dev/null || echo '{}'"
-        ]
+        ])
+        proc.arguments = confirmArgs
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = FileHandle.nullDevice
@@ -2799,13 +2815,21 @@ struct SettingsView: View {
         let escapedPath = shellEscapeForDoubleQuotes(remotePath)
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        proc.arguments = [
+        var dfArgs = [
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=3",
-            "-o", "StrictHostKeyChecking=no",
+            "-o", "StrictHostKeyChecking=no"
+        ]
+        // Interface isolation: bind to the pinned NIC like every engine call.
+        if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
+           !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
+            dfArgs.insert(contentsOf: ["-b", bindIP], at: 0)
+        }
+        dfArgs.append(contentsOf: [
             "--", "\(username)@\(ip)",
             "df -k \"\(escapedPath)\" 2>/dev/null | awk 'NR==2 {print $4}'"
-        ]
+        ])
+        proc.arguments = dfArgs
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = FileHandle.nullDevice
@@ -2861,8 +2885,14 @@ struct SettingsView: View {
                 let remoteCmd = "if [ -f ~/.ssh/authorized_keys ]; then grep -vF '\(escapedPubKey)' ~/.ssh/authorized_keys > ~/.ssh/authorized_keys.tmp; mv ~/.ssh/authorized_keys.tmp ~/.ssh/authorized_keys; chmod 600 ~/.ssh/authorized_keys; fi"
                 let proc = Process()
                 proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-                proc.arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no",
-                                  "--", "\(username)@\(ip)", remoteCmd]
+                var removeArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no"]
+                // Interface isolation: bind to the pinned NIC like every engine call.
+                if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
+                   !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
+                    removeArgs.insert(contentsOf: ["-b", bindIP], at: 0)
+                }
+                removeArgs.append(contentsOf: ["--", "\(username)@\(ip)", remoteCmd])
+                proc.arguments = removeArgs
                 proc.standardOutput = FileHandle.nullDevice
                 proc.standardError = FileHandle.nullDevice
                 proc.terminationHandler = { p in
@@ -2891,9 +2921,15 @@ struct SettingsView: View {
             }
             let proc = Process()
             proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-            proc.arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no",
-                              "--", "\(username)@\(ip)",
-                              "echo '{\"mainId\":\"\(myId)\",\"nonce\":\"\(nonce)\"}' > \(safeDestFile)"]
+            var unpairArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no"]
+            // Interface isolation: bind to the pinned NIC like every engine call.
+            if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
+               !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
+                unpairArgs.insert(contentsOf: ["-b", bindIP], at: 0)
+            }
+            unpairArgs.append(contentsOf: ["--", "\(username)@\(ip)",
+                              "echo '{\"mainId\":\"\(myId)\",\"nonce\":\"\(nonce)\"}' > \(safeDestFile)"])
+            proc.arguments = unpairArgs
             proc.standardOutput = FileHandle.nullDevice
             proc.standardError = FileHandle.nullDevice
             proc.terminationHandler = { p in
