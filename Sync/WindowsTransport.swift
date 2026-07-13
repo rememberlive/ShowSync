@@ -1,7 +1,13 @@
 // Copyright © 2026 Remember Chaitezvi. All rights reserved.
 // Part of ShowSync — Remember Live.
 //
-// V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
+// V1.1 Mac-Main → Windows-Backup transport. HARDWARE COVERAGE (live ShowSync-Win,
+// 2026-07): PROVEN — discovery + pairing (both directions), sync happy path
+// (multi-file, subfolders, auto mode), fast verify, Confirm Destination,
+// drive-qualified/spaced destination paths, ±2 s mtime tolerance. NOT YET
+// EXERCISED — mid-sync cancel, unwritable-dest fallback, low-space refusal,
+// Backup-initiated verify. UNCONFIRMED — Check Files preview, deep verify,
+// manual-mode 3 s poll.
 //
 // Transport for a Mac Main pushing to a ShowSync-Win Backup (selected by the
 // platform=windows key in the Backup's TXT record, or by the manual-mode
@@ -17,8 +23,9 @@
 //     tolerance confirmed against ShowSync-Win (V1.1-SPEC.md §8);
 //   • speaks the identical signal-file protocol (.sync_start/.sync_progress/
 //     .sync_complete/.sync_refused/.verify_request/.verify_result — same names,
-//     same JSON payloads) that ShowSync-Win consumes 1:1 by specification
-//     (spec-confirmed, hardware-unproven; see V1.1-SPEC.md §8).
+//     same JSON payloads) that ShowSync-Win consumes 1:1 (sync signals
+//     hardware-proven via the happy path; verify-request/result and refusal
+//     signals not yet exercised — see the coverage note above).
 //
 // Remote paths use forward slashes (C:/Users/<user>/Sync/…). An empty or
 // home-relative destination resolves to "Sync" in the sshd home folder — the
@@ -33,7 +40,6 @@
 import Foundation
 import CryptoKit
 
-// V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
 final class WindowsTransport {
     static let shared = WindowsTransport()
     private init() {}

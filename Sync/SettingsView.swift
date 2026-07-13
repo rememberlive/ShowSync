@@ -98,7 +98,6 @@ struct SettingsView: View {
     }
     @State private var hasConfirmedDestinationThisConnection = false
     @State private var manualModeFreeSpace: Int64 = 0  // Free space read via SSH for manual mode
-    // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
     @State private var isEditingWindowsPath = false
     @State private var editingWindowsPath = ""
     @State private var isPairingStarting = false
@@ -1386,7 +1385,6 @@ struct SettingsView: View {
                         .font(.system(size: 11))
                     }
                 }
-                // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
                 // Explicit opt-in: a Windows Backup can't be auto-detected in manual mode (no TXT),
                 // and no coupling to ShowSync-Win's config layout in V1.1 (approved §8.1).
                 Toggle(isOn: Binding(
@@ -1491,7 +1489,6 @@ struct SettingsView: View {
                     }
                 }
 
-                // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
                 // Windows sibling of the Folder row above: the path is user-entered (forward
                 // slashes, e.g. C:/Users/name/Sync; empty = "Sync" in the sshd home folder),
                 // then write-tested over SFTP via the same Confirm Destination states.
@@ -2746,7 +2743,6 @@ struct SettingsView: View {
         let ip = store.config.destinationIP
         guard !username.isEmpty, !ip.isEmpty else { return }
 
-        // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
         // No remote config read on Windows (approved §8.1) — the user-entered path is
         // write-tested over SFTP instead. Gated here so the auto-confirm-on-reachable
         // callers route correctly too. No-flag path falls through, untouched.

@@ -232,7 +232,6 @@ final class SyncEngine: ObservableObject {
         syncTrace("[SyncTrace] 1 sync requested, mode=%@, remotePath='%@', usingFallback=%d, dryRunEnabled=%d, isAuto=%d",
               mode, syncRemotePath, usingFallback ? 1 : 0, config.dryRunEnabled ? 1 : 0, isAuto ? 1 : 0)
 
-        // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
         // platform=windows (TXT key / manual toggle) routes to the scp/sftp transport; the flag
         // is never set by a Mac Backup, so the fall-through below is today's path, untouched.
         if config.backupPlatform == "windows" {
@@ -656,7 +655,6 @@ final class SyncEngine: ObservableObject {
     }
 
     func cancel() {
-        // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
         // A Windows run never populates the private per-run fields below; it carries its own
         // metadata and cancel/cleanup. isSyncActive is false whenever no Windows transfer runs.
         if WindowsTransport.shared.isSyncActive {
@@ -711,7 +709,6 @@ final class SyncEngine: ObservableObject {
         guard verifyStatus != .verifying else { return }
         guard !status.isActive else { return }  // Verify yields to sync
 
-        // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
         if config.backupPlatform == "windows" {
             WindowsTransport.shared.startVerify(config: config)
             return
@@ -850,7 +847,6 @@ final class SyncEngine: ObservableObject {
     }
 
     func cancelVerify() {
-        // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
         if WindowsTransport.shared.isVerifyActive {
             WindowsTransport.shared.cancelVerify()
             return

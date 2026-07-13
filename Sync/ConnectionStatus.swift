@@ -92,7 +92,6 @@ final class ConnectionStatus: ObservableObject {
         let currentID = checkID
         let isManualMode = ConfigStore.shared.config.discoveryMode == "manual"
 
-        // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
         // Windows sshd has no POSIX cat/$HOME, so the manual-mode cat pipeline below would read
         // a live Windows Backup as unreachable. Gated early-exit: reachability + free space +
         // verify request come from one PowerShell call built by the transport module. The

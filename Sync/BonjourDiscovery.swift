@@ -326,7 +326,6 @@ struct DiscoveredBackup: Identifiable, Equatable {
     var backupDeviceId: String = ""
     var backupFingerprint: String = ""
     var username: String = ""  // Backup's macOS account name ("" = older Backup, no broadcast)
-    // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
     // "" = mac Backup (key never advertised by Mac Backups); "windows" = ShowSync-Win Backup.
     var platform: String = ""
 
@@ -534,7 +533,6 @@ final class BonjourBrowser: ObservableObject {
             let backupId = txt["backupId"] ?? ""
             let backupFP = txt["backupFP"] ?? ""
             let backupUsername = txt["username"] ?? ""  // "" = older Backup
-            // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
             // Absent key (every Mac Backup) → "" → existing behavior exactly.
             let peerPlatform = txt["platform"] ?? ""
 
@@ -643,7 +641,6 @@ final class BonjourBrowser: ObservableObject {
             if ConfigStore.shared.config.backupDestination != backup.destinationPath {
                 ConfigStore.shared.config.backupDestination = backup.destinationPath
             }
-            // V1.1 Windows-target path — UNTESTED against live Windows Backup as of this commit (Windows sshd pending).
             // Always adopted (absent key → "") so a stale "windows" flag self-heals
             // the moment a Mac Backup is (re)connected. Write-on-change, same idiom as above.
             if ConfigStore.shared.config.backupPlatform != backup.platform {
