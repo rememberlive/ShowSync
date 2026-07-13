@@ -157,29 +157,7 @@ final class NetworkInterfaceManager: ObservableObject {
         let boundIndex: UInt32? = (role == "backup")
             ? BonjourAdvertiser.shared.boundInterfaceIndex
             : BonjourBrowser.shared.boundInterfaceIndex
-        guard let bound = boundIndex else {
-            // Failed-restart hole: "service not running yet — normal start handles
-            // it" is TRUE at launch and FALSE after a failed restart (the post-sync
-            // TXT republish is stop+start; a failed start leaves bound nil with
-            // state .failed and nothing to recover it). When role/mode say the
-            // advertiser SHOULD be running, the NIC is resolvable, and the state is
-            // .failed (except the denied case — restart won't help there, and it
-            // has its own guided recovery), reconstruct instead of skipping.
-            if role == "backup",
-               ConfigStore.shared.config.discoveryMode == "automatic",
-               case .failed(let reason) = BonjourAdvertiser.shared.state,
-               reason != localNetworkDeniedReason {
-                let now = Date()
-                guard now.timeIntervalSince(lastReconstructAt) > 3 else { return }
-                lastReconstructAt = now
-                NSLog("[Discovery] advertiser dead ('%@') with NIC available — reconstructing", reason)
-                Task { @MainActor in
-                    BonjourAdvertiser.shared.restart()
-                    BonjourPairingService.shared.restartListening()
-                }
-            }
-            return
-        }
+        guard let bound = boundIndex else { return }   // service not running yet — normal start handles it
         guard bound != resolved.index else { return }  // same index — ShowNetwork self-recovers; don't thrash
 
         // Debounce rapid path events (multiple up-events on a single replug).
