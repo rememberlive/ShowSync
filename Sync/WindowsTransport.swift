@@ -70,6 +70,27 @@ final class WindowsTransport {
     private var lastProgressSignal = Date.distantPast
     private var progressSignalInFlight = false
 
+    // Remote-size progress poll — DELIBERATE COPY of the Mac engine's proven
+    // du-poll mechanism (MainView.swift startDuPolling/pollDu/runDu/stopDuPolling),
+    // NOT a refactor of it: at lock, protecting the hardware-tested Mac→Mac path
+    // beats DRY, so MainView's poll stays byte-identical and this path carries its
+    // own copy (shared-helper extraction is a v1.1 item). Same baseline
+    // subtraction, same clamps (cap at expected + never-backward — the monotonic
+    // clamp also absorbs a Windows-specific wrinkle: -ErrorAction SilentlyContinue
+    // skipping a transiently-locked file can make a raw sample DIP), same 5-sample
+    // rolling rate, same single-flight guard (a slow ~1-1.5s PowerShell poll
+    // stretches the cadence instead of overlapping). Replaces the echo-counting
+    // design, which never worked: sftp's batch echoes are block-buffered when
+    // stdout is a pipe and flush only at process exit (hardware-proven — 4×700MB,
+    // all four echoes in the final 6ms), so bytesDone stayed 0 all transfer.
+    private var winPollTimer: Timer?
+    private var winPollInFlight = false
+    private var winBaselineBytes: Int64 = 0
+    private var winExpectedBytes: Int64 = 0
+    private var winRateSamples: [(time: Date, bytes: Int64)] = []  // rolling window for smoothed rate
+    private var winLastWrittenProgress: (percent: Int, bytesDone: Int64)? = nil
+    private var winLastPolledTransferred: Int64 = 0  // honest failure reporting (replaces echo under-count)
+
     // MARK: - Manifest types
 
     private struct LocalFile {
@@ -303,6 +324,17 @@ final class WindowsTransport {
         psResolvePreamble(dest: dest) + """
 
         if (Test-Path -LiteralPath (Join-Path $r '\(SignalFile.refused)')) { 'YES' } else { 'NO' }
+        """
+    }
+
+    // Destination tree byte total for the progress poll — the Windows analogue of
+    // the Mac poll's `du -sk`. ⚠️ Returns BYTES directly (Length sums), NOT KB:
+    // the Mac multiplies by 1024 because du -sk reports KB — this must NOT.
+    // Missing dest / locked files → Sum is $null → [int64] coerces to 0.
+    private static func sizeScript(dest: String) -> String {
+        psResolvePreamble(dest: dest) + """
+
+        [int64]((Get-ChildItem -LiteralPath $r -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum)
         """
     }
 
@@ -628,8 +660,9 @@ final class WindowsTransport {
         }
     }
 
-    // Stage 4 — signal .sync_start, then the sftp transfer batch with streamed
-    // per-file progress (replaces the Mac path's ssh du polling).
+    // Stage 4 — signal .sync_start, then the sftp transfer batch, with progress
+    // from the remote-size poll (the ported Mac du-poll mechanism — see the poll
+    // fields above for why the old per-file echo counting was removed).
     private func beginTransfer(uploads: [LocalFile]) {
         let expectedBytes = uploads.reduce(Int64(0)) { $0 + $1.size }
         let expectedFiles = uploads.count
@@ -639,6 +672,10 @@ final class WindowsTransport {
             SyncEngine.shared.status = .syncing
             SyncEngine.shared.syncProgress = SyncProgress(
                 transferred: 0, expected: expectedBytes, startTime: self.runStart, bytesPerSec: nil)
+            // Ported du-poll: baseline snapshot first, then the 1s cadence —
+            // same launch ordering as the Mac path (poll starts, transfer follows).
+            self.winExpectedBytes = expectedBytes
+            self.startWinPolling()
         }
 
         // Same payload as the Mac engine's writeSyncStart.
@@ -681,57 +718,38 @@ final class WindowsTransport {
                                                 batchFile: batch, connectTimeout: 5)
         DispatchQueue.main.async { self.syncProc = proc }
 
-        // Streamed per-file results: sftp echoes each batch command ("sftp> put …")
-        // before executing it, so N echoes seen ⇒ files 1…N-1 completed.
-        var putEchoes = 0
-        var bytesDone: Int64 = 0
-        var completedFiles = 0
+        // Drain stdout — the handler MUST keep reading: a full pipe DEADLOCKS the
+        // sftp child and Mac→Windows transfers stop entirely. The batch echoes it
+        // drains are useless for progress (block-buffered when stdout is a pipe;
+        // they flush only at process exit — hardware-proven: 4×700MB showed all
+        // four echoes in the final 6ms), so they are read and discarded; progress
+        // comes from the remote-size poll started above.
         let handle = pipe.fileHandleForReading
-        handle.readabilityHandler = { [weak self] fh in
-            let chunk = fh.availableData
-            guard !chunk.isEmpty, let self else { return }
-            let text = String(data: chunk, encoding: .utf8) ?? ""
-            let newPuts = text.components(separatedBy: "sftp> put").count - 1
-            guard newPuts > 0 else { return }
-            for _ in 0..<newPuts {
-                putEchoes += 1
-                if putEchoes >= 2 {
-                    // The previous put finished when the next command echoed.
-                    let done = uploads[putEchoes - 2]
-                    bytesDone += done.size
-                    completedFiles += 1
-                    NSLog("[V1.1/Win] uploaded: %@ (%lld bytes)", done.rel, done.size)
-                }
-            }
-            let bytes = bytesDone
-            DispatchQueue.main.async { [weak self] in
-                guard let self, !self.syncCancelled else { return }
-                let elapsed = Date().timeIntervalSince(self.runStart)
-                SyncEngine.shared.syncProgress = SyncProgress(
-                    transferred: bytes, expected: expectedBytes,
-                    startTime: self.runStart,
-                    bytesPerSec: elapsed > 1 ? Double(bytes) / elapsed : nil)
-                self.maybeSignalProgress(bytesDone: bytes, bytesTotal: expectedBytes)
-            }
+        handle.readabilityHandler = { fh in
+            _ = fh.availableData   // read-and-discard; handler cleared in termination
         }
 
         proc.terminationHandler = { [weak self] p in
             handle.readabilityHandler = nil
             try? FileManager.default.removeItem(at: batch)
             guard let self else { return }
-            if self.syncCancelled { return }
             let exit = p.terminationStatus
-            // All puts done when the batch exits 0 (the last put has no trailing echo).
-            let files = exit == 0 ? uploads.count : completedFiles
-            let bytes = exit == 0 ? expectedBytes : bytesDone
-            if exit == 0 {
-                for i in max(0, putEchoes - 1)..<uploads.count {
-                    NSLog("[V1.1/Win] uploaded: %@ (%lld bytes)", uploads[i].rel, uploads[i].size)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.stopWinPolling()
+                if self.syncCancelled { return }
+                if exit == 0 {
+                    // Batch exit 0 ⇒ every put completed.
+                    NSLog("[V1.1/Win] sftp batch complete: %d files, %lld bytes", uploads.count, expectedBytes)
+                    self.checkRefusedThenFinish(uploadedFiles: uploads.count, uploadedBytes: expectedBytes)
+                } else {
+                    // Honest failure accounting: the last polled remote-size delta
+                    // replaces the old echo-derived count (which was always 0).
+                    let moved = self.winLastPolledTransferred
+                    NSLog("[V1.1/Win] sftp exit %d after ~%lld of %lld bytes moved", exit, moved, expectedBytes)
+                    self.finishSyncFailure(message: "Sync interrupted — files may be incomplete",
+                                           movedBytes: moved)
                 }
-                self.checkRefusedThenFinish(uploadedFiles: files, uploadedBytes: bytes)
-            } else {
-                NSLog("[V1.1/Win] sftp exit %d after %d/%d files", exit, files, uploads.count)
-                self.finishSyncFailure(message: "Sync interrupted — files may be incomplete")
             }
         }
 
@@ -742,7 +760,96 @@ final class WindowsTransport {
                 handle.readabilityHandler = nil
                 try? FileManager.default.removeItem(at: batch)
                 NSLog("[V1.1/Win] sftp launch failed: %@", error.localizedDescription)
+                DispatchQueue.main.async { self?.stopWinPolling() }
                 self?.finishSyncFailure(message: "Sync interrupted — files may be incomplete")
+            }
+        }
+    }
+
+    // MARK: - Remote-size progress poll (ported Mac du-poll — see field comments)
+
+    // Baseline snapshot, then 1s cadence. Called on main (Timer needs the main
+    // runloop), mirroring MainView.startDuPolling.
+    private func startWinPolling() {
+        winPollInFlight = false
+        winRateSamples = []
+        winLastWrittenProgress = nil
+        winLastPolledTransferred = 0
+        runWinSize { [weak self] baseline in
+            guard let self, self.isSyncActive, !self.syncCancelled else { return }
+            self.winBaselineBytes = baseline
+            self.winPollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+                self?.pollWinSize()
+            }
+        }
+    }
+
+    private func pollWinSize() {
+        runWinSize { [weak self] current in
+            guard let self, self.isSyncActive, !self.syncCancelled else { return }
+            let transferred = max(0, current - self.winBaselineBytes)
+            var capped = self.winExpectedBytes > 0 ? min(transferred, self.winExpectedBytes) : transferred
+            capped = max(capped, SyncEngine.shared.syncProgress?.transferred ?? 0)  // bar never moves backward
+            self.winLastPolledTransferred = capped
+
+            // Rolling rate window (5 samples ≈ 5 s) for a smoothed ETA
+            self.winRateSamples.append((time: Date(), bytes: capped))
+            if self.winRateSamples.count > 5 { self.winRateSamples.removeFirst() }
+            var rate: Double? = nil
+            if self.winRateSamples.count >= 3,
+               let first = self.winRateSamples.first, let last = self.winRateSamples.last {
+                let dt = last.time.timeIntervalSince(first.time)
+                if dt > 0 { rate = Double(last.bytes - first.bytes) / dt }
+            }
+
+            let newProgress = SyncProgress(transferred: capped,
+                                           expected: self.winExpectedBytes,
+                                           startTime: self.runStart,
+                                           bytesPerSec: rate)
+            if SyncEngine.shared.syncProgress != newProgress { SyncEngine.shared.syncProgress = newProgress }
+
+            let percent: Int = self.winExpectedBytes > 0
+                ? Int(min(Double(capped) / Double(self.winExpectedBytes), 1.0) * 100)
+                : -1
+            // Skip the signal write when nothing changed (stalled transfer);
+            // maybeSignalProgress adds its own 3s throttle on top.
+            if self.winLastWrittenProgress?.percent != percent || self.winLastWrittenProgress?.bytesDone != capped {
+                self.winLastWrittenProgress = (percent, capped)
+                self.maybeSignalProgress(bytesDone: capped, bytesTotal: self.winExpectedBytes)
+            }
+        }
+    }
+
+    private func stopWinPolling() {
+        winPollTimer?.invalidate()
+        winPollTimer = nil
+        winPollInFlight = false
+        winRateSamples = []
+    }
+
+    // One remote size sample via the existing PowerShell plumbing. Single-flight
+    // (ported duInFlight guard): a slow poll (~1-1.5s: ssh handshake + PowerShell
+    // cold start + tree walk) stretches the cadence to ~1.5-2s instead of
+    // overlapping. Completion always fires on main; failed/unparseable samples
+    // report 0 — harmless, exactly like the Mac poll: for the baseline it means
+    // whole-dest counting capped by expected, for a mid-run sample the monotonic
+    // never-backward clamp eats it.
+    private func runWinSize(completion: @escaping (Int64) -> Void) {
+        guard !winPollInFlight else { return }
+        winPollInFlight = true
+        let (proc, pipe, errPipe) = Self.makePowerShellProcess(
+            username: runUsername, ip: runIP,
+            script: Self.sizeScript(dest: runDest), connectTimeout: 3)
+        Self.run(proc, pipe: pipe, errPipe: errPipe, context: "size poll") { [weak self] status, output in
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.winPollInFlight = false
+                let line = output.split(whereSeparator: \.isNewline)
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .first { !$0.isEmpty } ?? ""
+                // BYTES directly (PowerShell Length sums) — no ×1024 (that is du -sk's KB quirk).
+                let bytes = (status == 0) ? (Int64(line) ?? 0) : 0
+                completion(bytes)
             }
         }
     }
@@ -825,6 +932,7 @@ final class WindowsTransport {
                       logOutcome: true)
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            self.stopWinPolling()
             self.isSyncActive = false
             self.syncProc = nil
             let engine = SyncEngine.shared
@@ -857,6 +965,7 @@ final class WindowsTransport {
         let duration = Int(Date().timeIntervalSince(runStart))
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            self.stopWinPolling()
             self.isSyncActive = false
             self.syncProc = nil
             let engine = SyncEngine.shared
@@ -872,11 +981,15 @@ final class WindowsTransport {
         }
     }
 
-    private func finishSyncFailure(message: String) {
+    // movedBytes: last polled remote-size delta at failure time — honest
+    // accounting for the transfer log (the old echo-derived count was always 0).
+    // Non-transfer failure sites (manifest, batch-file, launch) pass the default.
+    private func finishSyncFailure(message: String, movedBytes: Int64 = 0) {
         let duration = Int(Date().timeIntervalSince(runStart))
         removeSignalFiles([SignalFile.start, SignalFile.progress])
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            self.stopWinPolling()
             self.isSyncActive = false
             self.syncProc = nil
             let engine = SyncEngine.shared
@@ -886,7 +999,7 @@ final class WindowsTransport {
             ConfigStore.shared.iconState = .error
             ConfigStore.shared.appendTransferLogEntry(TransferLogEntry(
                 id: UUID(), date: Date(), trigger: self.runTrigger, result: "failed",
-                fileCount: 0, totalBytes: 0, durationSeconds: duration,
+                fileCount: 0, totalBytes: movedBytes, durationSeconds: duration,
                 destination: self.runDest, usedFallback: self.runUsedFallback))
         }
     }
@@ -895,6 +1008,7 @@ final class WindowsTransport {
     func cancelSync() {
         guard isSyncActive else { return }
         syncCancelled = true
+        stopWinPolling()
         syncProc?.terminate()
         syncProc = nil
         isSyncActive = false
