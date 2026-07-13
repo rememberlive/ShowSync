@@ -2288,6 +2288,18 @@ struct SettingsView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
+                // Attributability: surface the actual failure reason under the
+                // generic "Network discovery unavailable" label — previously the
+                // reason string was computed and discarded, so a post-sync
+                // advertiser death was a mystery. (The denied case has its own
+                // named block below and is excluded here.)
+                if case .failed(let reason) = advertiser.state,
+                   reason != localNetworkDeniedReason, !advertiser.localNetworkDenied {
+                    Text(reason)
+                        .font(.system(size: 10))
+                        .foregroundColor(labelColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 // Local Network denied: guided recovery under the status line. Retry
                 // reuses the interface-picker rebuild path (advertiser restart +
                 // pairing listener re-bind) — granting alone does not self-heal.

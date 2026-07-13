@@ -79,12 +79,65 @@ final class BonjourAdvertiser: ObservableObject {
     /// stop. Used by NetworkInterfaceManager to detect interface-index drift on cable replug.
     private(set) var boundInterfaceIndex: UInt32?
 
+    // Bounded restart-retry for a failed advertiser start (post-sync TXT republish
+    // death — updateTXTRecord is stop+start, and a transient start failure right
+    // after a transfer left the advertiser dead until relaunch: the Mac has no
+    // advertiser self-heal and drift-reconstruct skipped nil-bound services).
+    // Three one-shot retries (2s/5s/15s), each guarded at fire time so it can
+    // ONLY act on an already-dead advertiser the user still wants running —
+    // structurally incapable of touching a healthy one. Counter resets on any
+    // successful registration and on an explicit restart() (fresh user cycle).
+    private var startRetryAttempt = 0
+    private static let startRetryDelays: [TimeInterval] = [2, 5, 15]
+
     private init() {}
+
+    // All callers are main-thread (app lifecycle, Settings, Retry button, timers,
+    // and the retries themselves) — counter mutations stay on main.
+    private func scheduleStartRetry(reason: String) {
+        guard startRetryAttempt < Self.startRetryDelays.count else {
+            NSLog("[Advertiser] start failed (%@) — retries exhausted (%d), state stays failed",
+                  reason, startRetryAttempt)
+            return
+        }
+        let delay = Self.startRetryDelays[startRetryAttempt]
+        startRetryAttempt += 1
+        let attempt = startRetryAttempt
+        NSLog("[Advertiser] start failed: %@ — retry %d/%d in %.0fs",
+              reason, attempt, Self.startRetryDelays.count, delay)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            // Fire-time guards: dead advertiser only, still failed, and the user
+            // hasn't switched away (role/mode) meanwhile.
+            guard self.advertiser == nil,
+                  case .failed = self.state,
+                  ConfigStore.shared.effectiveRole == "backup",
+                  ConfigStore.shared.config.discoveryMode == "automatic" else { return }
+            NSLog("[Advertiser] retry %d/%d: restarting", attempt, Self.startRetryDelays.count)
+            self.start()
+        }
+    }
+
+    // Error-path-only teardown: releases a dead registration WITHOUT stop()'s
+    // async .idle state write, so the .failed state (and the retry guard that
+    // depends on it) survives. Never called on a healthy advertiser.
+    private func teardownAfterError() {
+        advertiser?.stop()
+        advertiser = nil
+        boundInterfaceIndex = nil
+    }
 
     func start() {
         guard advertiser == nil else { return }
         guard let iface = resolvePreferredInterface() else {
-            DispatchQueue.main.async { self.state = .failed(reason: "No network interface available") }
+            // Attributability (post-sync death was a mystery: reason computed,
+            // never logged) + bounded retry — a transient enumeration blip right
+            // after a transfer must not be permanent.
+            NSLog("[Advertiser] start failed: no usable network interface (resolvePreferredInterface nil)")
+            DispatchQueue.main.async {
+                self.state = .failed(reason: "No network interface available")
+                self.scheduleStartRetry(reason: "no usable network interface")
+            }
             return
         }
 
@@ -110,6 +163,7 @@ final class BonjourAdvertiser: ObservableObject {
                     case .registered(let name, _, _):
                         self.confirmedName = name
                         self.state = .advertising(name: name)
+                        self.startRetryAttempt = 0   // proof of life — fresh retry budget
                     case .error(let err):
                         // Local Network denial → named state (belt-and-braces: the
                         // register callback usually confirms even when denied; the
@@ -118,7 +172,16 @@ final class BonjourAdvertiser: ObservableObject {
                             self.localNetworkDenied = true
                             self.state = .failed(reason: localNetworkDeniedReason)
                         } else {
+                            // Attributability + recovery: the registration is dead
+                            // but the instance lingers — tear it down (error-path
+                            // teardown keeps .failed intact) so the bounded retry
+                            // (guarded on advertiser == nil) can act. No retry for
+                            // the denied case above: denial doesn't self-heal and
+                            // has its own guided recovery.
+                            NSLog("[Advertiser] registration error: %@", err.description)
+                            self.teardownAfterError()
                             self.state = .failed(reason: err.description)
+                            self.scheduleStartRetry(reason: err.description)
                         }
                     }
                 }
@@ -126,7 +189,13 @@ final class BonjourAdvertiser: ObservableObject {
             advertiser = adv
             boundInterfaceIndex = iface.index
         } catch {
-            DispatchQueue.main.async { self.state = .failed(reason: error.localizedDescription) }
+            // Attributability + bounded retry (transient daemon codes — e.g.
+            // ServiceNotRunning/DefunctConnection — must not be permanent).
+            NSLog("[Advertiser] start failed: %@", error.localizedDescription)
+            DispatchQueue.main.async {
+                self.state = .failed(reason: error.localizedDescription)
+                self.scheduleStartRetry(reason: error.localizedDescription)
+            }
         }
     }
 
@@ -138,6 +207,7 @@ final class BonjourAdvertiser: ObservableObject {
     }
 
     func restart() {
+        startRetryAttempt = 0   // fresh user/drift-initiated cycle → fresh retry budget
         stop()
         start()
     }
