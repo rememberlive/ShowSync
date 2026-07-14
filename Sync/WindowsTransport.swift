@@ -331,14 +331,33 @@ final class WindowsTransport {
         """
     }
 
-    // Destination tree byte total for the progress poll — the Windows analogue of
-    // the Mac poll's `du -sk`. ⚠️ Returns BYTES directly (Length sums), NOT KB:
-    // the Mac multiplies by 1024 because du -sk reports KB — this must NOT.
-    // Missing dest / locked files → Sum is $null → [int64] coerces to 0.
+    // Destination tree size for the progress poll — the Windows analogue of the
+    // Mac poll's `du -sk`. Returns KILOBYTES (the /1024 is in the string), so the
+    // caller multiplies by 1024 exactly like the Mac's runDu — do NOT add another
+    // conversion in the script.
+    //
+    // C11c — LIVE sizes, both mechanisms PROVEN on a live loopback (do not
+    // "simplify" this back to Measure-Object):
+    // • Directory ENUMERATION is STALE: while sftp-server.exe holds the open
+    //   write handle, NTFS does not update the size in the directory entry — the
+    //   enumerated objects' `.Length` read 0 KB for an ENTIRE 42 s transfer (any
+    //   machine where that appeared to work was metadata-flush luck).
+    // • A handle-open (FileShare ReadWrite|Delete) CANNOT work either — DISPROVEN:
+    //   sftp-server.exe opens uploads with NO SHARING, so every data-handle open
+    //   fails "being used by another process" and any fallback lands back on the
+    //   stale directory entry.
+    // • Per-file ATTRIBUTE QUERIES are LIVE: a fresh by-path FileInfo
+    //   (GetFileAttributesEx — not subject to sharing) hits the live FCB and
+    //   returned 654,639,104 bytes MID-WRITE while the handle-open was denied;
+    //   the poll climbed 0 → 30,560 KB → … → 2,097,152 KB on every tick.
+    // So: enumerate NAMES with Get-ChildItem, sum sizes via
+    // `New-Object System.IO.FileInfo $_.FullName` — NEVER the enumerated
+    // objects' `.Length`. Identical string ships in ShowSyncWin's
+    // RemoteCommands.DirKilobytes — one string, both repos, zero divergence.
     private static func sizeScript(dest: String) -> String {
         psResolvePreamble(dest: dest) + """
 
-        [int64]((Get-ChildItem -LiteralPath $r -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum)
+        $t=[int64]0; Get-ChildItem -LiteralPath $r -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { $t += (New-Object System.IO.FileInfo $_.FullName).Length }; [int64]($t/1024)
         """
     }
 
@@ -894,9 +913,10 @@ final class WindowsTransport {
                 let line = output.split(whereSeparator: \.isNewline)
                     .map { $0.trimmingCharacters(in: .whitespaces) }
                     .first { !$0.isEmpty } ?? ""
-                // BYTES directly (PowerShell Length sums) — no ×1024 (that is du -sk's KB quirk).
-                let bytes = (status == 0) ? (Int64(line) ?? 0) : 0
-                completion(bytes)
+                // sizeScript returns KILOBYTES (du -sk contract) → ×1024 here,
+                // exactly like the Mac poll's runDu (kb * 1024).
+                let kb = (status == 0) ? (Int64(line) ?? 0) : 0
+                completion(kb * 1024)
             }
         }
     }
@@ -1107,25 +1127,85 @@ final class WindowsTransport {
                     self.finishVerify(.failed("Verify failed — couldn't reach Backup"), resultCode: "error")
                     return
                 }
-                var differs = 0
                 if fast {
-                    // Fast: size + mtime ±2 s — the same comparator the sync diff uses.
-                    let remote = Self.parseManifest(output)
-                    differs = Self.computeUploads(local: local, remote: remote).count
-                } else {
-                    // Deep: SHA256 — Get-FileHash remotely, CryptoKit locally.
-                    let remote = Self.parseHashes(output)
-                    for f in local {
-                        if self.verifyCancelled { return }
-                        guard let remoteHash = remote[f.rel] else { differs += 1; continue }
-                        guard let localHash = Self.sha256Hex(path: f.abs) else { differs += 1; continue }
-                        if localHash != remoteHash { differs += 1 }
+                    // Fast: size + mtime ±2 s — the same comparator the sync diff
+                    // uses. Enumeration skips are rare here (listing is directory
+                    // metadata, not content locks) — missing stays 'differs' by
+                    // the comparator's contract.
+                    let differs = Self.computeUploads(local: local, remote: Self.parseManifest(output)).count
+                    if differs == 0 {
+                        self.finishVerify(.verified(deep: false), resultCode: "ok")
+                    } else {
+                        self.finishVerify(.differs(differs), resultCode: "differs:\(differs)")
+                    }
+                    return
+                }
+
+                // Deep: SHA256 — Get-FileHash remotely, CryptoKit locally.
+                // B7 (7390cda transcription): a file ABSENT from the hash sweep is
+                // NOT automatically a differ — Get-FileHash skips in-use files via
+                // -ErrorAction SilentlyContinue, and the old code reported a file
+                // we COULDN'T CHECK as a file that DIFFERS. Three honest outcomes
+                // now: matches / differs / couldn't-check, per-file reasons logged.
+                let remote = Self.parseHashes(output)
+                var differs = 0
+                var unchecked = 0
+                var absentFromSweep: [LocalFile] = []
+                for f in local {
+                    if self.verifyCancelled { return }
+                    guard let remoteHash = remote[f.rel] else { absentFromSweep.append(f); continue }
+                    guard let localHash = Self.sha256Hex(path: f.abs) else {
+                        unchecked += 1
+                        NSLog("[V1.1/Win] verify: couldn't read local '%@' — couldn't-check, not a differ", f.rel)
+                        continue
+                    }
+                    if localHash != remoteHash {
+                        differs += 1
+                        NSLog("[V1.1/Win] verify: '%@' differs (hash mismatch)", f.rel)
                     }
                 }
-                if differs == 0 {
-                    self.finishVerify(.verified(deep: !fast), resultCode: "ok")
-                } else {
-                    self.finishVerify(.differs(differs), resultCode: "differs:\(differs)")
+                // Differs outranks couldn't-check (the actionable verdict); a pure
+                // couldn't-check result must never render as differs or failure.
+                func finishDeep(_ d: Int, _ u: Int) {
+                    if d > 0 {
+                        if u > 0 { NSLog("[V1.1/Win] verify: %d differ + %d couldn't be checked (reporting differs)", d, u) }
+                        self.finishVerify(.differs(d), resultCode: "differs:\(d)")
+                    } else if u > 0 {
+                        self.finishVerify(.unchecked(u), resultCode: "error")
+                    } else {
+                        self.finishVerify(.verified(deep: true), resultCode: "ok")
+                    }
+                }
+                guard !absentFromSweep.isEmpty else { finishDeep(differs, unchecked); return }
+                // Disambiguate absentees with ONE metadata manifest: existence is
+                // directory metadata, readable even while content is locked.
+                // Present-but-unhashed → couldn't-check; truly absent → differs.
+                let (mp, mpipe, merr) = Self.makePowerShellProcess(
+                    username: self.runUsername, ip: self.runIP,
+                    script: Self.manifestScript(dest: self.runDest), connectTimeout: 5)
+                DispatchQueue.main.async { self.verifyProc = mp }
+                Self.run(mp, pipe: mpipe, errPipe: merr, context: "verify absentee manifest") { mStatus, mOutput in
+                    guard !self.verifyCancelled else { return }
+                    var d = differs, u = unchecked
+                    if mStatus == 0 {
+                        let names = Self.parseManifest(mOutput)
+                        for f in absentFromSweep {
+                            if names[f.rel] != nil {
+                                u += 1
+                                NSLog("[V1.1/Win] verify: '%@' exists but couldn't be hashed (in use?) — couldn't-check, not a differ", f.rel)
+                            } else {
+                                d += 1
+                                NSLog("[V1.1/Win] verify: '%@' missing on Backup — differs", f.rel)
+                            }
+                        }
+                    } else {
+                        // The disambiguation manifest itself failed — honest
+                        // couldn't-check for all absentees, never manufactured differs.
+                        u += absentFromSweep.count
+                        NSLog("[V1.1/Win] verify: absentee manifest failed (exit %d) — %d file(s) counted couldn't-check",
+                              mStatus, absentFromSweep.count)
+                    }
+                    finishDeep(d, u)
                 }
             }
         }
@@ -1160,6 +1240,7 @@ final class WindowsTransport {
             DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
                 if case .verified = engine.verifyStatus { engine.verifyStatus = .idle }
                 if case .differs = engine.verifyStatus { engine.verifyStatus = .idle }
+                if case .unchecked = engine.verifyStatus { engine.verifyStatus = .idle }
                 if case .failed = engine.verifyStatus { engine.verifyStatus = .idle }
             }
         }

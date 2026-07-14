@@ -86,6 +86,10 @@ enum VerifyStatus: Equatable {
     case verifying
     case verified(deep: Bool)   // deep = checksum (-avc); false = fast size+modtime (-av)
     case differs(Int)  // Number of files that differ
+    // B7 (7390cda transcription): files the sweep COULDN'T CHECK (in use /
+    // unreadable) — NOT a mismatch. A file we couldn't check must never be
+    // reported as a file that differs.
+    case unchecked(Int)
     case failed(String)
 
     var color: Color {
@@ -94,6 +98,7 @@ enum VerifyStatus: Equatable {
         case .verifying: return .yellow
         case .verified:  return .green
         case .differs:   return .orange
+        case .unchecked: return .orange
         case .failed:    return .red
         }
     }
@@ -104,6 +109,7 @@ enum VerifyStatus: Equatable {
         case .verifying:        return "Verifying… (checks every file)"
         case .verified(let deep): return deep ? "Verified — all files match" : "Verified — sizes & dates match"
         case .differs(let n):   return "\(n) file\(n == 1 ? "" : "s") differ — re-sync recommended"
+        case .unchecked(let n): return "\(n) file\(n == 1 ? "" : "s") couldn't be checked — verify again in a moment"
         case .failed(let msg):  return msg
         }
     }
@@ -811,6 +817,13 @@ final class SyncEngine: ObservableObject {
                             self.verifyStatus = .differs(differCount)
                             resultCode = "differs:\(differCount)"
                         }
+                    } else if p.terminationStatus == 23 || p.terminationStatus == 24 {
+                        // B7 twin: rsync 23/24 = PARTIAL error — some files couldn't
+                        // be read/checked (permissions, vanished mid-scan), NOT a
+                        // dead connection. 'Couldn't reach Backup' was a wrong
+                        // diagnosis for a reachable Backup with unreadable files.
+                        self.verifyStatus = .failed("Verify incomplete — some files couldn't be checked")
+                        resultCode = "error"
                     } else {
                         // SSH/connection failure
                         self.verifyStatus = .failed("Verify failed — couldn't reach Backup")
@@ -827,6 +840,7 @@ final class SyncEngine: ObservableObject {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
                         if case .verified = self?.verifyStatus { self?.verifyStatus = .idle }
                         if case .differs = self?.verifyStatus { self?.verifyStatus = .idle }
+                        if case .unchecked = self?.verifyStatus { self?.verifyStatus = .idle }
                         if case .failed = self?.verifyStatus { self?.verifyStatus = .idle }
                     }
                 }
@@ -1236,21 +1250,36 @@ final class SyncEngine: ObservableObject {
         return nil
     }
 
+    // C11a — ATOMIC signal writes (a535d11's exact POSIX shape, ported): a bare
+    // `echo '{…}' > final` is truncate-then-write, leaving the file EMPTY for
+    // microseconds per write — the last non-atomic writer in the fleet after the
+    // Windows writer went atomic. Write to "name.tmp" then `mv -f` into place:
+    // mv within one directory is an atomic rename on APFS, so the reader sees the
+    // old payload or the new payload, never a torn one. Readers key on exact
+    // filenames — the transient .tmp is invisible to them.
+    private static func atomicSignalWrite(_ payload: String, dir: String, name: String) -> String {
+        "echo '\(payload)' > \"\(dir)/\(name).tmp\" && mv -f \"\(dir)/\(name).tmp\" \"\(dir)/\(name)\""
+    }
+
     private func writeSyncStart(totalBytes: Int64, totalFiles: Int) {
         let escaped = remoteShellPath(syncRemotePath)  // R2: "~/Sync" → "$HOME/Sync" (tilde won't expand in quotes)
-        sshWrite("echo '{\"totalBytes\":\(totalBytes),\"totalFiles\":\(totalFiles)}' > \"\(escaped)/\(SignalFile.start)\"", label: SignalFile.start)
+        sshWrite(Self.atomicSignalWrite("{\"totalBytes\":\(totalBytes),\"totalFiles\":\(totalFiles)}",
+                                        dir: escaped, name: SignalFile.start), label: SignalFile.start)
     }
 
     // Extended payload: bytesDone/bytesTotal let the Backup draw a bar + ETA.
     // percent -1 / bytesTotal 0 = delta unknown (estimate pending or failed).
     private func writeSyncProgress(percent: Int, bytesDone: Int64, bytesTotal: Int64) {
         let escaped = remoteShellPath(syncRemotePath)  // R2: "~/Sync" → "$HOME/Sync" (tilde won't expand in quotes)
-        sshWrite("echo '{\"percent\":\(percent),\"bytesDone\":\(bytesDone),\"bytesTotal\":\(bytesTotal)}' > \"\(escaped)/\(SignalFile.progress)\"", label: SignalFile.progress)
+        sshWrite(Self.atomicSignalWrite("{\"percent\":\(percent),\"bytesDone\":\(bytesDone),\"bytesTotal\":\(bytesTotal)}",
+                                        dir: escaped, name: SignalFile.progress), label: SignalFile.progress)
     }
 
     private func writeSyncComplete(totalFiles: Int, totalBytes: Int64, duration: Int) {
         let escaped = remoteShellPath(syncRemotePath)  // R2: "~/Sync" → "$HOME/Sync" (tilde won't expand in quotes)
-        sshWrite("echo '{\"totalFiles\":\(totalFiles),\"totalBytes\":\(totalBytes),\"duration\":\(duration)}' > \"\(escaped)/\(SignalFile.complete)\"; rm -f \"\(escaped)/\(SignalFile.start)\" \"\(escaped)/\(SignalFile.progress)\"", label: SignalFile.complete)
+        sshWrite(Self.atomicSignalWrite("{\"totalFiles\":\(totalFiles),\"totalBytes\":\(totalBytes),\"duration\":\(duration)}",
+                                        dir: escaped, name: SignalFile.complete)
+                 + "; rm -f \"\(escaped)/\(SignalFile.start)\" \"\(escaped)/\(SignalFile.progress)\"", label: SignalFile.complete)
     }
 
     private func cleanupSignalFiles() {
@@ -1275,7 +1304,12 @@ final class SyncEngine: ObservableObject {
         let remotePath = usingFallback ? "~/Sync" : (config.backupDestination.isEmpty ? "~/Sync" : config.backupDestination)
         let escaped = remoteShellPath(remotePath)  // R2: "~/Sync" → "$HOME/Sync" (tilde won't expand in quotes)
         let timestamp = Int(Date().timeIntervalSince1970)
-        let cmd = "echo '{\"result\":\"\(result)\",\"ts\":\(timestamp)}' > \"\(escaped)/\(SignalFile.verifyResult)\"; rm -f \"\(escaped)/\(SignalFile.verifyRequest)\""
+        // C11a: atomic write (see atomicSignalWrite) — a torn .verify_result was
+        // the phantom-'Verify failed' vector on the reader side; now closed at
+        // the writer too.
+        let cmd = Self.atomicSignalWrite("{\"result\":\"\(result)\",\"ts\":\(timestamp)}",
+                                         dir: escaped, name: SignalFile.verifyResult)
+            + "; rm -f \"\(escaped)/\(SignalFile.verifyRequest)\""
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
