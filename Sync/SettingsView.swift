@@ -1174,6 +1174,49 @@ struct SettingsView: View {
 
         let username = store.config.username
         let ip = store.config.destinationIP
+
+        // BUG A (rename corruption): the POSIX line below — `echo -n '<name>' > file`
+        // — runs under cmd.exe on a Windows Backup, where echo has no -n flag and
+        // single quotes are literal characters: cmd wrote "-n 'YourNewName'"
+        // verbatim into the request. Deliver the plain-name payload via the
+        // transport's atomic, shell-free sftp signal write instead. Mac Backups
+        // keep the proven POSIX path below, untouched.
+        if store.config.backupPlatform == "windows" {
+            let normalized = WindowsTransport.normalizeRemotePath(store.config.backupDestination)
+            WindowsTransport.putSignalFile(
+                username: username, ip: ip,
+                dest: normalized.isEmpty ? "Sync" : normalized,
+                name: SignalFile.renameRequest,
+                contents: newName
+            ) { status, output in
+                Task { @MainActor in
+                    guard renameGeneration == thisGen else { return }
+                    if status == 0 {
+                        // Same optimistic-update semantics as the POSIX path below.
+                        ConfigStore.shared.config.lastBackupDiscoveryName = newName
+                        BonjourBrowser.shared.noteRenamePending(oldName: oldName, newName: newName)
+                        renameState = .renamed
+                        try? await Task.sleep(nanoseconds: 2_000_000_000)
+                        if renameState == .renamed && renameGeneration == thisGen { renameState = .idle }
+                    } else {
+                        NSLog("[V1.1/Win] rename request write FAILED (exit %d): %@",
+                              status, output.trimmingCharacters(in: .whitespacesAndNewlines))
+                        renameState = .failed
+                        try? await Task.sleep(nanoseconds: 3_000_000_000)
+                        if renameState == .failed && renameGeneration == thisGen { renameState = .idle }
+                    }
+                }
+            }
+            // Same 30s settling-window close as the POSIX path's fallback timeout.
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                guard renameGeneration == thisGen else { return }
+                if case .pending = renameState { renameState = .failed }
+                BonjourBrowser.shared.clearRenameSettling()
+            }
+            return
+        }
+
         let remotePath = store.config.backupDestination.isEmpty ? "~/Sync" : store.config.backupDestination
         let escaped = newName.replacingOccurrences(of: "'", with: "'\\''")
 

@@ -61,6 +61,10 @@ final class WindowsTransport {
     // transfer-log entry read these instead.
     private var runTrigger = "manual"
     private var runDest = "Sync"
+    // The raw configured destination string this run targeted (pre-normalization)
+    // — the key lastRealDestWriteTest is recorded under, so the first-hand
+    // verdict string-matches what reconcileFallback receives from TXT adoption.
+    private var runConfiguredDest = ""
     private var runStart = Date()
     private var runUsername = ""
     private var runIP = ""
@@ -457,10 +461,13 @@ final class WindowsTransport {
     }
 
     // Core signal-write primitive: the same sftp batch shape that lands
-    // .sync_start/.sync_complete on ShowSync-Win. Static so the engine's
-    // writeVerifyResult can use it outside a WindowsTransport-driven run.
+    // .sync_start/.sync_complete on ShowSync-Win. Static (and internal) so the
+    // engine's writeVerifyResult AND control-plane writers (the Settings rename —
+    // BUG A: its POSIX `echo -n '…' > file` ran under cmd.exe, which has no -n
+    // and treats single quotes as literals, corrupting the delivered name) can
+    // use it outside a WindowsTransport-driven run.
     // Completion receives the sftp exit status and combined stdout/stderr.
-    private static func putSignalFile(username: String, ip: String, dest: String,
+    static func putSignalFile(username: String, ip: String, dest: String,
                                       name: String, contents: String,
                                       removing: [String] = [],
                                       completion: @escaping (Int32, String) -> Void) {
@@ -552,8 +559,18 @@ final class WindowsTransport {
         runTrigger = isAuto ? "auto" : (isPush ? "push" : "manual")
         runUsername = config.username
         runIP = config.destinationIP
-        runUsedFallback = SyncEngine.shared.usingFallback
-        runDest = Self.effectiveDest(config.backupDestination, usingFallback: runUsedFallback)
+        // BUG C fix — the Mac engine's own written rule now applies here too:
+        // fallback is decided by THIS attempt's write-test, not a cached flag.
+        // The old `runDest = effectiveDest(_, usingFallback: cached)` self-sealed:
+        // once latched, every later sync derived runDest = "Sync" from the flag,
+        // the write-test then tested "Sync" (writable → no news), and the only
+        // self-clear was gated `runDest != "Sync"` — unreachable forever. Both
+        // sync AND verify silently redirected to the home folder on a custom
+        // destination, and verify green-lit the wrong folder. Only a relaunch
+        // (fresh SyncEngine, usingFallback=false) broke the loop.
+        runUsedFallback = false
+        runConfiguredDest = config.backupDestination
+        runDest = Self.effectiveDest(config.backupDestination, usingFallback: false)
         runStart = Date()
         lastProgressSignal = .distantPast
         progressSignalInFlight = false
@@ -627,12 +644,27 @@ final class WindowsTransport {
             try? FileManager.default.removeItem(at: tmp)
             try? FileManager.default.removeItem(at: batch)
             guard let self, !self.syncCancelled else { return }
+            if status == 0 {
+                // First-hand verdict: the configured dest IS writable. Record it
+                // for the 2ae7839 reconcile (this transport previously never fed
+                // lastRealDestWriteTest — the flag could be set here but no
+                // first-hand truth ever countered a stale advertisement) and
+                // self-heal a latched flag, mirroring the Mac write-test exactly.
+                let configuredDest = self.runConfiguredDest
+                DispatchQueue.main.async {
+                    SyncEngine.shared.lastRealDestWriteTest = (configuredDest, true)
+                    if SyncEngine.shared.usingFallback { SyncEngine.shared.usingFallback = false }
+                }
+            }
             if status != 0 {
                 if output.contains("sftp>") && self.runDest != "Sync" {
                     // Connected but couldn't write → same fallback as the Mac path.
                     NSLog("[V1.1/Win] Destination unwritable, falling back to Sync (home folder)")
                     let previousDest = self.runDest
+                    let configuredDest = self.runConfiguredDest
                     DispatchQueue.main.async {
+                        // First-hand verdict: the configured dest is NOT writable.
+                        SyncEngine.shared.lastRealDestWriteTest = (configuredDest, false)
                         self.runDest = "Sync"
                         self.runUsedFallback = true
                         SyncEngine.shared.usingFallback = true

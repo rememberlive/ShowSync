@@ -630,8 +630,21 @@ final class BonjourBrowser: ObservableObject {
         let nameMatch = !config.lastBackupDiscoveryName.isEmpty && backup.id == config.lastBackupDiscoveryName
         let ipMatch = !config.lastBackupIP.isEmpty && backup.resolvedIP == config.lastBackupIP
         let isCurrentConnection = !config.destinationIP.isEmpty && backup.resolvedIP == config.destinationIP
+        // Fourth matcher (BUG B — trust-store re-adoption): an intervening session
+        // against a different Backup overwrites all three config matchers above,
+        // but the trust store still holds the peer's identity — a PAIRED Backup
+        // that reappears must re-adopt without a re-pair ceremony. Gated to fire
+        // ONLY when no destination is currently adopted, so it heals the
+        // nothing-adopted state and can never flap an active connection between
+        // two paired Backups. The trust store is the only memory that survives
+        // an intervening peer.
+        let trustMatch = config.destinationIP.isEmpty
+            && !backup.backupDeviceId.isEmpty
+            && ConfigStore.shared.trustedPeers.contains {
+                $0.peerDeviceId == backup.backupDeviceId && $0.role == .backup
+            }
 
-        if nameMatch || ipMatch || isCurrentConnection {
+        if nameMatch || ipMatch || isCurrentConnection || trustMatch {
             if config.destinationIP != backup.resolvedIP || config.backupHostname != backup.hostname {
                 ConfigStore.shared.config.destinationIP = backup.resolvedIP
                 ConfigStore.shared.config.backupHostname = backup.hostname
