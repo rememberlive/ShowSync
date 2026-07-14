@@ -485,6 +485,15 @@ final class ReceiveMonitor: ObservableObject {
         return ConfigStore.shared.config.destinationFolder
     }
 
+    // PARSE-BEFORE-DELETE retry caps (860c766 transcription from the Windows
+    // reader): a torn read of a signal file must not consume it — leave it for
+    // the next 0.5s poll, bounded (cap 4 ≈ 2s) so a genuinely corrupt file can't
+    // pin the handler forever. Each counter is touched only inside its own
+    // handler's serialized flow (single-flight via isChecking).
+    private var verifyResultParseRetries = 0
+    private var unpairParseRetries = 0
+    private var renameReadRetries = 0
+
     private var pollTimer:   Timer?
     private var isChecking:  Bool = false
     var stopAfterTransfer:   Bool = false
@@ -774,11 +783,22 @@ final class ReceiveMonitor: ObservableObject {
             if fm.fileExists(atPath: renamePath.path) {
                 let content = (try? String(contentsOf: renamePath, encoding: .utf8))?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                try? fm.removeItem(at: renamePath) // Cleanup immediately
-                if Self.isValidBonjourName(content) {
-                    DispatchQueue.main.async {
-                        ConfigStore.shared.config.networkDiscoveryName = content
-                        BonjourAdvertiser.shared.restart()
+                // Partial parse-before-delete (860c766 transcription, honest limit):
+                // the payload is an UNFRAMED plain string, so a truncated-but-
+                // nonempty torn read is undetectable — only the empty/unreadable
+                // case can be retried. Empty → leave the file for the next 0.5s
+                // poll, capped; nonempty proceeds as before.
+                if content.isEmpty, let self, self.renameReadRetries < 4 {
+                    self.renameReadRetries += 1
+                    // leave the file; next poll retries
+                } else {
+                    self?.renameReadRetries = 0
+                    try? fm.removeItem(at: renamePath) // Cleanup after read settles
+                    if Self.isValidBonjourName(content) {
+                        DispatchQueue.main.async {
+                            ConfigStore.shared.config.networkDiscoveryName = content
+                            BonjourAdvertiser.shared.restart()
+                        }
                     }
                 }
             }
@@ -790,10 +810,15 @@ final class ReceiveMonitor: ObservableObject {
             if fm.fileExists(atPath: unpairPath.path) {
                 let content = (try? String(contentsOf: unpairPath, encoding: .utf8))?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                try? fm.removeItem(at: unpairPath) // Cleanup immediately
+                // PARSE-BEFORE-DELETE (860c766 transcription): a torn read of the
+                // JSON silently dropped the unpair request — the Backup kept
+                // trusting a forgotten Main. Parse first; torn → leave the file
+                // for the next 0.5s poll, capped.
                 if let data = content.data(using: .utf8),
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let mainId = json["mainId"] as? String, !mainId.isEmpty {
+                    self?.unpairParseRetries = 0
+                    try? fm.removeItem(at: unpairPath)
                     DispatchQueue.main.async {
                         if let peer = ConfigStore.shared.trustedPeers.first(where: { $0.peerDeviceId == mainId && $0.role == .main }) {
                             _ = ConfigStore.shared.unpairPeer(peerId: peer.id)
@@ -802,6 +827,14 @@ final class ReceiveMonitor: ObservableObject {
                             NSLog("[Backup] Ignored unpair request from unknown deviceId: %@", mainId)
                         }
                     }
+                } else if let self {
+                    self.unpairParseRetries += 1
+                    if self.unpairParseRetries >= 4 {
+                        NSLog("[Backup] .sync_unpair_request unparseable after %d polls — discarding", self.unpairParseRetries)
+                        self.unpairParseRetries = 0
+                        try? fm.removeItem(at: unpairPath)
+                    }
+                    // else: leave the file; next poll retries
                 }
             }
 
@@ -852,11 +885,30 @@ final class ReceiveMonitor: ObservableObject {
             if fm.fileExists(atPath: verifyResultPath.path) {
                 let content = (try? String(contentsOf: verifyResultPath, encoding: .utf8))?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                try? fm.removeItem(at: verifyResultPath)
-                let status = Self.parseVerifyResult(content)
+                // PARSE-BEFORE-DELETE (860c766 transcription): the old order was
+                // read → DELETE → parse, so a torn read (writer mid-write) reported
+                // 'Verify failed — invalid response' for a SUCCESSFUL verify — the
+                // worst wrong answer in the product — with the file already deleted
+                // and the nonce cleared, so nothing retried. Parse FIRST; torn →
+                // leave the file for the next 0.5s poll, capped so a genuinely
+                // corrupt file can't pin us (the capped path is the old behavior,
+                // just ~2s later and logged).
+                let parsed = Self.parseVerifyResult(content)
                 Task { @MainActor [weak self] in
                     self?.isChecking = false
                     guard let self else { return }
+                    let status: BackupVerifyStatus
+                    if let parsed {
+                        self.verifyResultParseRetries = 0
+                        status = parsed
+                    } else {
+                        self.verifyResultParseRetries += 1
+                        guard self.verifyResultParseRetries >= 4 else { return }  // leave file; retry next poll
+                        NSLog("[Backup] .verify_result unparseable after %d polls — treating as failed", self.verifyResultParseRetries)
+                        self.verifyResultParseRetries = 0
+                        status = .failed("Verify failed — invalid response")
+                    }
+                    try? FileManager.default.removeItem(at: verifyResultPath)
                     self.verifyStatus = status
                     self.pendingVerifyNonce = ""  // audit §4: disarm the 90 s timeout for this request
                     // SYNC-SPEC §8.10: handshake complete — stop advertising the
@@ -883,7 +935,29 @@ final class ReceiveMonitor: ObservableObject {
             if fm.fileExists(atPath: progressPath.path) {
                 let content = (try? String(contentsOf: progressPath, encoding: .utf8))?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let progress = Self.parseProgressFile(content)
+                // KEEP-LAST-GOOD (860c766 transcription): a torn sample previously
+                // adopted (-1,-1,-1) — the receive UI collapsed to zero/indeterminate
+                // mid-transfer AND the fake field change refreshed the stall
+                // watchdog. Now: unparseable → keep the last good values; the two
+                // Windows-fix subtleties carried over: (a) a torn FIRST sample must
+                // still transition into Receiving (state/icon/isSyncing don't wait
+                // for a clean sample); (b) a torn sample must NOT refresh
+                // lastProgressTime — no proof of life for the stall watchdog.
+                guard let progress = Self.parseProgressFile(content) else {
+                    Task { @MainActor [weak self] in
+                        self?.isChecking = false
+                        guard let self else { return }
+                        if self.state != .receiving {
+                            self.state = .receiving
+                            self.receivingStartTime = Date()
+                            self.receiveInterruptedNotice = nil
+                            ConfigStore.shared.isSyncing = true
+                            ConfigStore.shared.iconState = .receiving
+                        }
+                        // Deliberately no lastProgressTime refresh here.
+                    }
+                    return
+                }
                 Task { @MainActor [weak self] in
                     self?.isChecking = false
                     guard let self else { return }
@@ -1016,10 +1090,13 @@ final class ReceiveMonitor: ObservableObject {
 
     // Extended payload {"percent","bytesDone","bytesTotal"}; falls back to
     // percent-only (older Mains) — bytes report -1 = unknown.
-    private static func parseProgressFile(_ content: String) -> (percent: Int, bytesDone: Int64, bytesTotal: Int64) {
+    // nil = torn/unreadable JSON (keep-last-good: caller preserves the previous
+    // values and does NOT refresh the stall watchdog). Was: (-1,-1,-1), which the
+    // caller adopted as if it were data.
+    private static func parseProgressFile(_ content: String) -> (percent: Int, bytesDone: Int64, bytesTotal: Int64)? {
         guard let data = content.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return (-1, -1, -1)
+            return nil
         }
         let rawPct = (json["percent"] as? NSNumber)?.intValue ?? -1
         let pct = rawPct < 0 ? -1 : max(0, min(100, rawPct))
@@ -1028,11 +1105,13 @@ final class ReceiveMonitor: ObservableObject {
         return (pct, done, total <= 0 ? -1 : total)
     }
 
-    private static func parseVerifyResult(_ content: String) -> BackupVerifyStatus {
+    // nil = torn/unreadable (parse-before-delete: caller leaves the file and
+    // retries on the next poll, capped). Was: a hard .failed for any torn read.
+    private static func parseVerifyResult(_ content: String) -> BackupVerifyStatus? {
         guard let data = content.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let result = json["result"] as? String else {
-            return .failed("Verify failed — invalid response")
+            return nil
         }
         if result == "ok" {
             return .verified
