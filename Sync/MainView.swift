@@ -1062,6 +1062,24 @@ final class SyncEngine: ObservableObject {
     private var rateSamples: [(time: Date, bytes: Int64)] = []  // rolling window for smoothed rate
     private var lastWrittenProgress: (percent: Int, bytesDone: Int64)? = nil
 
+    // B6 — C4 stall watchdog (port of ShowSyncWin 987dfa6; twin in
+    // WindowsTransport): ServerAlive only catches dead TRANSPORT — a
+    // keepalive-passing wedge mid-file hung the sync until a human cancelled.
+    // A duration ceiling cannot be made safe (10 GB at 1 MB/s ≈ 2.8 h), so this
+    // is a STALL timeout: 120 s of ZERO raw remote-byte growth (du-observed,
+    // pre-clamp — never the UI-capped value, which pins at the estimate near the
+    // end) while rsync is alive. One process carries the whole batch, so growth
+    // from the next file carries the clock (Windows' per-file re-arm, mapped).
+    // Rides the EXISTING 1 s du tick, evaluated BEFORE the du in-flight guard so
+    // a fully dead network still trips it. On fire: terminate rsync — the
+    // EXISTING terminationHandler failure path takes over (interrupted status,
+    // signal cleanup, failed log entry). Same truncated file a manual Cancel
+    // leaves; the next sync re-pushes it.
+    private static let transferStallTimeout: TimeInterval = 120
+    private var transferStallAbort = false
+    private var lastRawTransferredBytes: Int64 = 0
+    private var lastTransferProgressAt = Date()
+
     // Pre-sync transfer estimate — runs concurrently with the write-test and never
     // delays or blocks the sync. Parses the transfer DELTA ("Total transferred file
     // size"), not the full source size (parseTotalSize reads the wrong field for
@@ -1141,6 +1159,11 @@ final class SyncEngine: ObservableObject {
         duInFlight = false
         rateSamples = []
         lastWrittenProgress = nil
+        // B6: watchdog baseline — armed at poll start so versioning (own 30/45/60 s
+        // caps) and the write-test can never trip it. Preview never polls → unarmed.
+        transferStallAbort = false
+        lastRawTransferredBytes = 0
+        lastTransferProgressAt = Date()
         runDu(username: username, ip: ip) { [weak self] baseline in
             guard let self else { return }
             self.baselineSyncBytes = baseline
@@ -1151,9 +1174,28 @@ final class SyncEngine: ObservableObject {
     }
 
     private func pollDu(username: String, ip: String) {
+        // B6 STALL WATCHDOG (see the field comment) — evaluated on the TICK,
+        // BEFORE the du in-flight guard, so a network dead enough to stop du
+        // itself still trips it. Kill routes through the EXISTING rsync
+        // terminationHandler failure path (stall ≠ cancel).
+        if !transferStallAbort, let proc = task, proc.isRunning,
+           Date().timeIntervalSince(lastTransferProgressAt) > Self.transferStallTimeout {
+            transferStallAbort = true
+            NSLog("[Sync] STALL: no remote byte growth for %.0f s — killing the wedged transfer (sync will report interrupted)",
+                  Self.transferStallTimeout)
+            proc.terminate()
+            return
+        }
         runDu(username: username, ip: ip) { [weak self] current in
             guard let self else { return }
             let transferred = max(0, current - self.baselineSyncBytes)
+            // B6: RAW growth (pre-clamp, strictly greater than max-seen) resets
+            // the stall clock — a transient failed du sample reading 0 can
+            // neither fake growth nor regress the max.
+            if transferred > self.lastRawTransferredBytes {
+                self.lastRawTransferredBytes = transferred
+                self.lastTransferProgressAt = Date()
+            }
             var capped = self.expectedSize > 0 ? min(transferred, self.expectedSize) : transferred
             capped = max(capped, self.syncProgress?.transferred ?? 0)  // bar never moves backward
 

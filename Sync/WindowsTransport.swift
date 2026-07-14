@@ -95,6 +95,28 @@ final class WindowsTransport {
     private var winLastWrittenProgress: (percent: Int, bytesDone: Int64)? = nil
     private var winLastPolledTransferred: Int64 = 0  // honest failure reporting (replaces echo under-count)
 
+    // B6 — C4 stall watchdog (port of ShowSyncWin 987dfa6): this path had NO
+    // ServerAlive and NO timeout — a keepalive-passing wedge mid-file hung a
+    // transfer until a human cancelled. A fixed/size-derived duration ceiling
+    // cannot be made safe (10 GB at 1 MB/s ≈ 2.8 h), so this is a STALL timeout:
+    // 120 s of ZERO raw remote-byte growth while the transfer process is alive.
+    // The clock resets on RAW transferred growth — never the UI-capped value,
+    // which pins at the plan estimate near the end — and, because the Mac runs
+    // ONE process for the whole batch (not per-file scp like Windows), growth
+    // from the next file carries the clock exactly as Windows' per-file re-arm
+    // does. The check rides the EXISTING 1 s poll tick and runs BEFORE the
+    // single-flight guard, so a network dead enough to stop the size poll itself
+    // still trips it. On fire: kill the process — the terminationHandler then
+    // routes through the EXISTING failure path (interrupted status, signal
+    // cleanup, failed log entry). Same truncated file a manual Cancel leaves;
+    // the next sync re-pushes it. False-trip needs < ~8 bytes/second for two
+    // full minutes. ServerAlive (added to sshBaseArgs) kills dead TRANSPORT in
+    // ~45-60 s first; the watchdog handles only the keepalive-passing wedge.
+    private static let transferStallTimeout: TimeInterval = 120
+    private var winStallAbort = false
+    private var winLastRawTransferred: Int64 = 0
+    private var winLastProgressAt = Date()
+
     // MARK: - Manifest types
 
     private struct LocalFile {
@@ -169,8 +191,13 @@ final class WindowsTransport {
     // BindAddress when a preferred interface is pinned (ssh -b equivalent that
     // sftp also accepts via -o).
     private static func sshBaseArgs(connectTimeout: Int) -> [String] {
+        // B6: ServerAlive matches the rsync path's transfer options — dead
+        // TRANSPORT dies in ~45-60 s via keepalives; the 120 s stall watchdog
+        // then only handles the keepalive-passing wedge. Same layering as Mac→Mac.
         var args = ["-o", "BatchMode=yes",
                     "-o", "ConnectTimeout=\(connectTimeout)",
+                    "-o", "ServerAliveInterval=15",
+                    "-o", "ServerAliveCountMax=3",
                     "-o", "StrictHostKeyChecking=no"]
         if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
            !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
@@ -593,6 +620,7 @@ final class WindowsTransport {
         runStart = Date()
         lastProgressSignal = .distantPast
         progressSignalInFlight = false
+        winStallAbort = false   // B6: fresh watchdog state per sync
 
         let isPreviewOnly = config.dryRunEnabled && !isAuto
         let source = Self.expandSource(config.sourceFolder)
@@ -841,6 +869,10 @@ final class WindowsTransport {
         winRateSamples = []
         winLastWrittenProgress = nil
         winLastPolledTransferred = 0
+        // B6: watchdog baseline — armed at poll start so the manifest/write-test
+        // stages (own ConnectTimeouts) can never trip it.
+        winLastRawTransferred = 0
+        winLastProgressAt = Date()
         runWinSize { [weak self] baseline in
             guard let self, self.isSyncActive, !self.syncCancelled else { return }
             self.winBaselineBytes = baseline
@@ -851,9 +883,31 @@ final class WindowsTransport {
     }
 
     private func pollWinSize() {
+        // B6 STALL WATCHDOG (see the field comment) — evaluated on the TICK,
+        // BEFORE the single-flight guard, so a network dead enough to stop the
+        // size poll itself still trips it. Armed only while the transfer process
+        // is alive; kill routes through the EXISTING terminationHandler failure
+        // path (stall ≠ cancel, so syncCancelled stays false and the handler
+        // reports 'Sync interrupted' with the last polled byte count).
+        if !winStallAbort, let proc = syncProc, proc.isRunning,
+           Date().timeIntervalSince(winLastProgressAt) > Self.transferStallTimeout {
+            winStallAbort = true
+            NSLog("[V1.1/Win] STALL: no remote byte growth for %.0f s — killing the wedged transfer (sync will report interrupted)",
+                  Self.transferStallTimeout)
+            proc.terminate()
+            return
+        }
         runWinSize { [weak self] current in
             guard let self, self.isSyncActive, !self.syncCancelled else { return }
             let transferred = max(0, current - self.winBaselineBytes)
+            // B6: RAW growth (pre-clamp, strictly greater than max-seen) resets
+            // the stall clock — never the UI-capped value (pins at the estimate
+            // near the end), and a transient failed sample reading 0 can neither
+            // fake growth nor regress the max.
+            if transferred > self.winLastRawTransferred {
+                self.winLastRawTransferred = transferred
+                self.winLastProgressAt = Date()
+            }
             var capped = self.winExpectedBytes > 0 ? min(transferred, self.winExpectedBytes) : transferred
             capped = max(capped, SyncEngine.shared.syncProgress?.transferred ?? 0)  // bar never moves backward
             self.winLastPolledTransferred = capped
