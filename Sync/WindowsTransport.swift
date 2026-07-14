@@ -473,7 +473,22 @@ final class WindowsTransport {
             completion(-1, "local temp write failed: \(error.localizedDescription)"); return
         }
         var lines = ["-mkdir \(sftpQuote(dest))",
-                     "put \(sftpQuote(tmp.path)) \(sftpQuote(dest + "/" + name))"]
+                     // ATOMIC signal write: put to a .tmp name, then rename into place.
+                     // A direct put is OPEN(TRUNC)→WRITE→CLOSE as separate SFTP packets,
+                     // leaving the destination EMPTY for milliseconds per write — and the
+                     // Windows Backup polls every 0.5s, so it could read mid-write. The
+                     // benign symptom was progress flicker; the serious one was a torn
+                     // .verify_result turning a SUCCESSFUL verify into a customer-visible
+                     // red "Verify failed" (file deleted + nonce cleared → no retry).
+                     // sftp's rename uses posix-rename@openssh.com when the server offers
+                     // it (OpenSSH for Windows does — atomic NTFS replace), so readers see
+                     // the old file or the new file, never a torn one. Both readers key on
+                     // exact filenames, so the transient .tmp is invisible to them. Note:
+                     // the rename line has NO leading dash — if it ever failed (a server
+                     // without the extension can't rename onto an existing target), the
+                     // batch must FAIL VISIBLY (nonzero exit → logged), not fall through.
+                     "put \(sftpQuote(tmp.path)) \(sftpQuote(dest + "/" + name + ".tmp"))",
+                     "rename \(sftpQuote(dest + "/" + name + ".tmp")) \(sftpQuote(dest + "/" + name))"]
         for r in removing { lines.append("-rm \(sftpQuote(dest + "/" + r))") }
         guard let batch = writeBatchFile(lines) else { completion(-1, "batch file write failed"); return }
         let (proc, pipe) = makeSftpProcess(username: username, ip: ip,
