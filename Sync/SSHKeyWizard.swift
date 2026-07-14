@@ -21,6 +21,22 @@ extension AppDelegate {
         guard !config.destinationIP.isEmpty, !config.username.isEmpty else {
             NSLog("[Sync] SSH setup aborted — IP or username empty"); return
         }
+        // Windows Backup — HONEST GATE (unported-site fix): copyKey's POSIX
+        // install chain (mkdir -p / chmod / echo >>) dies under cmd.exe, so the
+        // password wizard silently failed against Windows Backups. The real
+        // install (password-sftp get/append/put/rename, or a Backup-owned
+        // install signal) is a Windows-train item pending the admin-account
+        // authorized_keys variance (per-user file vs administrators_authorized_keys).
+        // Until then: say so plainly and point at the hardware-proven path.
+        guard config.backupPlatform != "windows" else {
+            NSLog("[V1.1/Win] Password wizard is not supported for Windows Backups yet — directing user to Pair Automatically")
+            let alert = NSAlert()
+            alert.messageText     = "Password Setup Isn't Available for Windows Backups"
+            alert.informativeText = "Use \"Pair Automatically\" instead — it sets up the secure connection without a password."
+            alert.addButton(withTitle: "OK")
+            _ = alert.runModal()
+            return
+        }
         runKeySetup()
     }
 

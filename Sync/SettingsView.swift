@@ -2921,7 +2921,22 @@ struct SettingsView: View {
         let username = store.config.username
         let ip = store.config.destinationIP
         let hasPairedPeer = store.trustedPeers.contains(where: { $0.role == .backup })
-        if !username.isEmpty && !ip.isEmpty && connectionStatus.state == .reachable && !hasPairedPeer {
+        if !username.isEmpty && !ip.isEmpty && connectionStatus.state == .reachable && !hasPairedPeer
+            && store.config.backupPlatform == "windows" {
+            // Windows Backup, manual setup — HONEST GATE (unported-site fix): the
+            // POSIX arm below (grep/mv/chmod pipeline) dies in cmd.exe, so the
+            // remote key was never removed while the button claimed success. A
+            // safe remote removal needs account-class detection (per-user
+            // authorized_keys vs administrators_authorized_keys + its strict
+            // ACLs) and belongs to ShowSync-Win acting on its own file (a
+            // key-removal signal — Windows-train item, paired with the wizard
+            // install gate). Until then: state the truth instead of silently
+            // failing. NOTE: this state is currently unreachable in practice —
+            // the password wizard cannot pair with a Windows Backup (see
+            // startSSHKeySetup's gate), so only a hand-installed key reaches here.
+            NSLog("[V1.1/Win] Forget (manual): remote key removal is NOT supported for Windows Backups yet — this Mac's key remains in the Backup's authorized_keys (remove it on the Windows machine). Local teardown proceeds.")
+            Self.deleteLocalKeypair()
+        } else if !username.isEmpty && !ip.isEmpty && connectionStatus.state == .reachable && !hasPairedPeer {
             // Manual setup: no trust records exist on either side, so the signal/
             // unpairPeer route can't clean the Backup — remove this Mac's key from
             // its authorized_keys directly (mirror of the wizard's install),
@@ -2956,6 +2971,30 @@ struct SettingsView: View {
                 }
                 DispatchQueue.global(qos: .utility).async { try? proc.run() }
             } else {
+                Self.deleteLocalKeypair()
+            }
+        } else if !username.isEmpty && !ip.isEmpty && connectionStatus.state == .reachable
+                    && store.config.backupPlatform == "windows" {
+            // Windows Backup (unported-site fix): the POSIX arm below hand-builds
+            // `echo '{…}' > file`, which under cmd.exe writes the quotes literally
+            // — ShowSync-Win read malformed JSON and silently dropped the unpair
+            // request: "Forget" told the user it did something it did not do.
+            // Deliver the same JSON payload via the transport's atomic, shell-free
+            // sftp signal write. Keypair deletion stays AFTER the write attempt —
+            // it authenticates with the key being deleted.
+            let myId = store.identity.deviceId
+            let nonce = UUID().uuidString
+            let normalized = WindowsTransport.normalizeRemotePath(store.config.backupDestination)
+            WindowsTransport.putSignalFile(
+                username: username, ip: ip,
+                dest: normalized.isEmpty ? "Sync" : normalized,
+                name: SignalFile.unpairRequest,
+                contents: "{\"mainId\":\"\(myId)\",\"nonce\":\"\(nonce)\"}"
+            ) { status, output in
+                if status != 0 {
+                    NSLog("[V1.1/Win] Forget: unpair request not delivered (exit %d) — Backup keeps its record: %@",
+                          status, output.trimmingCharacters(in: .whitespacesAndNewlines))
+                }
                 Self.deleteLocalKeypair()
             }
         } else if !username.isEmpty && !ip.isEmpty && connectionStatus.state == .reachable {
