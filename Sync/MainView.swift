@@ -1198,6 +1198,30 @@ final class SyncEngine: ObservableObject {
             }
             var capped = self.expectedSize > 0 ? min(transferred, self.expectedSize) : transferred
             capped = max(capped, self.syncProgress?.transferred ?? 0)  // bar never moves backward
+            // B8 — HONEST CEILING: du -sk counts ALLOCATED BLOCKS, not bytes. On a
+            // big-cluster Backup (exFAT external, 128KB-1MB clusters) every file
+            // over-reports by ~half a cluster, so the bar pinned at 100% while
+            // hundreds of MB were still crossing the bus — a lie a user can act
+            // on destructively (unplug the drive, shut the lid). Cap the
+            // PUBLISHED value at 99% of the estimate: "100% / ✓" is now something
+            // only a FINISHED process can show (completion display is
+            // exit-driven, and this capped value also feeds .sync_progress, so
+            // the Backup's bar inherits the ceiling for free). Applied LAST so a
+            // late-landing estimate can't be briefly exceeded via the
+            // never-backward clamp. The B6 stall watchdog reads the PRE-clamp
+            // raw `transferred` above and must never see this cap.
+            // v1.1 (the real fix — fix the MEASUREMENT, not the display):
+            // replace du -sk with a logical-byte sum, e.g.
+            //   find "<dir>" -type f -exec stat -f %z {} + | awk '{s+=$1} END {print int(s/1024)}'
+            // — same KB contract, logical bytes like the estimate, so the units
+            // mismatch dies at the source and 100% means 100% again.
+            // Deliberately NOT pre-lock: it changes the measurement BOTH the
+            // progress math and the B6 watchdog consume and needs its own
+            // hardware pass (huge-tree latency, exFAT over USB). This ceiling
+            // stays correct even after it lands.
+            if self.expectedSize > 0 {
+                capped = min(capped, self.expectedSize * 99 / 100)
+            }
 
             // Rolling rate window (5 samples ≈ 5 s) for a smoothed ETA
             rateSamples.append((time: Date(), bytes: capped))
@@ -2386,6 +2410,13 @@ struct MainView: View {
             // stall (rate ≈ 0) rather than inflate; clear when the sync ends.
             guard let sp, engine.status == .syncing, sp.expected > 0 else {
                 syncEtaText = ""
+                return
+            }
+            // B8: pinned at the 99% honest ceiling — real bytes may still be
+            // crossing the bus (du block-overshoot); the truthful label is
+            // "finishing…", and 100%/✓ arrives only when the process exits.
+            if sp.transferred >= sp.expected * 99 / 100 {
+                syncEtaText = "finishing…"
                 return
             }
             if let rate = sp.bytesPerSec {
