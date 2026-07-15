@@ -8,6 +8,23 @@ import CoreServices
 private let darkBg = Color(red: 0.12, green: 0.12, blue: 0.12)
 private let popoverWidth: CGFloat = 360
 
+// Source-folder-busy guard: FSEvents C callback for the temporary deferral watch.
+// C function pointers can't capture context, so the SyncEngine is passed via the
+// stream's info pointer (mirrors FSEventsWatcher.swift's fseventsCallback). Every
+// event just re-arms the quiet timer on the main queue.
+private func deferSourceFSCallback(
+    streamRef: ConstFSEventStreamRef,
+    clientCallBackInfo: UnsafeMutableRawPointer?,
+    numEvents: Int,
+    eventPaths: UnsafeMutableRawPointer,
+    eventFlags: UnsafePointer<FSEventStreamEventFlags>,
+    eventIds: UnsafePointer<FSEventStreamEventId>
+) {
+    guard let clientCallBackInfo else { return }
+    let engine = Unmanaged<SyncEngine>.fromOpaque(clientCallBackInfo).takeUnretainedValue()
+    engine.handleDeferSourceEvent()
+}
+
 // Verbose sync step-tracing. DEBUG-only: the body is compiled out of release
 // builds (#if DEBUG), so these never ship — but the call sites are kept verbatim
 // (same format strings + args as NSLog) for future debugging. Mirrors NSLog via
@@ -157,6 +174,20 @@ final class SyncEngine: ObservableObject {
 
     // Push Sync - date for countdown display (debounce lives in FSEventsWatcher)
     @Published var nextPushSyncDate: Date?
+
+    // Source-folder-busy guard: don't back up a half-written file. When an
+    // auto/push sync fires while the source has recent write activity, we DEFER
+    // (never cancel) into a temporary FSEvents watch and sync ONCE the folder
+    // settles. Read by the Main header ("Waiting for files…"). Only these two
+    // automatic callers gate — manual Sync Now is never deferred.
+    @Published var isDeferringForBusySource: Bool = false
+    // One deferral at a time; these hold the pending run's parameters.
+    private var deferConfig: Config?
+    private var deferIsAuto = false
+    private var deferIsPush = false
+    private var deferStream: FSEventStreamRef?     // temporary source watch (nil when idle)
+    private var deferQuietTimer: Timer?            // fires when one interval passes with no events
+    private let deferQuietSeconds: TimeInterval = 10
 
     // Set true when an rsync launch failure has not yet been acknowledged by a
     // dropdown open. Cleared on next successful sync or when the user opens the popover.
@@ -1599,6 +1630,8 @@ final class SyncEngine: ObservableObject {
         autoSyncTimer    = nil
         nextAutoSyncDate = nil
         ConfigStore.shared.config.nextAutoSyncDate = nil
+        // Tear down an auto-sync deferral if one is pending (auto disabled).
+        if isDeferringForBusySource && deferIsAuto { clearDeferral() }
     }
 
     private func autoSyncTimerFired() {
@@ -1609,13 +1642,17 @@ final class SyncEngine: ObservableObject {
 
         // Auto Sync: Independent system with only basic guards
         guard config.autoSyncEnabled, config.isReadyToSync, !status.isActive else { return }
-        sync(config: config, isAuto: true)
+        // Source-folder-busy gate (before sync(), so manual Sync Now stays ungated).
+        gateSourceThenSync(config: config, isAuto: true, isPush: false)
     }
 
     // MARK: - Push Sync
 
     func stopPushSyncDebounce() {
         nextPushSyncDate = nil
+        // Tear down a push-sync deferral if one is pending (push disabled / debounce
+        // or source changed).
+        if isDeferringForBusySource && deferIsPush { clearDeferral() }
     }
 
     func triggerPushSync() {
@@ -1627,7 +1664,8 @@ final class SyncEngine: ObservableObject {
             return
         }
         NSLog("[PushSync] Triggering sync")
-        sync(config: config, isPush: true)
+        // Source-folder-busy gate (before sync(), so manual Sync Now stays ungated).
+        gateSourceThenSync(config: config, isAuto: false, isPush: true)
     }
 
     private static func hasChangedFiles(sourceFolder: String, since date: Date?) -> Bool {
@@ -1649,6 +1687,137 @@ final class SyncEngine: ObservableObject {
             if mtime > threshold { return true }
         }
         return false
+    }
+
+    // MARK: - Source-folder-busy guard (auto/push deferral)
+
+    // Auto/push entry gate (NOT sync() — manual Sync Now is never gated). A single
+    // background "busy now?" probe (any regular file modified within the last quiet
+    // window) decides: quiet → sync immediately (today's behavior, no delay); busy
+    // → defer into the event-driven quiet-watch. This probe runs once per trigger,
+    // not on a repeating poll.
+    private func gateSourceThenSync(config: Config, isAuto: Bool, isPush: Bool) {
+        guard !isDeferringForBusySource else { return }   // a deferral is already pending
+        let quiet = deferQuietSeconds
+        let rawSource = config.sourceFolder.hasPrefix("~")
+            ? (NSHomeDirectory() as NSString).appendingPathComponent(String(config.sourceFolder.dropFirst()))
+            : config.sourceFolder
+        guard !rawSource.isEmpty else { sync(config: config, isAuto: isAuto, isPush: isPush); return }
+        DispatchQueue.global(qos: .utility).async {
+            let fm = FileManager.default
+            let cutoff = Date().addingTimeInterval(-quiet)
+            var busy = false
+            if let en = fm.enumerator(at: URL(fileURLWithPath: rawSource),
+                                      includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+                                      options: .skipsHiddenFiles) {
+                for case let url as URL in en {
+                    guard let r = try? url.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey]),
+                          r.isRegularFile == true, let m = r.contentModificationDate else { continue }
+                    if m > cutoff { busy = true; break }
+                }
+            }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                // A sync may have started during the async probe → honor the same
+                // idle guard the callers used; drop this trigger if no longer idle.
+                guard self.status == .ready else { return }
+                if busy {
+                    self.beginDeferral(config: config, isAuto: isAuto, isPush: isPush)
+                } else {
+                    self.sync(config: config, isAuto: isAuto, isPush: isPush)
+                }
+            }
+        }
+    }
+
+    // Arm the event-driven quiet-watch (temporary FSEvents stream + debounce). The
+    // debounce resets on every filesystem event, so a mid-copy pause between chunks
+    // never reads as "done"; one full quiet interval with no events → onDeferQuiet.
+    private func beginDeferral(config: Config, isAuto: Bool, isPush: Bool) {
+        deferConfig = config
+        deferIsAuto = isAuto
+        deferIsPush = isPush
+        if !isDeferringForBusySource { isDeferringForBusySource = true }
+        NSLog("[Defer] Source busy — waiting for it to settle before %@ sync", isAuto ? "auto" : "push")
+        startDeferWatch(sourceFolder: config.sourceFolder)
+        armDeferQuietTimer()
+    }
+
+    private func startDeferWatch(sourceFolder: String) {
+        stopDeferWatch()   // never stack streams
+        let rawSource = sourceFolder.hasPrefix("~")
+            ? (NSHomeDirectory() as NSString).appendingPathComponent(String(sourceFolder.dropFirst()))
+            : sourceFolder
+        guard !rawSource.isEmpty else { return }
+        var ctx = FSEventStreamContext(
+            version: 0,
+            info: Unmanaged.passUnretained(self).toOpaque(),
+            retain: nil, release: nil, copyDescription: nil)
+        guard let stream = FSEventStreamCreate(
+            nil, deferSourceFSCallback, &ctx,
+            [rawSource] as CFArray,
+            FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
+            0.5,
+            FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagUseCFTypes))
+        else {
+            NSLog("[Defer] Failed to create FSEventStream — falling back to timer-only settle")
+            return
+        }
+        FSEventStreamSetDispatchQueue(stream, DispatchQueue.main)
+        if FSEventStreamStart(stream) {
+            deferStream = stream
+        } else {
+            FSEventStreamRelease(stream)
+            NSLog("[Defer] Failed to start FSEventStream — falling back to timer-only settle")
+        }
+    }
+
+    // Called from the FSEvents C callback (main queue) on every source event.
+    fileprivate func handleDeferSourceEvent() {
+        guard isDeferringForBusySource else { return }
+        armDeferQuietTimer()   // reset — still receiving files
+    }
+
+    private func armDeferQuietTimer() {
+        deferQuietTimer?.invalidate()
+        deferQuietTimer = Timer.scheduledTimer(withTimeInterval: deferQuietSeconds, repeats: false) { [weak self] _ in
+            self?.onDeferQuiet()
+        }
+    }
+
+    // One quiet interval elapsed with no events → the folder has settled. Sync ONCE.
+    private func onDeferQuiet() {
+        guard isDeferringForBusySource, let config = deferConfig else { clearDeferral(); return }
+        let isAuto = deferIsAuto, isPush = deferIsPush
+        clearDeferral()
+        // Dedup: a sync that already ran while we waited (manual, or the next cycle)
+        // covers these files — don't double-fire.
+        if let last = lastSyncTime, Date().timeIntervalSince(last) < 30 { return }
+        // Re-check role + enable + ready (state may have changed during the wait).
+        guard ConfigStore.shared.effectiveRole == "main", status == .ready else { return }
+        let live = ConfigStore.shared.config
+        guard live.isReadyToSync else { return }
+        if isAuto && !live.autoSyncEnabled { return }
+        if isPush && !live.pushSyncEnabled { return }
+        sync(config: config, isAuto: isAuto, isPush: isPush)
+    }
+
+    private func stopDeferWatch() {
+        if let s = deferStream {
+            FSEventStreamStop(s)
+            FSEventStreamInvalidate(s)
+            FSEventStreamRelease(s)
+            deferStream = nil
+        }
+    }
+
+    // Full teardown — stream + timer + flag. Safe to call when not deferring.
+    private func clearDeferral() {
+        stopDeferWatch()
+        deferQuietTimer?.invalidate()
+        deferQuietTimer = nil
+        deferConfig = nil
+        if isDeferringForBusySource { isDeferringForBusySource = false }
     }
 
     // MARK: - Version history (inline marker-based)
@@ -2700,6 +2869,10 @@ struct MainView: View {
             if backupAppGone { return .orange }
         }
         if !store.config.destinationIP.isEmpty && connectionStatus.state == .unreachable { return .red }
+        // Deferring an auto/push sync until the source folder settles — reuse the
+        // .syncing yellow ("actively watching, about to sync"). After (c), before
+        // green, so a real connection problem still wins.
+        if engine.isDeferringForBusySource { return .yellow }
         // Healthy idle → green ONLY when genuinely ready to sync: the SAME
         // predicate that enables the Sync Now button (isReadyToSync &&
         // peerReachableForSync), so the header can never green while a sync
@@ -2717,6 +2890,7 @@ struct MainView: View {
             if backupAppGone { return "Backup app not running" }
         }
         if !store.config.destinationIP.isEmpty && connectionStatus.state == .unreachable { return "Not connected" }
+        if engine.isDeferringForBusySource { return "Waiting for files…" }
         return "Ready"
     }
 
