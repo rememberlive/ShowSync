@@ -678,7 +678,7 @@ final class ReceiveMonitor: ObservableObject {
         let fm = FileManager.default
         let signalFiles = [SignalFile.start, SignalFile.progress, SignalFile.complete, SignalFile.refused,
                            SignalFile.renameRequest, SignalFile.unpairRequest,
-                           SignalFile.verifyRequest, SignalFile.verifyResult]
+                           SignalFile.verifyRequest, SignalFile.verifyResult, SignalFile.speedTest]
         for filename in signalFiles {
             let path = base.appendingPathComponent(filename)
             if fm.fileExists(atPath: path.path) {

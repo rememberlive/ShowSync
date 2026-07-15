@@ -171,6 +171,10 @@ enum SignalFile {
     static let unpairRequest = ".sync_unpair_request"
     static let verifyRequest = ".verify_request"
     static let verifyResult = ".verify_result"
+    // Test Speed throwaway payload — deterministic name so the startup sweeps
+    // (clearStaleSignalFiles / cleanupStaleSignalFiles) can delete an orphan even
+    // if the app is killed mid-test. Never pins a Backup.
+    static let speedTest = ".sync_speedtest"
 }
 
 // Shared rsync exclusions — the single source of comparison criteria for sync,
@@ -191,6 +195,7 @@ enum RsyncExclusions {
         SignalFile.unpairRequest,
         SignalFile.verifyRequest,
         SignalFile.verifyResult,
+        SignalFile.speedTest,
     ]
     static var args: [String] { patterns.map { "--exclude=\($0)" } }
 }

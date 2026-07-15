@@ -1330,6 +1330,10 @@ struct SettingsView: View {
 
         Divider()
 
+        speedTestSection
+
+        Divider()
+
         sectionHeader("Source")
         VStack(spacing: 8) {
             HStack {
@@ -2027,6 +2031,56 @@ struct SettingsView: View {
             }
 
             Text("Locks ShowSync to one network connection: discovery, pairing, and backups all use only this interface. Automatic picks the first available.")
+                .font(.system(size: 10))
+                .foregroundColor(Color(white: 0.45))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 12)
+    }
+
+    // Test Speed (Main-only) — measures real throughput on the selected adapter to
+    // the selected Backup over the exact sync transport, before a show. Inserted
+    // after the interface picker in the MAIN connection content (not inside the
+    // shared interfacePickerSection, which the Backup also renders).
+    @ViewBuilder private var speedTestSection: some View {
+        sectionHeader("Adapter Speed")
+        VStack(alignment: .leading, spacing: 8) {
+            let testDisabled = !store.config.isReadyToSync || engine.isSpeedTesting
+                || engine.status.isActive || engine.verifyStatus == .verifying
+            HStack(spacing: 8) {
+                Button {
+                    engine.runSpeedTest(config: store.config)
+                } label: {
+                    Text("Test Speed")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .buttonStyle(.bordered)
+                .disabled(testDisabled)
+                .help("Times a throwaway transfer over the selected adapter to the Backup")
+
+                switch engine.speedTestStatus {
+                case .idle:
+                    EmptyView()
+                case .testing:
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Testing…").font(.system(size: 11)).foregroundColor(labelColor)
+                    }
+                case .result(let mbps):
+                    let mins = max(1, Int((10_240.0 / max(mbps, 0.1) / 60.0).rounded()))
+                    Text("\(Int(mbps.rounded())) MB/s · ≈\(mins) min for 10 GB")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.green)
+                        .fixedSize(horizontal: false, vertical: true)
+                case .failed(let msg):
+                    Text(msg)
+                        .font(.system(size: 11))
+                        .foregroundColor(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Text("Measures the selected adapter to the Backup over the real backup path — plug in an adapter and compare before a show.")
                 .font(.system(size: 10))
                 .foregroundColor(Color(white: 0.45))
                 .fixedSize(horizontal: false, vertical: true)

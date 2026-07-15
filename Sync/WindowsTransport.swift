@@ -1391,4 +1391,56 @@ final class WindowsTransport {
         }
         return proc
     }
+
+    // MARK: - Test Speed (Mac Main → Windows Backup)
+
+    // Times one whole-file sftp put of a fixed payload over the SAME bound
+    // transport the real sync uses (sshBaseArgs → BindAddress), wall-clock. put
+    // then -rm in ONE batch = same-session cleanup; a mid-put kill leaves an
+    // orphan that ShowSyncWin's startup sweep removes. Reuses the real sftp
+    // builders so the number rides the identical path. Never touches run-state
+    // or the size poll (B6 stays unarmed). completion(.success(MB/s) / .failure).
+    // completion: (mbps, errorMessage) — exactly one non-nil.
+    func runSpeedTest(localPayload: URL, bytes: Int64, username: String, ip: String,
+                      destination: String, completion: @escaping (Double?, String?) -> Void) {
+        let dest = Self.sftpPathForm(Self.effectiveDest(destination, usingFallback: false))
+        let lines = ["-mkdir \(Self.sftpQuote(dest))",
+                     "put \(Self.sftpQuote(localPayload.path)) \(Self.sftpQuote(dest + "/" + SignalFile.speedTest))",
+                     "-rm \(Self.sftpQuote(dest + "/" + SignalFile.speedTest))"]
+        guard let batch = Self.writeBatchFile(lines) else { completion(nil, "Couldn't start the test"); return }
+        let (proc, pipe) = Self.makeSftpProcess(username: username, ip: ip, batchFile: batch, connectTimeout: 5)
+
+        var done = false
+        let lock = NSLock()
+        let start = Date()
+        let finishOnce: (Double?, String?) -> Void = { mbps, err in
+            lock.lock(); if done { lock.unlock(); return }; done = true; lock.unlock()
+            try? FileManager.default.removeItem(at: batch)
+            // Best-effort cleanup on failure (success already -rm'd in the batch);
+            // the startup sweep is the crash backstop either way.
+            if mbps == nil { self.removeSpeedTestFile(username: username, ip: ip, destination: destination) }
+            completion(mbps, err)
+        }
+        let timeout = DispatchWorkItem { [weak proc] in
+            if let p = proc, p.isRunning { p.terminate() }
+            finishOnce(nil, "Link too slow — under 5 MB/s")
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: timeout)
+        Self.run(proc, pipe: pipe) { status, _ in
+            timeout.cancel()
+            let elapsed = Date().timeIntervalSince(start)
+            if status == 0 && elapsed > 0.05 {
+                finishOnce(Double(bytes) / 1_048_576.0 / elapsed, nil)
+            } else {
+                finishOnce(nil, "Couldn't reach the Backup")
+            }
+        }
+    }
+
+    private func removeSpeedTestFile(username: String, ip: String, destination: String) {
+        let dest = Self.sftpPathForm(Self.effectiveDest(destination, usingFallback: false))
+        guard let batch = Self.writeBatchFile(["-rm \(Self.sftpQuote(dest + "/" + SignalFile.speedTest))"]) else { return }
+        let (proc, pipe) = Self.makeSftpProcess(username: username, ip: ip, batchFile: batch, connectTimeout: 3)
+        Self.run(proc, pipe: pipe) { _, _ in try? FileManager.default.removeItem(at: batch) }
+    }
 }

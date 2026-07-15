@@ -132,6 +132,16 @@ enum VerifyStatus: Equatable {
     }
 }
 
+// Test Speed result. `.result` carries measured MB/s; the "≈X min / 10 GB"
+// projection is derived in the UI. Persists until the next test (not auto-cleared)
+// so an engineer can read and A/B two adapters.
+enum SpeedTestStatus: Equatable {
+    case idle
+    case testing
+    case result(mbps: Double)
+    case failed(String)
+}
+
 // MARK: - Sync engine
 
 final class SyncEngine: ObservableObject {
@@ -188,6 +198,13 @@ final class SyncEngine: ObservableObject {
     private var deferStream: FSEventStreamRef?     // temporary source watch (nil when idle)
     private var deferQuietTimer: Timer?            // fires when one interval passes with no events
     private let deferQuietSeconds: TimeInterval = 10
+
+    // Test Speed — measures real throughput on the selected adapter to the selected
+    // Backup over the EXACT transport a sync uses. Self-contained (own Process, own
+    // wall-clock timing, never calls the du/size poll), so the B6 stall watchdog
+    // never arms during a test.
+    @Published var speedTestStatus: SpeedTestStatus = .idle
+    @Published var isSpeedTesting: Bool = false
 
     // Set true when an rsync launch failure has not yet been acknowledged by a
     // dropdown open. Cleared on next successful sync or when the user opens the popover.
@@ -1641,7 +1658,7 @@ final class SyncEngine: ObservableObject {
         startAutoSync(delay: nextInterval)
 
         // Auto Sync: Independent system with only basic guards
-        guard config.autoSyncEnabled, config.isReadyToSync, !status.isActive else { return }
+        guard config.autoSyncEnabled, config.isReadyToSync, !status.isActive, !isSpeedTesting else { return }
         // Source-folder-busy gate (before sync(), so manual Sync Now stays ungated).
         gateSourceThenSync(config: config, isAuto: true, isPush: false)
     }
@@ -1658,7 +1675,7 @@ final class SyncEngine: ObservableObject {
     func triggerPushSync() {
         let config = ConfigStore.shared.config
         nextPushSyncDate = nil
-        guard config.pushSyncEnabled, config.isReadyToSync, !status.isActive else {
+        guard config.pushSyncEnabled, config.isReadyToSync, !status.isActive, !isSpeedTesting else {
             NSLog("[PushSync] Guard failed - enabled: %@, ready: %@, active: %@",
                   config.pushSyncEnabled ? "YES" : "NO", config.isReadyToSync ? "YES" : "NO", status.isActive ? "YES" : "NO")
             return
@@ -1818,6 +1835,154 @@ final class SyncEngine: ObservableObject {
         deferQuietTimer = nil
         deferConfig = nil
         if isDeferringForBusySource { isDeferringForBusySource = false }
+    }
+
+    // MARK: - Test Speed (self-contained; never routes through sync() → B6 never arms)
+
+    private static let speedTestBytes: Int64 = 128 * 1024 * 1024   // 128 MB fixed payload
+    private static let speedTestTimeout: TimeInterval = 30
+
+    // Measures real throughput over the EXACT bound transport a sync would use for
+    // THIS Backup: rsync (-e "ssh -b <bindIP>") for a Mac Backup, sftp
+    // (BindAddress) for a Windows Backup — branched exactly as sync(). Times one
+    // whole-file transfer wall-clock (no du/size poll, so B6 stays unarmed) and
+    // publishes MB/s. The payload lands on the real dest as .sync_speedtest and is
+    // removed same-session, backstopped by the startup sweeps.
+    func runSpeedTest(config: Config) {
+        guard !isSpeedTesting else { return }
+        guard !status.isActive, verifyStatus != .verifying,
+              !WindowsTransport.shared.isSyncActive, !WindowsTransport.shared.isVerifyActive else {
+            speedTestStatus = .failed("Busy — try again after the current sync")
+            return
+        }
+        guard config.isReadyToSync else {
+            speedTestStatus = .failed("Set up the connection first")
+            return
+        }
+        isSpeedTesting = true
+        speedTestStatus = .testing
+
+        let bytes = Self.speedTestBytes
+        let username = config.username
+        let ip = config.destinationIP
+        let isWindows = config.backupPlatform == "windows"
+        let remotePath = config.backupDestination
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            // Instant sparse 128 MB local payload — read as 128 MB of zeros by
+            // rsync/sftp (no ssh compression, rsync has no -z), so the wire really
+            // carries 128 MB. -W / sftp put force a whole-file transfer regardless
+            // of any pre-existing orphan, so an old .sync_speedtest can't skew it.
+            let tmp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("showsync_speedtest_\(UUID().uuidString).bin")
+            guard Self.makeSparsePayload(at: tmp, bytes: bytes) else {
+                self.finishSpeedTest(.failed("Couldn't prepare the test file"))
+                return
+            }
+            if isWindows {
+                WindowsTransport.shared.runSpeedTest(localPayload: tmp, bytes: bytes,
+                                                     username: username, ip: ip, destination: remotePath) { [weak self] mbps, err in
+                    try? FileManager.default.removeItem(at: tmp)
+                    if let mbps { self?.finishSpeedTest(.result(mbps: mbps)) }
+                    else { self?.finishSpeedTest(.failed(err ?? "Test failed")) }
+                }
+            } else {
+                self.runRsyncSpeedTest(localPayload: tmp, bytes: bytes,
+                                       username: username, ip: ip, remotePath: remotePath)
+            }
+        }
+    }
+
+    // Mac→Mac: time an `rsync -aW` of the payload to dest/.sync_speedtest over the
+    // same -e "ssh -b <bindIP>" bind as the real sync; follow with an immediate
+    // ssh rm -f (runs on success AND failure). Single completion via a once-guard.
+    private func runRsyncSpeedTest(localPayload tmp: URL, bytes: Int64,
+                                   username: String, ip: String, remotePath: String) {
+        let path = remotePath.isEmpty ? "~/Sync" : remotePath
+        let rsyncCandidates = ["/opt/homebrew/bin/rsync", "/usr/local/bin/rsync", "/usr/bin/rsync"]
+        let rsyncPath = rsyncCandidates.first { FileManager.default.fileExists(atPath: $0) } ?? "/usr/bin/rsync"
+        let dest = "\(username)@\(ip):\(rsyncEscapedRemotePath(path, rsyncPath: rsyncPath))/\(SignalFile.speedTest)"
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: rsyncPath)
+        var args = ["-aW"]   // -W: whole-file, never delta — honest full transfer
+        if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
+           !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
+            args.insert(contentsOf: ["-e", "ssh -b \(bindIP) -o ServerAliveInterval=15 -o ServerAliveCountMax=3"], at: 0)
+        }
+        args.append(contentsOf: [tmp.path, dest])
+        proc.arguments = args
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+
+        var completed = false
+        let lock = NSLock()
+        let finishOnce: (SpeedTestStatus) -> Void = { [weak self] status in
+            lock.lock(); if completed { lock.unlock(); return }; completed = true; lock.unlock()
+            try? FileManager.default.removeItem(at: tmp)
+            self?.removeRemoteSpeedTestFile(username: username, ip: ip, remotePath: path)
+            self?.finishSpeedTest(status)
+        }
+
+        let start = Date()
+        let timeout = DispatchWorkItem { [weak proc] in
+            if let p = proc, p.isRunning { p.terminate() }
+            finishOnce(.failed("Link too slow — under 5 MB/s"))
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + Self.speedTestTimeout, execute: timeout)
+
+        proc.terminationHandler = { p in
+            timeout.cancel()
+            let elapsed = Date().timeIntervalSince(start)
+            if p.terminationStatus == 0 && elapsed > 0.05 {
+                finishOnce(.result(mbps: Double(bytes) / 1_048_576.0 / elapsed))
+            } else {
+                finishOnce(.failed("Couldn't reach the Backup"))
+            }
+        }
+        do { try proc.run() }
+        catch {
+            timeout.cancel()
+            NSLog("[SpeedTest] rsync launch failed: %@", error.localizedDescription)
+            finishOnce(.failed("Couldn't start the test"))
+        }
+    }
+
+    // Immediate remote cleanup for the rsync path — fire-and-forget, runs on every
+    // outcome; the Backup startup sweep is the crash backstop if this never lands.
+    private func removeRemoteSpeedTestFile(username: String, ip: String, remotePath: String) {
+        let escaped = remoteShellPath(remotePath.isEmpty ? "~/Sync" : remotePath)
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        var sshArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no"]
+        if let bindIP = NetworkInterfaceManager.shared.getEffectiveIP(),
+           !ConfigStore.shared.config.preferredInterfaceMAC.isEmpty {
+            sshArgs.insert(contentsOf: ["-b", bindIP], at: 0)
+        }
+        sshArgs.append(contentsOf: ["--", "\(username)@\(ip)", "rm -f \"\(escaped)/\(SignalFile.speedTest)\""])
+        proc.arguments = sshArgs
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        DispatchQueue.global(qos: .utility).async { try? proc.run() }
+    }
+
+    // Publish on main; both flags clear together. Result persists (not auto-cleared)
+    // so the number can be read and A/B'd.
+    private func finishSpeedTest(_ status: SpeedTestStatus) {
+        Task { @MainActor [weak self] in
+            self?.isSpeedTesting = false
+            self?.speedTestStatus = status
+        }
+    }
+
+    // Instant sparse file of `bytes` — no disk cost, read as zeros over the wire.
+    private static func makeSparsePayload(at url: URL, bytes: Int64) -> Bool {
+        guard FileManager.default.createFile(atPath: url.path, contents: nil),
+              let fh = try? FileHandle(forWritingTo: url) else { return false }
+        defer { try? fh.close() }
+        do { try fh.truncate(atOffset: UInt64(bytes)); return true }
+        catch { return false }
     }
 
     // MARK: - Version history (inline marker-based)
@@ -2468,7 +2633,7 @@ struct MainView: View {
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(!store.config.isReadyToSync || syncButtonDisabled || !peerReachableForSync)
+                        .disabled(!store.config.isReadyToSync || syncButtonDisabled || !peerReachableForSync || engine.isSpeedTesting)
 
                         Button {
                             engine.verifyNow(config: store.config)
