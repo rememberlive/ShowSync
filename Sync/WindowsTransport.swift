@@ -1425,7 +1425,7 @@ final class WindowsTransport {
             if let p = proc, p.isRunning { p.terminate() }
             finishOnce(nil, "Link too slow — under 5 MB/s")
         }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: timeout)
+        DispatchQueue.global().asyncAfter(deadline: .now() + 60, execute: timeout)   // 60 s: matches the 512 MB payload (does not read MainView's speedTestTimeout)
         Self.run(proc, pipe: pipe) { status, _ in
             timeout.cancel()
             let elapsed = Date().timeIntervalSince(start)

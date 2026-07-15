@@ -1839,8 +1839,8 @@ final class SyncEngine: ObservableObject {
 
     // MARK: - Test Speed (self-contained; never routes through sync() → B6 never arms)
 
-    private static let speedTestBytes: Int64 = 128 * 1024 * 1024   // 128 MB fixed payload
-    private static let speedTestTimeout: TimeInterval = 30
+    private static let speedTestBytes: Int64 = 512 * 1024 * 1024   // 512 MB — above the ~250-300 MB overhead/wire crossover so MB/s reflects true wire speed
+    private static let speedTestTimeout: TimeInterval = 60          // 512 MB fits even at ~10 MB/s (~51 s); a slow-but-usable adapter isn't false-failed
 
     // Measures real throughput over the EXACT bound transport a sync would use for
     // THIS Backup: rsync (-e "ssh -b <bindIP>") for a Mac Backup, sftp
