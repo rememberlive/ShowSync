@@ -2001,16 +2001,16 @@ struct MainView: View {
             // Header
             HStack {
                 Circle()
-                    .fill(engine.status.color)
+                    .fill(mainHeaderColor)
                     .frame(width: 8, height: 8)
                 Text("ShowSync")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(.white)
                 Spacer()
                 HStack(spacing: 4) {
-                    Text(engine.status.label)
+                    Text(mainHeaderStatus)
                         .font(.system(size: 12))
-                        .foregroundColor(engine.status.color)
+                        .foregroundColor(mainHeaderColor)
                     if store.config.autoSyncEnabled && engine.status == .ready {
                         Text("· Auto")
                             .font(.system(size: 11))
@@ -2683,6 +2683,41 @@ struct MainView: View {
               !bonjourBrowser.services.contains(where: { $0.resolvedIP == store.config.destinationIP }),
               let since = peerAbsentSince else { return false }
         return clockTick.timeIntervalSince(since) > 5
+    }
+
+    // Header truth (mirrors BackupView.headerColor/headerStatus): sync-lifecycle
+    // takes priority — any non-idle engine state renders byte-identical to before
+    // (preparing/syncing/done/cancelled/error, incl. the 3 s post-sync window).
+    // Only when idle (.ready) does the header layer connection truth instead of a
+    // blanket "Ready". Local-Network-denied and backupAppGone are automatic-only
+    // (a manual direct-IP Main works without discovery), so only ssh reachability
+    // is layered in manual mode; .checking/nil stay neutral so a just-opened
+    // popover never flashes a warning.
+    private var mainHeaderColor: Color {
+        guard engine.status == .ready else { return engine.status.color }
+        if store.config.discoveryMode == "automatic" {
+            if case .failed(let reason) = bonjourBrowser.state, reason == localNetworkDeniedReason { return .orange }
+            if backupAppGone { return .orange }
+        }
+        if !store.config.destinationIP.isEmpty && connectionStatus.state == .unreachable { return .red }
+        // Healthy idle → green ONLY when genuinely ready to sync: the SAME
+        // predicate that enables the Sync Now button (isReadyToSync &&
+        // peerReachableForSync), so the header can never green while a sync
+        // would refuse (config incomplete / .checking / nil / no peer → gray).
+        // Sits after (a)/(b)/(c) so orange/red always win first. The word stays
+        // "Ready" in both cases; it takes this colour via the header's existing
+        // .foregroundColor(mainHeaderColor), so dot + word go green together.
+        return (store.config.isReadyToSync && peerReachableForSync) ? .green : .gray
+    }
+
+    private var mainHeaderStatus: String {
+        guard engine.status == .ready else { return engine.status.label }
+        if store.config.discoveryMode == "automatic" {
+            if case .failed(let reason) = bonjourBrowser.state, reason == localNetworkDeniedReason { return "Not discoverable" }
+            if backupAppGone { return "Backup app not running" }
+        }
+        if !store.config.destinationIP.isEmpty && connectionStatus.state == .unreachable { return "Not connected" }
+        return "Ready"
     }
 
     private func reachDotColor(_ state: ConnectionState) -> Color {
