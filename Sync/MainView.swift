@@ -307,16 +307,19 @@ final class SyncEngine: ObservableObject {
             syncStartTime  = Date()
             fallbackNotice = nil
             lowSpaceNotice = nil
+            resetPreflight()
 
-            // Transfer estimate — concurrent with the write-test, never blocks the sync.
-            // Fills expectedSize/syncTotalFiles when it lands; on failure the bar
-            // simply stays indeterminate.
-            runTransferEstimate(config: config)
+            // Transfer estimate — concurrent with the write-test. Fills
+            // expectedSize/syncTotalFiles when it lands; ALSO reports the delta to
+            // the low-space preflight (nil on failure → preflight fails open).
+            runTransferEstimate(config: config) { [weak self] delta in
+                self?.preflightNoteDelta(delta)
+            }
 
             // Write-test then rsync
             let originalRemotePath = syncRemotePath
             syncTrace("[SyncTrace] 4 starting write-test, remotePath='%@'", originalRemotePath)
-            runSyncTimeWriteTest(username: config.username, ip: config.destinationIP, remotePath: originalRemotePath) { [weak self] result, _ in
+            runSyncTimeWriteTest(username: config.username, ip: config.destinationIP, remotePath: originalRemotePath) { [weak self] result, freeBytes, floorBytes in
                 guard let self else {
                     syncTrace("[SyncTrace] 5 write-test callback but self is nil")
                     return
@@ -329,20 +332,26 @@ final class SyncEngine: ObservableObject {
                     // (wins over adoption) and self-heal if we were latched in fallback.
                     self.lastRealDestWriteTest = (originalRemotePath, true)
                     if self.usingFallback { self.usingFallback = false }
+                    // LOW-SPACE PREFLIGHT (the one sequencing change): we df'd the
+                    // real dest, so gate the launch on free vs the incoming delta.
+                    // Waits for BOTH this and the async estimate, then decides.
+                    self.preflightNoteWriteTest(free: freeBytes, floor: floorBytes, config: config)
                 case .unwritable:
                     // First-hand verdict: the Main CANNOT write the real dest.
+                    // Falls back to ~/Sync — a DIFFERENT volume than we df'd, so skip
+                    // the preflight and launch as before (byte-identical path).
                     self.lastRealDestWriteTest = (originalRemotePath, false)
                     self.syncRemotePath = "~/Sync"
                     self.usingFallback = true
                     self.fallbackNotice = "Couldn't write to the chosen folder — backing up to the default Sync folder instead."
                     NSLog("[Sync] Destination unwritable, falling back to ~/Sync")
+                    self.continueSyncAfterWriteTest(config: config, totalBytes: 0, fileCount: 0, dryRunOutput: "")
                 case .testFailed:
-                    // Ambiguous (SSH error/timeout) — not a writability verdict; leave
-                    // the last first-hand result untouched and proceed.
+                    // Ambiguous (SSH error/timeout) — no reliable free space; skip the
+                    // preflight and launch as before (byte-identical path).
                     NSLog("[Sync] Write-test failed (SSH error), proceeding anyway")
+                    self.continueSyncAfterWriteTest(config: config, totalBytes: 0, fileCount: 0, dryRunOutput: "")
                 }
-                syncTrace("[SyncTrace] 6 calling continueSyncAfterWriteTest")
-                self.continueSyncAfterWriteTest(config: config, totalBytes: 0, fileCount: 0, dryRunOutput: "")
             }
         }
     }
@@ -706,6 +715,77 @@ final class SyncEngine: ObservableObject {
         } else {
             launchRsync()
         }
+    }
+
+    // MARK: - Low-space preflight (rsync path)
+
+    private func resetPreflight() {
+        pfFree = nil
+        pfFloorBytes = 2 * 1024 * 1024 * 1024
+        pfDelta = nil
+        pfWriteTestReady = false
+        pfDeltaReady = false
+        pfConfig = nil
+        pfFired = false
+        pfTimer?.invalidate(); pfTimer = nil
+    }
+
+    // Write-test reported (free + real floor) for the .writable path. Arm a bounded
+    // wait for the async delta, then decide once both are in (or the timer fires).
+    private func preflightNoteWriteTest(free: Int64?, floor: Int64, config: Config) {
+        pfFree = free
+        pfFloorBytes = floor
+        pfConfig = config
+        pfWriteTestReady = true
+        pfTimer?.invalidate()
+        // A hung/huge dry-run must never wedge the sync — fail open after 30 s.
+        pfTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: false) { [weak self] _ in
+            self?.firePreflight()
+        }
+        tryPreflight()
+    }
+
+    // The async estimate reported the changed-bytes delta (nil = unknown → fail open).
+    private func preflightNoteDelta(_ delta: Int64?) {
+        pfDelta = delta
+        pfDeltaReady = true
+        tryPreflight()
+    }
+
+    private func tryPreflight() {
+        guard pfWriteTestReady, pfDeltaReady else { return }   // wait for both
+        firePreflight()
+    }
+
+    // Decide ONCE: refuse iff free < delta*1.1 + floor (delta > 0). Unknown free or
+    // delta → fail open (proceed). On pass/fail-open, launch as usual.
+    private func firePreflight() {
+        guard !pfFired else { return }
+        pfFired = true
+        pfTimer?.invalidate(); pfTimer = nil
+        guard let config = pfConfig, status == .preparing else { return }
+        if let free = pfFree, let delta = pfDelta, delta > 0 {
+            // 10% margin covers logical-vs-allocated (block rounding); the floor
+            // (≥2 GB) covers APFS purgeable optimism. No larger margin (over-refusal).
+            let needed = Int64(Double(delta) * 1.1) + pfFloorBytes
+            if free < needed {
+                let shortfall = needed - free
+                NSLog("[Sync] Preflight refused: need %lld B (delta %lld + floor %lld), free %lld B",
+                      needed, delta, pfFloorBytes, free)
+                lowSpaceNotice = "Backup needs ~\(formatBytes(needed)) free; only \(formatBytes(free)) available — free up \(formatBytes(shortfall))."
+                status = .error("Backup drive low on space")
+                ConfigStore.shared.iconState = .error
+                ConfigStore.shared.isSyncing = false
+                hasUnacknowledgedError = true
+                let trigger = isAutoSync ? "auto" : (isPushSync ? "push" : "manual")
+                ConfigStore.shared.appendTransferLogEntry(TransferLogEntry(
+                    id: UUID(), date: Date(), trigger: trigger, result: "refused",
+                    fileCount: 0, totalBytes: 0, durationSeconds: 0,
+                    destination: syncRemotePath, usedFallback: usingFallback))
+                return   // do NOT launch
+            }
+        }
+        continueSyncAfterWriteTest(config: config, totalBytes: 0, fileCount: 0, dryRunOutput: "")
     }
 
     func cancel() {
@@ -1128,11 +1208,26 @@ final class SyncEngine: ObservableObject {
     private var lastRawTransferredBytes: Int64 = 0
     private var lastTransferProgressAt = Date()
 
+    // Low-space preflight (rsync path): refuse a sync BEFORE any bytes move if the
+    // incoming delta won't fit while keeping the Backup's minimum-free floor. The
+    // barrier waits for BOTH the write-test (free + floor, piggybacked) AND the
+    // async delta estimate, then decides. All fields main-thread-only.
+    private var pfFree: Int64? = nil               // dest free bytes (nil = unknown → fail open)
+    private var pfFloorBytes: Int64 = 2 * 1024 * 1024 * 1024
+    private var pfDelta: Int64? = nil              // changed-bytes delta (nil = unknown → fail open)
+    private var pfWriteTestReady = false
+    private var pfDeltaReady = false
+    private var pfConfig: Config? = nil
+    private var pfFired = false                    // once-guard
+    private var pfTimer: Timer? = nil              // bounds the wait for a hung/huge estimate
+
     // Pre-sync transfer estimate — runs concurrently with the write-test and never
     // delays or blocks the sync. Parses the transfer DELTA ("Total transferred file
     // size"), not the full source size (parseTotalSize reads the wrong field for
     // progress: on an additive sync most bytes already exist at the destination).
-    private func runTransferEstimate(config: Config) {
+    // onDelta (optional): reports the changed-bytes delta to the low-space
+    // preflight — the parsed delta on success, nil on estimate failure (fail open).
+    private func runTransferEstimate(config: Config, onDelta: ((Int64?) -> Void)? = nil) {
         let rawSource = config.sourceFolder.hasPrefix("~")
             ? (NSHomeDirectory() as NSString).appendingPathComponent(String(config.sourceFolder.dropFirst()))
             : config.sourceFolder
@@ -1159,15 +1254,15 @@ final class SyncEngine: ObservableObject {
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             let output = String(data: data, encoding: .utf8) ?? ""
             Task { @MainActor [weak self] in
-                guard let self else { return }
-                guard p.terminationStatus == 0 else { return }  // estimate failed → indeterminate bar
-                guard self.status == .preparing || self.status == .syncing else { return }
-                if let delta = Self.parseTransferDelta(output) {
-                    self.expectedSize = delta
+                guard let self else { onDelta?(nil); return }
+                guard p.terminationStatus == 0 else { onDelta?(nil); return }  // estimate failed → indeterminate bar / preflight fails open
+                let delta = Self.parseTransferDelta(output)
+                let files = Self.parseTransferredFileCount(output)
+                if self.status == .preparing || self.status == .syncing {
+                    if let delta { self.expectedSize = delta }
+                    if let files { self.syncTotalFiles = files }
                 }
-                if let files = Self.parseTransferredFileCount(output) {
-                    self.syncTotalFiles = files
-                }
+                onDelta?(delta)   // delta (or nil if unparseable) → preflight
             }
         }
         DispatchQueue.global(qos: .utility).async { try? proc.run() }
@@ -1491,15 +1586,23 @@ final class SyncEngine: ObservableObject {
         case testFailed   // SSH error or timeout — don't block, proceed with sync
     }
 
+    // completion: (result, freeBytes on dest, floorBytes from the Backup's real
+    // minFreeSpaceGB). freeBytes is nil on a failed/ambiguous test; floorBytes
+    // falls back to 2 GB when config_backup.json is unreadable.
     private func runSyncTimeWriteTest(
         username: String,
         ip: String,
         remotePath: String,
-        completion: @escaping (WriteTestResult, String) -> Void
+        completion: @escaping (WriteTestResult, Int64?, Int64) -> Void
     ) {
         let escaped = remoteShellPath(remotePath)  // R2: "~/Sync" → "$HOME/Sync" (tilde won't expand in quotes)
         let testFile = "\(escaped)/.sync_writetest_\(Int.random(in: 1000...9999))"
-        let cmd = "touch \"\(testFile)\" && rm -f \"\(testFile)\" && echo OK || echo FAIL"
+        // Low-space preflight: piggyback the dest free space (df -k) and the
+        // Backup's real floor (config_backup.json's minFreeSpaceGB) onto this same
+        // round-trip — zero extra connections. Markers keep the OK/FAIL parse intact.
+        let cmd = "touch \"\(testFile)\" && rm -f \"\(testFile)\" && echo OK || echo FAIL; "
+            + "echo '---FREE---'; df -k \"\(escaped)\" 2>/dev/null | awk 'NR==2{print $4}'; "
+            + "echo '---MINFREE---'; cat \"$HOME/Library/Application Support/Sync/config_backup.json\" 2>/dev/null || echo '{}'"
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
@@ -1517,14 +1620,15 @@ final class SyncEngine: ObservableObject {
 
         var completed = false
         let completionLock = NSLock()
+        let defaultFloorBytes: Int64 = 2 * 1024 * 1024 * 1024
 
-        let safeComplete: (WriteTestResult) -> Void = { result in
+        let safeComplete: (WriteTestResult, Int64?, Int64) -> Void = { result, free, floor in
             completionLock.lock()
             defer { completionLock.unlock() }
             guard !completed else { return }
             completed = true
             Task { @MainActor in
-                completion(result, remotePath)
+                completion(result, free, floor)
             }
         }
 
@@ -1533,20 +1637,39 @@ final class SyncEngine: ObservableObject {
                 NSLog("[Sync] write-test timeout (10s), killing process")
                 p.terminate()
             }
-            safeComplete(.testFailed)
+            safeComplete(.testFailed, nil, defaultFloorBytes)
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + 10, execute: timeoutItem)
 
         proc.terminationHandler = { p in
             timeoutItem.cancel()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let output = String(data: data, encoding: .utf8) ?? ""
+            // Split OK/FAIL from the piggybacked free space + floor.
+            let freeSplit = output.components(separatedBy: "---FREE---")
+            let okPart = (freeSplit.first ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            var freeBytes: Int64? = nil
+            var floorBytes = defaultFloorBytes
+            if freeSplit.count > 1 {
+                let minSplit = freeSplit[1].components(separatedBy: "---MINFREE---")
+                if let kbLine = minSplit.first?.trimmingCharacters(in: .whitespacesAndNewlines)
+                        .components(separatedBy: .newlines).first(where: { !$0.isEmpty }),
+                   let kb = Int64(kbLine) {
+                    freeBytes = kb * 1024
+                }
+                if minSplit.count > 1,
+                   let jsonData = minSplit[1].trimmingCharacters(in: .whitespacesAndNewlines).data(using: .utf8),
+                   let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                   let mf = json["minFreeSpaceGB"] as? Int {
+                    floorBytes = Int64(max(1, mf)) * 1024 * 1024 * 1024
+                }
+            }
             if p.terminationStatus != 0 {
-                safeComplete(.testFailed)
-            } else if output.contains("OK") {
-                safeComplete(.writable)
+                safeComplete(.testFailed, nil, defaultFloorBytes)
+            } else if okPart.contains("OK") {
+                safeComplete(.writable, freeBytes, floorBytes)
             } else {
-                safeComplete(.unwritable)
+                safeComplete(.unwritable, freeBytes, floorBytes)
             }
         }
         DispatchQueue.global(qos: .userInitiated).async {
@@ -1555,7 +1678,7 @@ final class SyncEngine: ObservableObject {
             } catch {
                 timeoutItem.cancel()
                 NSLog("[Sync] write-test launch failed: %@", error.localizedDescription)
-                safeComplete(.testFailed)
+                safeComplete(.testFailed, nil, defaultFloorBytes)
             }
         }
     }
