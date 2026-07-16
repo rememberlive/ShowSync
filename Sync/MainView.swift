@@ -939,8 +939,20 @@ final class SyncEngine: ObservableObject {
                         // Success: count files that would transfer (= differ)
                         let differCount = self.countDifferingFiles(output)
                         if differCount == 0 {
-                            self.verifyStatus = .verified(deep: !config.fastVerify)
-                            resultCode = "ok"
+                            // TCC guard: a source the app can't read (Full Disk
+                            // Access off on a protected folder) enumerates empty,
+                            // so rsync exits 0 with nothing to transfer — which
+                            // must NOT be reported as "all files match". Confirm
+                            // the source is genuinely readable before concluding
+                            // success; if not, report an honest couldn't-verify
+                            // (reuses the existing .failed / "error" shape).
+                            if self.isSourceReadable(config.sourceFolder) {
+                                self.verifyStatus = .verified(deep: !config.fastVerify)
+                                resultCode = "ok"
+                            } else {
+                                self.verifyStatus = .failed("Couldn't verify — can't read the source folder (grant access in Privacy settings)")
+                                resultCode = "error"
+                            }
                         } else {
                             self.verifyStatus = .differs(differCount)
                             resultCode = "differs:\(differCount)"
@@ -986,6 +998,22 @@ final class SyncEngine: ObservableObject {
                 }
             }
         }
+    }
+
+    // Source-readability probe for the verify success gate. A TCC / Full-Disk-Access
+    // denial makes the source enumerate empty and rsync exit 0 with nothing to
+    // transfer, which would otherwise read as a false "all files match".
+    // contentsOfDirectory throws on a permission-denied (or missing) directory but
+    // returns [] for a genuinely empty, readable one, so it cleanly distinguishes
+    // the two. It runs in-process, so it reflects the same app-level TCC grant the
+    // child rsync inherited when it read the local source. Same ~-expansion as
+    // refreshSourceSummary.
+    private func isSourceReadable(_ folder: String) -> Bool {
+        guard !folder.isEmpty else { return false }
+        let path = folder.hasPrefix("~")
+            ? (NSHomeDirectory() as NSString).appendingPathComponent(String(folder.dropFirst()))
+            : folder
+        return (try? FileManager.default.contentsOfDirectory(atPath: path)) != nil
     }
 
     func cancelVerify() {
