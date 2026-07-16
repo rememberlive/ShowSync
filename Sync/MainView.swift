@@ -289,6 +289,11 @@ final class SyncEngine: ObservableObject {
         // platform=windows (TXT key / manual toggle) routes to the scp/sftp transport; the flag
         // is never set by a Mac Backup, so the fall-through below is today's path, untouched.
         if config.backupPlatform == "windows" {
+            // Clear any stale low-space refusal from a prior Windows sync — the
+            // rsync path does this at the lowSpaceNotice = nil below, which the
+            // Windows route returns before. A genuine refusal is re-set fresh in
+            // finishSyncRefused; a sync that now fits starts with no stale message.
+            lowSpaceNotice = nil
             WindowsTransport.shared.startSync(config: config, isAuto: isAuto, isPush: isPush)
             return
         }

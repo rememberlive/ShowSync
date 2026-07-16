@@ -1078,6 +1078,9 @@ final class WindowsTransport {
                 guard engine.status == .done else { return }
                 engine.status = .ready
                 engine.fallbackNotice = nil
+                // Symmetry with the rsync success path: a successful sync leaves
+                // no stale low-space message (sync-start already clears it too).
+                engine.lowSpaceNotice = nil
             }
         }
     }
