@@ -331,21 +331,27 @@ final class StorageMonitor: ObservableObject {
     private func updateStorage() {
         let destPath = ReceiveMonitor.shared.effectiveDestination
         let url = URL(fileURLWithPath: destPath)
-        let free: Int64
+        let free: Int64?
         if let values = try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
            let importantFree = values.volumeAvailableCapacityForImportantUsage, importantFree > 0 {
             free = importantFree
         } else {
             let attrs = try? FileManager.default.attributesOfFileSystem(forPath: destPath)
-            free = attrs?[.systemFreeSize] as? Int64 ?? 0
+            // Unknown must read as unknown — nil coalesced to 0 showed a false
+            // "0.0 MB free" (looks like a full disk). Matches the Main's "? free".
+            free = attrs?[.systemFreeSize] as? Int64
         }
-        let gb = Double(free) / 1_073_741_824
         let newValue: String
-        if gb >= 1.0 {
-            newValue = String(format: "%.1f GB free", gb)
+        if let free {
+            let gb = Double(free) / 1_073_741_824
+            if gb >= 1.0 {
+                newValue = String(format: "%.1f GB free", gb)
+            } else {
+                let mb = Double(free) / 1_048_576
+                newValue = String(format: "%.1f MB free", mb)
+            }
         } else {
-            let mb = Double(free) / 1_048_576
-            newValue = String(format: "%.1f MB free", mb)
+            newValue = "? free"
         }
         // Write-on-change: 1 s timer — identical strings must not republish
         if storageString != newValue { storageString = newValue }

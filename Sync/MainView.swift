@@ -3048,8 +3048,10 @@ struct MainView: View {
 
     private var nextPushSyncCountdown: String? {
         guard let next = engine.nextPushSyncDate else { return nil }
-        let secs = max(0, next.timeIntervalSince(clockTick))
-        return "in 0:\(String(format: "%02d", Int(secs)))"
+        let secs = Int(max(0, next.timeIntervalSince(clockTick)))
+        // M:SS with minute rollover — debounce is user-settable up to 300 s, so a
+        // flat "in 0:\(secs)" rendered "in 0:60".."in 0:300".
+        return "in \(secs / 60):\(String(format: "%02d", secs % 60))"
     }
 
     // Reconciled automatic-mode reachability: browser heuristic OR a live
