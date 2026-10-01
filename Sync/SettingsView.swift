@@ -2589,19 +2589,23 @@ struct SettingsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             // Start free trial — fetch a trial key, then activate it.
-            Button("Start free trial") {
-                activationState = .activating
-                Task {
-                    if let k = await LicenseManager.fetchTrialKey() {
-                        activationState = mapActivationResult(await LicenseManager.activate(key: k))
-                    } else {
-                        activationState = .trialUnavailable
+            // Offered only when NO license is saved: starting a trial replaces the
+            // saved license, so a paid (or already-trialled) Mac never sees it.
+            if summary.kind == .none {
+                Button("Start free trial") {
+                    activationState = .activating
+                    Task {
+                        if let k = await LicenseManager.fetchTrialKey() {
+                            activationState = mapActivationResult(await LicenseManager.activate(key: k))
+                        } else {
+                            activationState = .trialUnavailable
+                        }
                     }
                 }
+                .buttonStyle(.bordered)
+                .font(.system(size: 12))
+                .disabled(activationState == .activating)
             }
-            .buttonStyle(.bordered)
-            .font(.system(size: 12))
-            .disabled(activationState == .activating)
 
             // Manual key entry + Activate.
             VStack(alignment: .leading, spacing: 6) {
