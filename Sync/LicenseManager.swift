@@ -123,7 +123,13 @@ enum LicenseManager {
         apiHeaders.forEach { req.setValue($1, forHTTPHeaderField: $0) }
         let body: [String: Any] = ["meta": ["key": key, "scope": ["fingerprint": fingerprint]]]
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        // A licensing-server outage (5xx) or rate limit (429) is a connection
+        // problem, not a bad key — surface it as the existing network error
+        // instead of "Invalid license key (UNKNOWN)". Other statuses unchanged.
+        if let http = resp as? HTTPURLResponse, http.statusCode == 429 || http.statusCode >= 500 {
+            throw URLError(.badServerResponse)
+        }
         return try JSONDecoder().decode(ValidateResponse.self, from: data)
     }
 
