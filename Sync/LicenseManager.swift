@@ -59,7 +59,8 @@ enum LicenseManager {
     // MARK: Public entry point
 
     static func activate(key rawKey: String) async -> ActivationResult {
-        let key = rawKey
+        // A key pasted from an email often carries a trailing space/newline.
+        let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
         // Only genuine, signed Remember Live keys are sent for activation; a
         // forged or edited key is rejected here before any network call.
         guard verifyLicenseKey(key) else { return .invalid(code: "BAD_SIGNATURE") }
