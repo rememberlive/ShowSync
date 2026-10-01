@@ -58,7 +58,11 @@ enum LicenseManager {
 
     // MARK: Public entry point
 
-    static func activate(key: String) async -> ActivationResult {
+    static func activate(key rawKey: String) async -> ActivationResult {
+        let key = rawKey
+        // Only genuine, signed Remember Live keys are sent for activation; a
+        // forged or edited key is rejected here before any network call.
+        guard verifyLicenseKey(key) else { return .invalid(code: "BAD_SIGNATURE") }
         guard let fingerprint = MachineFingerprint.hardwareUUID() else {
             return .networkError("Could not read this Mac's hardware identifier")
         }
@@ -187,6 +191,32 @@ extension LicenseManager {
             return nil
         }
         return id
+    }
+
+    /// Facts read from a key's SIGNED payload. Because they are covered by the
+    /// Ed25519 signature, editing the saved license record can't change them.
+    struct SignedLicenseInfo {
+        let policyID: String?
+        let productID: String?
+        let expiry: String?     // nil for perpetual (paid) licenses
+    }
+
+    /// Returns the signed payload facts ONLY if the key's signature is valid
+    /// against the baked-in public key; nil for any forged, edited or malformed key.
+    static func signedInfo(from key: String) -> SignedLicenseInfo? {
+        guard verifyLicenseKey(key) else { return nil }
+        let body = String(key.dropFirst("key/".count))
+        let payloadB64 = String(body.prefix(while: { $0 != "." }))
+        guard let data = Data(base64Encoded: payloadB64) ?? base64urlDecode(payloadB64),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        let policy = json["policy"] as? [String: Any]
+        let product = json["product"] as? [String: Any]
+        let license = json["license"] as? [String: Any]
+        return SignedLicenseInfo(policyID: policy?["id"] as? String,
+                                 productID: product?["id"] as? String,
+                                 expiry: license?["expiry"] as? String)
     }
 
     /// Decode a hex string to Data (nil if malformed).

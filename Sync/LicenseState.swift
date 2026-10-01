@@ -3,6 +3,10 @@
 
 import Foundation
 import Combine
+import os
+
+/// License log (Console: category License). Never logs the key itself.
+private let licenseLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "RememberLive", category: "License")
 
 /// Tolerant ISO8601 parser for Keygen timestamps (with OR without fractional seconds).
 /// Keygen expiries look like "2026-06-30T02:10:04.719Z" — the default
@@ -61,11 +65,29 @@ final class LicenseController: ObservableObject {
     func loadFromStore() {
         guard let json = LicenseStore.load(),
               let data = json.data(using: .utf8),
-              let lic = try? JSONDecoder().decode(StoredLicense.self, from: data) else {
+              let saved = try? JSONDecoder().decode(StoredLicense.self, from: data) else {
             stored = nil
             state = .none
             return
         }
+        // Trust only a genuine signed key. A record whose key fails the Ed25519
+        // signature check (hand-made or edited) is treated as no license.
+        let savedKey = saved.key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let signed = LicenseManager.signedInfo(from: savedKey) else {
+            licenseLog.notice("Stored license failed signature check; treated as unlicensed")
+            stored = nil
+            state = .none
+            return
+        }
+        // Expiry and policy come from the SIGNED key when present (an edited
+        // expiry in the saved record has no effect); fall back to the saved
+        // values only where the key carries none.
+        let lic = StoredLicense(key: saved.key,
+                                licenseID: saved.licenseID,
+                                expiry: signed.expiry ?? saved.expiry,
+                                lastValidated: saved.lastValidated,
+                                status: saved.status,
+                                policyID: signed.policyID ?? saved.policyID)
         stored = lic
         // Informational expiry check only (no enforcement yet).
         // Uses the tolerant parser so fractional-seconds expiries parse correctly.
